@@ -85,6 +85,9 @@ router.put('/:id/professional', auth, adminOnly, async (req, res) => {
       joining_date:    joining_date    || null,
       confirmation_date: confirmation_date || null,
       probation_applicable, probation_months: probation_months || null,
+      // When probation is turned off, clear stale dates so payroll
+      // immediately treats the employee as active (mirrors employees.routes.js:299-301)
+      ...(probation_applicable === false && { probation_start_date: null, probation_end_date: null }),
       salary_on: salary_on || null, salary_structure: salary_structure || null,
       ctc: ctc || null,
       salary_effective_date: salary_effective_date || null,
