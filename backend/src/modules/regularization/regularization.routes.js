@@ -94,11 +94,11 @@ router.get('/usage', auth, async (req, res) => {
     res.json({
       month, year,
       early_leave_days,
-      late_days,
-      combined_count,
+      late_days,          // informational only — late coming has its own independent quota
+      combined_count,     // kept for reference; not used for early-leave quota decisions
       max_allowance,
-      remaining: Math.max(0, max_allowance - combined_count),
-      exhausted: combined_count >= max_allowance,
+      remaining: Math.max(0, max_allowance - early_leave_days),
+      exhausted: early_leave_days >= max_allowance,
       early_leave_requests: elRes.rows,
     });
   } catch (err) { res.status(500).json({ error: err.message }); }

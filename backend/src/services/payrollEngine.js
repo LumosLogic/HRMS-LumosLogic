@@ -293,7 +293,7 @@ function calculateAttendance({
         earlyLeave++;
         daily.push({ date: ds, type: 'early_leave' });
       } else {
-        absent++;
+        presentHalf++;
         earlyLeaveLop++;
         daily.push({ date: ds, type: 'early_leave_lop' });
       }

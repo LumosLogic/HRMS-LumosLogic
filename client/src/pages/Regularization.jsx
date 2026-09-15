@@ -294,8 +294,8 @@ function EarlyLeaveModal({ open, onClose, usage }) {
 
   useEffect(() => { if (open) setForm({ date: '', requested_early_exit_time: '', reason: '' }); }, [open]);
 
-  const exhausted = usage && usage.combined_count >= usage.max_allowance;
-  const nearLimit = usage && usage.combined_count === usage.max_allowance - 1;
+  const exhausted = usage?.exhausted ?? false;
+  const nearLimit = !exhausted && (usage?.remaining === 1);
 
   const mut = useMutation({
     mutationFn: () => apiPost('/regularization', { ...form, type: 'early_leave' }),
@@ -329,14 +329,15 @@ function EarlyLeaveModal({ open, onClose, usage }) {
                          'bg-[#f0f3ff] border-[#c7c4d8] text-[#3525cd]'
           }`}>
             <div className="flex items-center justify-between">
-              <span className="font-semibold">Monthly Allowance Used</span>
-              <span className="font-black text-base">{usage.combined_count} / {usage.max_allowance}</span>
+              <span className="font-semibold">Early Leave Allowance Used</span>
+              <span className="font-black text-base">{usage.early_leave_days} / {usage.max_allowance}</span>
             </div>
             <p className="mt-1 text-[0.68rem]">
-              {usage.late_days} late arrival{usage.late_days !== 1 ? 's' : ''} + {usage.early_leave_days} early departure{usage.early_leave_days !== 1 ? 's' : ''} this month
+              {usage.early_leave_days} early departure{usage.early_leave_days !== 1 ? 's' : ''} this month
+              {usage.late_days > 0 && <span className="opacity-70"> · {usage.late_days} late arrival{usage.late_days !== 1 ? 's' : ''} (own separate allowance)</span>}
             </p>
-            {exhausted && <p className="mt-1 font-semibold">Allowance exhausted — this request will be treated as Half Day if approved.</p>}
-            {nearLimit && !exhausted && <p className="mt-1 font-semibold">1 occasion remaining — next occurrence will be Half Day treatment.</p>}
+            {exhausted && <p className="mt-1 font-semibold">Early leave allowance exhausted — this request will be treated as Half Day if approved.</p>}
+            {nearLimit && !exhausted && <p className="mt-1 font-semibold">1 early leave occasion remaining — next early departure will be Half Day treatment.</p>}
           </div>
         )}
 
@@ -948,40 +949,42 @@ export default function Regularization() {
         </div>
       </div>
 
-      {/* Monthly allowance usage banner (employee only) */}
+      {/* Monthly early leave allowance banner (employee only) */}
       {!isAdmin && usage && (
         <div className={`rounded-xl p-4 border mb-5 ${
-          usage.exhausted   ? 'bg-rose-50 border-rose-200' :
-          usage.remaining === 1 ? 'bg-amber-50 border-amber-200' :
-                                  'bg-[#f0f3ff] border-[#c7c4d8]'
+          usage.exhausted        ? 'bg-rose-50 border-rose-200' :
+          usage.remaining === 1  ? 'bg-amber-50 border-amber-200' :
+                                   'bg-[#f0f3ff] border-[#c7c4d8]'
         }`}>
           <div className="flex items-center justify-between gap-4">
             <div>
               <p className={`text-sm font-bold ${usage.exhausted ? 'text-rose-700' : usage.remaining === 1 ? 'text-amber-700' : 'text-[#151c27]'}`}>
-                Monthly Attendance Allowance
+                Early Leave Allowance — This Month
               </p>
               <p className="text-xs text-[#777587] mt-0.5">
-                {usage.late_days} late arrival{usage.late_days !== 1 ? 's' : ''} + {usage.early_leave_days} early departure{usage.early_leave_days !== 1 ? 's' : ''} this month
-                {' · '}Early Leave + Late Coming share this allowance
+                {usage.early_leave_days} early departure{usage.early_leave_days !== 1 ? 's' : ''} recorded this month
+                {usage.late_days > 0 && (
+                  <span className="ml-2 text-[0.65rem] text-[#a09fb5]">· {usage.late_days} late arrival{usage.late_days !== 1 ? 's' : ''} (separate allowance)</span>
+                )}
               </p>
               {usage.exhausted && (
                 <p className="text-xs font-semibold text-rose-600 mt-1">
-                  Allowance exhausted — additional late arrivals or early departures will be treated as Half Day.
+                  Early leave allowance exhausted — additional early departures will be treated as Half Day.
                 </p>
               )}
               {usage.remaining === 1 && !usage.exhausted && (
                 <p className="text-xs font-semibold text-amber-600 mt-1">
-                  1 occasion remaining — the next late arrival or early departure will be treated as Half Day.
+                  1 early leave occasion remaining — the next early departure will be treated as Half Day.
                 </p>
               )}
             </div>
             <div className="text-right shrink-0">
               <p className={`text-3xl font-black ${
-                usage.exhausted ? 'text-rose-600' :
+                usage.exhausted       ? 'text-rose-600' :
                 usage.remaining === 1 ? 'text-amber-600' :
-                'text-[#3525cd]'
-              }`}>{usage.combined_count}<span className="text-lg font-bold text-[#777587]"> / {usage.max_allowance}</span></p>
-              <p className="text-[0.65rem] text-[#777587] font-medium">occasions used</p>
+                                        'text-[#3525cd]'
+              }`}>{usage.early_leave_days}<span className="text-lg font-bold text-[#777587]"> / {usage.max_allowance}</span></p>
+              <p className="text-[0.65rem] text-[#777587] font-medium">early leaves used</p>
             </div>
           </div>
         </div>
