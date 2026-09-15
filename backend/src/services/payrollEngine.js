@@ -611,14 +611,17 @@ async function fetchAllData(oId, uId, month, year) {
       }
     })(),
 
-    // Approved regularizations — correct table name is attendance_regularization
+    // Approved attendance corrections only (type='check_time').
+    // Early leave requests (type='early_leave') must NOT trigger the absent→present upgrade
+    // because they do not modify checkout time or working hours.
     pool.query(
       `SELECT date::text
          FROM attendance_regularization
         WHERE user_id         = $1
           AND organization_id = $2
           AND date >= $3 AND date <= $4
-          AND status          = 'approved'`,
+          AND status          = 'approved'
+          AND (type IS NULL OR type = 'check_time')`,
       [uId, oId, start, end]
     ).catch(() => ({ rows: [] })),
 

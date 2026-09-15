@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, ClipboardList, CheckCircle2, XCircle, Clock, ChevronRight, ChevronLeft, Trash2, Search, Download, SortDesc, X, CalendarRange, Send, Eye, User } from 'lucide-react';
+import { Plus, ClipboardList, CheckCircle2, XCircle, Clock, ChevronRight, ChevronLeft, Trash2, Search, Download, SortDesc, X, CalendarRange, Send, Eye, User, LogOut, AlertTriangle } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
@@ -32,6 +32,11 @@ const STATUS_CFG = {
   rejected: { cls: 'badge-rejected', icon: <XCircle size={11} />,       label: 'Rejected' },
 };
 
+const TYPE_CFG = {
+  check_time:  { label: 'Attendance Correction', cls: 'text-[#3525cd] bg-[#f0f3ff] border-[#c7c4d8]' },
+  early_leave: { label: 'Early Leave',           cls: 'text-amber-700 bg-amber-50 border-amber-200'  },
+};
+
 const STATUS_BORDER = {
   pending:  'border-l-4 border-l-amber-400',
   approved: 'border-l-4 border-l-emerald-400',
@@ -42,15 +47,16 @@ function ReviewModal({ open, onClose, request }) {
   const toast = useToast();
   const qc    = useQueryClient();
   const [notes, setNotes] = useState('');
+  const isEL  = request?.type === 'early_leave';
 
   const mut = useMutation({
     mutationFn: status => apiPut(`/regularization/${request.id}/review`, { status, reviewer_notes: notes }),
-    onSuccess: () => { toast('Review submitted!', 'success'); qc.invalidateQueries({ queryKey: ['regularization'] }); onClose(); },
+    onSuccess: () => { toast('Review submitted!', 'success'); qc.invalidateQueries({ queryKey: ['regularization'] }); qc.invalidateQueries({ queryKey: ['el-usage'] }); onClose(); },
     onError: e => toast(e.message, 'error'),
   });
 
   return (
-    <Modal open={open} onClose={onClose} title="Review Regularization Request" size="md"
+    <Modal open={open} onClose={onClose} title={isEL ? 'Review Early Leave Request' : 'Review Regularization Request'} size="md"
       footer={
         <div className="flex justify-end gap-3">
           <button className="btn btn-outline" onClick={onClose}>Cancel</button>
@@ -61,6 +67,12 @@ function ReviewModal({ open, onClose, request }) {
         </div>
       }>
       <div className="space-y-4">
+        {isEL && (
+          <div className="rounded-xl bg-amber-50 border border-amber-200 p-3 flex items-start gap-2 text-xs text-amber-700">
+            <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+            <span>Approving this request records HR approval only. The employee's checkout time, working hours, and attendance status remain exactly as recorded by the biometric system.</span>
+          </div>
+        )}
         <div className="rounded-xl bg-[#f9f9ff] border border-[#e7eefe] p-4 space-y-2">
           <div className="flex items-center gap-2">
             <Avatar name={request.user_name || 'Employee'} color={request.user_avatar_color} size={32} />
@@ -71,11 +83,13 @@ function ReviewModal({ open, onClose, request }) {
           </div>
           <div className="grid grid-cols-2 gap-2 pt-2">
             <div className="text-xs"><span className="text-[#777587]">Date</span><p className="font-semibold text-[#151c27]">{fmtDate(request.date)}</p></div>
-            {request.requested_check_in  && <div className="text-xs"><span className="text-[#777587]">Requested In</span><p className="font-semibold text-[#151c27]">{fmtTime12(request.requested_check_in)}</p></div>}
-            {request.requested_check_out && <div className="text-xs"><span className="text-[#777587]">Requested Out</span><p className="font-semibold text-[#151c27]">{fmtTime12(request.requested_check_out)}</p></div>}
+            {isEL && request.requested_early_exit_time && (
+              <div className="text-xs"><span className="text-[#777587]">Requested Exit</span><p className="font-semibold text-amber-700">{fmtTime12(request.requested_early_exit_time)}</p></div>
+            )}
+            {!isEL && request.requested_check_in  && <div className="text-xs"><span className="text-[#777587]">Requested In</span><p className="font-semibold text-[#151c27]">{fmtTime12(request.requested_check_in)}</p></div>}
+            {!isEL && request.requested_check_out && <div className="text-xs"><span className="text-[#777587]">Requested Out</span><p className="font-semibold text-[#151c27]">{fmtTime12(request.requested_check_out)}</p></div>}
           </div>
-          {/* EHN_REG_001: Show original system-recorded attendance */}
-          {(request.actual_check_in || request.actual_check_out) && (
+          {!isEL && (request.actual_check_in || request.actual_check_out) && (
             <div className="grid grid-cols-2 gap-2 pt-2 border-t border-[#f0f3ff]">
               <div className="col-span-2 text-[0.65rem] font-bold text-[#777587] uppercase tracking-wide">System Recorded (Original)</div>
               {request.actual_check_in  && <div className="text-xs"><span className="text-[#777587]">Original In</span><p className="font-semibold text-orange-700">{fmtTime12(request.actual_check_in)}</p></div>}
@@ -266,6 +280,87 @@ function ApplyModal({ open, onClose, initialDate }) {
         <div>
           <label className="form-label">Reason *</label>
           <textarea className="form-control" rows={3} placeholder="Explain why the attendance needs correction…" value={form.reason} onChange={e => set('reason', e.target.value)} />
+        </div>
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Early Leave Request Modal ────────────────────────────────────────────────
+function EarlyLeaveModal({ open, onClose, usage }) {
+  const toast = useToast();
+  const qc    = useQueryClient();
+  const [form, setForm] = useState({ date: '', requested_early_exit_time: '', reason: '' });
+
+  useEffect(() => { if (open) setForm({ date: '', requested_early_exit_time: '', reason: '' }); }, [open]);
+
+  const exhausted = usage && usage.combined_count >= usage.max_allowance;
+  const nearLimit = usage && usage.combined_count === usage.max_allowance - 1;
+
+  const mut = useMutation({
+    mutationFn: () => apiPost('/regularization', { ...form, type: 'early_leave' }),
+    onSuccess: () => {
+      toast('Early leave request submitted!', 'success');
+      qc.invalidateQueries({ queryKey: ['regularization'] });
+      qc.invalidateQueries({ queryKey: ['el-usage'] });
+      onClose();
+    },
+    onError: e => toast(e.message, 'error'),
+  });
+
+  return (
+    <Modal open={open} onClose={onClose} title="Request Early Leave" size="md"
+      footer={
+        <div className="flex justify-end gap-3">
+          <button className="btn btn-outline" onClick={onClose}>Cancel</button>
+          <button className="btn btn-primary"
+            onClick={() => mut.mutate()}
+            disabled={mut.isPending || !form.date || !form.requested_early_exit_time || !form.reason}>
+            {mut.isPending ? <><span className="spinner w-4 h-4" />Submitting…</> : <><Send size={14} />Submit Request</>}
+          </button>
+        </div>
+      }>
+      <div className="space-y-4">
+        {/* Usage banner */}
+        {usage && (
+          <div className={`rounded-xl p-3 border text-xs ${
+            exhausted  ? 'bg-rose-50 border-rose-200 text-rose-700' :
+            nearLimit  ? 'bg-amber-50 border-amber-200 text-amber-700' :
+                         'bg-[#f0f3ff] border-[#c7c4d8] text-[#3525cd]'
+          }`}>
+            <div className="flex items-center justify-between">
+              <span className="font-semibold">Monthly Allowance Used</span>
+              <span className="font-black text-base">{usage.combined_count} / {usage.max_allowance}</span>
+            </div>
+            <p className="mt-1 text-[0.68rem]">
+              {usage.late_days} late arrival{usage.late_days !== 1 ? 's' : ''} + {usage.early_leave_days} early departure{usage.early_leave_days !== 1 ? 's' : ''} this month
+            </p>
+            {exhausted && <p className="mt-1 font-semibold">Allowance exhausted — this request will be treated as Half Day if approved.</p>}
+            {nearLimit && !exhausted && <p className="mt-1 font-semibold">1 occasion remaining — next occurrence will be Half Day treatment.</p>}
+          </div>
+        )}
+
+        <div>
+          <label className="form-label">Date *</label>
+          <input type="date" className="form-control"
+            value={form.date} max={new Date().toISOString().split('T')[0]}
+            onChange={e => setForm(f => ({ ...f, date: e.target.value }))} />
+        </div>
+
+        <div>
+          <label className="form-label">Requested Early Exit Time *</label>
+          <input type="time" className="form-control"
+            value={form.requested_early_exit_time}
+            onChange={e => setForm(f => ({ ...f, requested_early_exit_time: e.target.value }))} />
+          <p className="text-xs text-[#777587] mt-1">Your actual checkout will still be recorded by the biometric system.</p>
+        </div>
+
+        <div>
+          <label className="form-label">Reason *</label>
+          <textarea className="form-control" rows={3}
+            placeholder="Explain why you need to leave early…"
+            value={form.reason}
+            onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} />
         </div>
       </div>
     </Modal>
@@ -670,11 +765,13 @@ export default function Regularization() {
   const highlightId = searchParams.get('highlight') ? parseInt(searchParams.get('highlight'), 10) : null;
   const [highlightActive, setHighlightActive] = useState(true);
 
-  const [applyOpen,   setApplyOpen]   = useState(false);
-  const [reviewReq,   setReviewReq]   = useState(null);
-  const [viewReq,     setViewReq]     = useState(null);
-  const [confirmDel,  setConfirmDel]  = useState(null);
-  const [filter,      setFilter]      = useState(() => {
+  const [applyOpen,      setApplyOpen]      = useState(false);
+  const [earlyLeaveOpen, setEarlyLeaveOpen] = useState(false);
+  const [reviewReq,      setReviewReq]      = useState(null);
+  const [viewReq,        setViewReq]        = useState(null);
+  const [confirmDel,     setConfirmDel]     = useState(null);
+  const [typeFilter,     setTypeFilter]     = useState('all'); // 'all' | 'check_time' | 'early_leave'
+  const [filter,         setFilter]         = useState(() => {
     const s = searchParams.get('status');
     return s && ['pending', 'approved', 'rejected'].includes(s) ? s : 'all';
   });
@@ -706,6 +803,15 @@ export default function Regularization() {
       setApplyOpen(true);
     }
   }, [biometricResolved]);
+
+  // Monthly early-leave + late-coming usage (employee view only)
+  const now = new Date();
+  const { data: usage } = useQuery({
+    queryKey: ['el-usage', now.getMonth() + 1, now.getFullYear()],
+    queryFn: () => apiGet('/regularization/usage', { month: now.getMonth() + 1, year: now.getFullYear() }),
+    enabled: !isAdmin,
+    staleTime: 60 * 1000,
+  });
 
   const { data: _regData, isLoading } = useQuery({ queryKey: ['regularization'], queryFn: () => apiGet('/regularization') });
   const requests = Array.isArray(_regData) ? _regData : [];
@@ -749,10 +855,11 @@ export default function Regularization() {
     return Object.values(seen).sort((a, b) => a.name.localeCompare(b.name));
   }, [requests, isAdmin]);
 
-  const isFilterActive = filter !== 'all' || searchQuery.trim() !== '' || dateFrom !== '' || dateTo !== '' || sortBy !== 'newest' || employeeId !== '';
+  const isFilterActive = filter !== 'all' || typeFilter !== 'all' || searchQuery.trim() !== '' || dateFrom !== '' || dateTo !== '' || sortBy !== 'newest' || employeeId !== '';
 
   const filtered = useMemo(() => {
     let list = filter === 'all' ? [...requests] : requests.filter(r => r.status === filter);
+    if (typeFilter !== 'all') list = list.filter(r => (r.type || 'check_time') === typeFilter);
 
     if (employeeId) {
       list = list.filter(r => String(r.user_id) === String(employeeId));
@@ -795,6 +902,7 @@ export default function Regularization() {
 
   const clearAllFilters = () => {
     setFilter('all');
+    setTypeFilter('all');
     setSearchQuery('');
     setDateFrom('');
     setDateTo('');
@@ -808,7 +916,7 @@ export default function Regularization() {
   useEffect(() => {
     setPage(1);
     setVisibleCount(PAGE_SIZE);
-  }, [filter, searchQuery, dateFrom, dateTo, sortBy, employeeId]);
+  }, [filter, typeFilter, searchQuery, dateFrom, dateTo, sortBy, employeeId]);
 
   const totalPages  = Math.ceil(filtered.length / rowsPerPage);
   const visibleRows = filtered.slice((page - 1) * rowsPerPage, page * rowsPerPage);
@@ -819,26 +927,65 @@ export default function Regularization() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Attendance Regularization</h1>
-          <p className="page-subtitle">{isAdmin ? 'Review and approve employee attendance correction requests' : 'Request a correction to your attendance record'}</p>
+          <p className="page-subtitle">{isAdmin ? 'Review and approve employee attendance correction and early leave requests' : 'Request attendance corrections or early leave approval'}</p>
         </div>
         <div className="flex items-center gap-2">
           {filtered.length > 0 && (
-            <button
-              className="btn btn-outline"
-              onClick={() => exportCSV(filtered)}
-              title="Export filtered requests as CSV"
-            >
-              <Download size={14} />
-              Export
+            <button className="btn btn-outline" onClick={() => exportCSV(filtered)} title="Export filtered requests as CSV">
+              <Download size={14} />Export
             </button>
           )}
           {!isAdmin && (
-            <button className="btn btn-primary" onClick={() => setApplyOpen(true)}>
-              <Plus size={16} />Request Correction
-            </button>
+            <>
+              <button className="btn btn-outline" onClick={() => setEarlyLeaveOpen(true)}>
+                <LogOut size={15} />Early Leave
+              </button>
+              <button className="btn btn-primary" onClick={() => setApplyOpen(true)}>
+                <Plus size={16} />Request Correction
+              </button>
+            </>
           )}
         </div>
       </div>
+
+      {/* Monthly allowance usage banner (employee only) */}
+      {!isAdmin && usage && (
+        <div className={`rounded-xl p-4 border mb-5 ${
+          usage.exhausted   ? 'bg-rose-50 border-rose-200' :
+          usage.remaining === 1 ? 'bg-amber-50 border-amber-200' :
+                                  'bg-[#f0f3ff] border-[#c7c4d8]'
+        }`}>
+          <div className="flex items-center justify-between gap-4">
+            <div>
+              <p className={`text-sm font-bold ${usage.exhausted ? 'text-rose-700' : usage.remaining === 1 ? 'text-amber-700' : 'text-[#151c27]'}`}>
+                Monthly Attendance Allowance
+              </p>
+              <p className="text-xs text-[#777587] mt-0.5">
+                {usage.late_days} late arrival{usage.late_days !== 1 ? 's' : ''} + {usage.early_leave_days} early departure{usage.early_leave_days !== 1 ? 's' : ''} this month
+                {' · '}Early Leave + Late Coming share this allowance
+              </p>
+              {usage.exhausted && (
+                <p className="text-xs font-semibold text-rose-600 mt-1">
+                  Allowance exhausted — additional late arrivals or early departures will be treated as Half Day.
+                </p>
+              )}
+              {usage.remaining === 1 && !usage.exhausted && (
+                <p className="text-xs font-semibold text-amber-600 mt-1">
+                  1 occasion remaining — the next late arrival or early departure will be treated as Half Day.
+                </p>
+              )}
+            </div>
+            <div className="text-right shrink-0">
+              <p className={`text-3xl font-black ${
+                usage.exhausted ? 'text-rose-600' :
+                usage.remaining === 1 ? 'text-amber-600' :
+                'text-[#3525cd]'
+              }`}>{usage.combined_count}<span className="text-lg font-bold text-[#777587]"> / {usage.max_allowance}</span></p>
+              <p className="text-[0.65rem] text-[#777587] font-medium">occasions used</p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* KPI cards */}
       <div className="grid grid-cols-3 gap-4 mb-6">
@@ -859,12 +1006,26 @@ export default function Regularization() {
         ))}
       </div>
 
-      {/* Filter tabs */}
-      <div className="flex gap-2 mb-4 flex-wrap">
+      {/* Status filter tabs */}
+      <div className="flex gap-2 mb-3 flex-wrap">
         {['all','pending','approved','rejected'].map(f => (
           <button key={f} onClick={() => setFilter(f)}
             className={`px-4 py-1.5 rounded-full text-xs font-bold capitalize border transition-all ${filter === f ? 'bg-[#3525cd] text-white border-[#3525cd] shadow-sm' : 'bg-white text-[#464555] border-[#c7c4d8] hover:border-[#3525cd]/40 hover:text-[#3525cd]'}`}>
             {f === 'all' ? `All (${requests.length})` : `${f} (${counts[f] || 0})`}
+          </button>
+        ))}
+      </div>
+
+      {/* Type filter tabs */}
+      <div className="flex gap-2 mb-4 flex-wrap">
+        {[
+          { key: 'all',         label: 'All Types' },
+          { key: 'check_time',  label: 'Attendance Correction' },
+          { key: 'early_leave', label: 'Early Leave' },
+        ].map(t => (
+          <button key={t.key} onClick={() => setTypeFilter(t.key)}
+            className={`px-3 py-1 rounded-full text-xs font-semibold border transition-all ${typeFilter === t.key ? 'bg-[#151c27] text-white border-[#151c27]' : 'bg-white text-[#464555] border-[#c7c4d8] hover:border-[#151c27]/40'}`}>
+            {t.label}
           </button>
         ))}
       </div>
@@ -1002,13 +1163,16 @@ export default function Regularization() {
                 <div className="flex items-start gap-4">
                   <Avatar name={r.user_name || 'Employee'} color={r.user_avatar_color} size={38} />
                   <div className="flex-1 min-w-0">
-                    {/* Name + dept + badge */}
+                    {/* Name + dept + badges */}
                     <div className="flex items-center gap-2 flex-wrap mb-2">
                       <span className="font-bold text-[#151c27]">{r.user_name || 'Employee'}</span>
                       {r.user_department && <span className="text-xs text-[#777587]">· {r.user_department}</span>}
                       <span className={`badge ${cfg.cls} flex items-center gap-1 font-semibold`}>
                         {cfg.icon}{cfg.label}
                       </span>
+                      {(() => { const tc = TYPE_CFG[r.type || 'check_time']; return tc ? (
+                        <span className={`text-[0.6rem] font-bold border rounded-full px-2 py-0.5 ${tc.cls}`}>{tc.label}</span>
+                      ) : null; })()}
                     </div>
 
                     {/* Time fields grid */}
@@ -1017,6 +1181,12 @@ export default function Regularization() {
                         <span className="text-[#777587]">Date</span>
                         <p className="font-semibold text-[#151c27]">{fmtDate(r.date)}</p>
                       </div>
+                      {r.type === 'early_leave' && r.requested_early_exit_time && (
+                        <div>
+                          <span className="text-[#777587]">Req. Exit</span>
+                          <p className="font-semibold text-amber-700">{fmtTime12(r.requested_early_exit_time)}</p>
+                        </div>
+                      )}
                       {r.requested_check_in && (
                         <div>
                           <span className="text-[#777587]">Req. In</span>
@@ -1139,6 +1309,9 @@ export default function Regularization() {
       )}
       {applyOpen && !isAdmin && !hasBiometric && (
         <ApplyModal open onClose={() => setApplyOpen(false)} initialDate={dateParam} />
+      )}
+      {earlyLeaveOpen && !isAdmin && (
+        <EarlyLeaveModal open onClose={() => setEarlyLeaveOpen(false)} usage={usage} />
       )}
       {reviewReq && <ReviewModal open onClose={() => setReviewReq(null)} request={reviewReq} />}
       {viewReq   && <ViewModal  open onClose={() => setViewReq(null)}   request={viewReq}   />}

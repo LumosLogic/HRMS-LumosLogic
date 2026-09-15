@@ -45,18 +45,94 @@ router.get('/', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// GET /api/regularization/usage — monthly combined early-leave + late count for employee
+// Must be defined before /:id routes so 'usage' is not treated as an ID.
+router.get('/usage', auth, async (req, res) => {
+  try {
+    const oId   = req.user.organization_id;
+    const uid   = req.user.id;
+    const now   = new Date();
+    const month = parseInt(req.query.month) || (now.getMonth() + 1);
+    const year  = parseInt(req.query.year)  || now.getFullYear();
+    const pad   = n => String(n).padStart(2, '0');
+    const start = `${year}-${pad(month)}-01`;
+    const daysInMonth = new Date(year, month, 0).getDate();
+    const end   = `${year}-${pad(month)}-${pad(daysInMonth)}`;
+
+    // Count biometric-detected early_leave days and late-arriving days this month
+    const attRes = await pool.query(
+      `SELECT
+         COUNT(*) FILTER (WHERE status = 'early_leave')                   AS early_leave_days,
+         COUNT(*) FILTER (WHERE is_late = TRUE AND status = 'present')    AS late_days
+       FROM attendance
+       WHERE user_id = $1 AND organization_id = $2 AND date >= $3 AND date <= $4`,
+      [uid, oId, start, end]
+    );
+    const early_leave_days = parseInt(attRes.rows[0]?.early_leave_days || 0);
+    const late_days        = parseInt(attRes.rows[0]?.late_days        || 0);
+    const combined_count   = early_leave_days + late_days;
+
+    // Fetch max allowance from work_schedule
+    const schedRes = await pool.query(
+      `SELECT COALESCE(max_early_leave_count, 3) AS max_allowance
+         FROM work_schedule WHERE organization_id = $1 LIMIT 1`,
+      [oId]
+    );
+    const max_allowance = parseInt(schedRes.rows[0]?.max_allowance || 3);
+
+    // Approved early leave requests this month (for display)
+    const elRes = await pool.query(
+      `SELECT id, date, requested_early_exit_time, reason, status, created_at
+         FROM attendance_regularization
+        WHERE user_id = $1 AND organization_id = $2
+          AND type = 'early_leave'
+          AND date >= $3 AND date <= $4
+        ORDER BY date DESC`,
+      [uid, oId, start, end]
+    );
+
+    res.json({
+      month, year,
+      early_leave_days,
+      late_days,
+      combined_count,
+      max_allowance,
+      remaining: Math.max(0, max_allowance - combined_count),
+      exhausted: combined_count >= max_allowance,
+      early_leave_requests: elRes.rows,
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // POST /api/regularization
 router.post('/', auth, async (req, res) => {
   try {
     const oId = req.user.organization_id;
-    const { date, requested_check_in, requested_check_out, reason } = req.body;
+    const { date, requested_check_in, requested_check_out, reason,
+            type = 'check_time', requested_early_exit_time } = req.body;
     if (!date || !reason) return res.status(400).json({ error: 'date and reason are required' });
+    if (!['check_time', 'early_leave'].includes(type))
+      return res.status(400).json({ error: 'Invalid request type' });
+    if (type === 'early_leave' && !requested_early_exit_time)
+      return res.status(400).json({ error: 'requested_early_exit_time is required for early leave requests' });
+
     const { data, error } = await db.from('attendance_regularization')
-      .insert({ user_id: req.user.id, date, requested_check_in: requested_check_in || null, requested_check_out: requested_check_out || null, reason, organization_id: oId })
+      .insert({
+        user_id: req.user.id,
+        date,
+        type,
+        requested_check_in:        type === 'check_time' ? (requested_check_in  || null) : null,
+        requested_check_out:       type === 'check_time' ? (requested_check_out || null) : null,
+        requested_early_exit_time: type === 'early_leave' ? (requested_early_exit_time || null) : null,
+        reason,
+        organization_id: oId,
+      })
       .select().single();
+
     if (error) {
       if (error.code === '23505' || (error.message && error.message.includes('unique constraint'))) {
-        return res.status(409).json({ error: 'You already have a pending request for this date. Please wait for it to be reviewed before submitting another.' });
+        const label = type === 'early_leave' ? 'early leave' : 'attendance correction';
+        return res.status(409).json({ error: `You already have a pending ${label} request for this date.` });
       }
       throw error;
     }
@@ -65,10 +141,12 @@ router.post('/', auth, async (req, res) => {
     const { data: admins } = await db.from('users')
       .select('id').eq('organization_id', oId).in('role', ['admin', 'root_admin']);
     if (admins?.length) {
+      const title   = type === 'early_leave' ? 'Early Leave Request' : 'Regularization Request';
+      const message = type === 'early_leave'
+        ? `${req.user.name} requested early leave on ${date} (exit at ${requested_early_exit_time})`
+        : `${req.user.name} requested attendance correction for ${date}`;
       await db.from('notifications').insert(admins.map(a => ({
-        user_id: a.id,
-        title: 'Regularization Request',
-        message: `${req.user.name} requested attendance correction for ${date}`,
+        user_id: a.id, title, message,
         type: 'regularization',
         reference_id: data.id, reference_type: 'regularization',
         organization_id: oId,
@@ -126,55 +204,62 @@ router.put('/:id/review', auth, hasPermission('attendance', 'approve_regularizat
     finalReg = updRes.rows[0];
 
     if (status === 'approved') {
-      // 2. Fetch existing attendance (inside transaction so we see latest state)
-      const attRes = await client.query(
-        `SELECT * FROM attendance
-         WHERE user_id = $1 AND date = $2 AND organization_id = $3`,
-        [reg.user_id, reg.date, oId]
-      );
-      const existingAtt = attRes.rows[0] || null;
-
-      const final_check_in  = reg.requested_check_in  || existingAtt?.check_in  || null;
-      const final_check_out = reg.requested_check_out || existingAtt?.check_out || null;
-
-      let gross_hours = existingAtt?.gross_hours || 0;
-      let work_hours  = existingAtt?.work_hours  || 0;
-      if (final_check_in && final_check_out) {
-        const [h1, m1] = final_check_in.split(':').map(Number);
-        const [h2, m2] = final_check_out.split(':').map(Number);
-        const totalMins   = (h2 * 60 + m2) - (h1 * 60 + m1);
-        const breakMins   = existingAtt?.total_break_minutes || 0;
-        const effectiveMins = Math.max(0, totalMins - breakMins);
-        gross_hours = totalMins   > 0 ? Math.round((totalMins    / 60) * 100) / 100 : 0;
-        work_hours  = effectiveMins > 0 ? Math.round((effectiveMins / 60) * 100) / 100 : 0;
-      }
-
-      // 3. Upsert attendance record
-      if (existingAtt) {
-        await client.query(
-          `UPDATE attendance
-           SET check_in = $1, check_out = $2, work_hours = $3, gross_hours = $4, status = 'present'
-           WHERE user_id = $5 AND date = $6 AND organization_id = $7`,
-          [final_check_in, final_check_out, work_hours, gross_hours, reg.user_id, reg.date, oId]
-        );
+      if (reg.type === 'early_leave') {
+        // Early leave requests are policy/approval records only.
+        // Do NOT modify attendance records, checkout time, or working hours.
+        // The payroll engine reads actual attendance status from biometric data.
       } else {
+        // check_time: apply the corrected attendance times
+        // 2. Fetch existing attendance (inside transaction so we see latest state)
+        const attRes = await client.query(
+          `SELECT * FROM attendance
+           WHERE user_id = $1 AND date = $2 AND organization_id = $3`,
+          [reg.user_id, reg.date, oId]
+        );
+        const existingAtt = attRes.rows[0] || null;
+
+        const final_check_in  = reg.requested_check_in  || existingAtt?.check_in  || null;
+        const final_check_out = reg.requested_check_out || existingAtt?.check_out || null;
+
+        let gross_hours = existingAtt?.gross_hours || 0;
+        let work_hours  = existingAtt?.work_hours  || 0;
+        if (final_check_in && final_check_out) {
+          const [h1, m1] = final_check_in.split(':').map(Number);
+          const [h2, m2] = final_check_out.split(':').map(Number);
+          const totalMins     = (h2 * 60 + m2) - (h1 * 60 + m1);
+          const breakMins     = existingAtt?.total_break_minutes || 0;
+          const effectiveMins = Math.max(0, totalMins - breakMins);
+          gross_hours = totalMins    > 0 ? Math.round((totalMins    / 60) * 100) / 100 : 0;
+          work_hours  = effectiveMins > 0 ? Math.round((effectiveMins / 60) * 100) / 100 : 0;
+        }
+
+        // 3. Upsert attendance record
+        if (existingAtt) {
+          await client.query(
+            `UPDATE attendance
+             SET check_in = $1, check_out = $2, work_hours = $3, gross_hours = $4, status = 'present'
+             WHERE user_id = $5 AND date = $6 AND organization_id = $7`,
+            [final_check_in, final_check_out, work_hours, gross_hours, reg.user_id, reg.date, oId]
+          );
+        } else {
+          await client.query(
+            `INSERT INTO attendance (user_id, date, check_in, check_out, work_hours, gross_hours, status, organization_id)
+             VALUES ($1,$2,$3,$4,$5,$6,'present',$7)
+             ON CONFLICT (user_id, date, organization_id) DO UPDATE
+               SET check_in = EXCLUDED.check_in, check_out = EXCLUDED.check_out,
+                   work_hours = EXCLUDED.work_hours, gross_hours = EXCLUDED.gross_hours, status = 'present'`,
+            [reg.user_id, reg.date, final_check_in, final_check_out, work_hours, gross_hours, oId]
+          );
+        }
+
+        // 4. Cancel any approved leaves overlapping this date
         await client.query(
-          `INSERT INTO attendance (user_id, date, check_in, check_out, work_hours, gross_hours, status, organization_id)
-           VALUES ($1,$2,$3,$4,$5,$6,'present',$7)
-           ON CONFLICT (user_id, date, organization_id) DO UPDATE
-             SET check_in = EXCLUDED.check_in, check_out = EXCLUDED.check_out,
-                 work_hours = EXCLUDED.work_hours, gross_hours = EXCLUDED.gross_hours, status = 'present'`,
-          [reg.user_id, reg.date, final_check_in, final_check_out, work_hours, gross_hours, oId]
+          `UPDATE leaves SET status = 'cancelled'
+           WHERE user_id = $1 AND organization_id = $2 AND status = 'approved'
+             AND start_date <= $3 AND end_date >= $3`,
+          [reg.user_id, oId, reg.date]
         );
       }
-
-      // 4. Cancel any approved leaves overlapping this date (balance recalculates automatically)
-      await client.query(
-        `UPDATE leaves SET status = 'cancelled'
-         WHERE user_id = $1 AND organization_id = $2 AND status = 'approved'
-           AND start_date <= $3 AND end_date >= $3`,
-        [reg.user_id, oId, reg.date]
-      );
     }
 
     await client.query('COMMIT');
@@ -186,18 +271,22 @@ router.put('/:id/review', auth, hasPermission('attendance', 'approve_regularizat
   }
 
   // Fire-and-forget: notification
+  const isEarlyLeave = finalReg.type === 'early_leave';
   db.from('notifications').insert({
     user_id: finalReg.user_id,
-    title:   `Regularization ${status === 'approved' ? 'Approved' : 'Rejected'}`,
-    message: `Your attendance correction for ${finalReg.date} was ${status}.${reviewer_notes ? ` Note: ${reviewer_notes}` : ''}`,
+    title:   isEarlyLeave
+      ? `Early Leave Request ${status === 'approved' ? 'Approved' : 'Rejected'}`
+      : `Regularization ${status === 'approved' ? 'Approved' : 'Rejected'}`,
+    message: isEarlyLeave
+      ? `Your early leave request for ${finalReg.date} was ${status}.${reviewer_notes ? ` Note: ${reviewer_notes}` : ''}`
+      : `Your attendance correction for ${finalReg.date} was ${status}.${reviewer_notes ? ` Note: ${reviewer_notes}` : ''}`,
     type:    'regularization',
     organization_id: oId,
   }).then(() => {});
 
-  // Fire-and-forget: if a draft payslip exists for the corrected month, regenerate it
-  // so LOP/attendance counts reflect the corrected attendance immediately.
-  // Locked/published payslips are intentionally NOT regenerated — admin must do that manually.
-  if (status === 'approved') {
+  // Fire-and-forget: regenerate draft payslip only for check_time approvals
+  // (early_leave approvals do not change attendance records so payslip output is unchanged).
+  if (status === 'approved' && !isEarlyLeave) {
     const regDate = new Date(finalReg.date + 'T12:00:00Z');
     const regMonth = regDate.getUTCMonth() + 1;
     const regYear  = regDate.getUTCFullYear();
