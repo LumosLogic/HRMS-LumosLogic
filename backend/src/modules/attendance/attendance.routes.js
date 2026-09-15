@@ -87,7 +87,7 @@ async function getActiveShiftConfig(userId, today) {
   try {
     const { data } = await db
       .from('shift_assignments')
-      .select('shift:shifts(start_time, end_time, days_of_week, late_threshold, early_exit_threshold, half_day_hours, full_day_hours, max_early_leave_count)')
+      .select('shift:shifts(start_time, end_time, days_of_week, late_threshold, early_exit_threshold, half_day_hours, full_day_hours, max_early_leave_count, late_entry_threshold_enabled, early_exit_threshold_enabled)')
       .eq('user_id', userId)
       .lte('effective_from', today)
       .or(`effective_to.is.null,effective_to.gte.${today}`)
@@ -114,7 +114,11 @@ router.post('/checkin', auth, async (req, res) => {
     // Use shift's late_threshold if configured; fall back to org-wide late_threshold
     const shift = await getActiveShiftConfig(req.user.id, today);
     const lateThreshold = shift?.late_threshold || settings.late_threshold;
-    const is_late = toMinutes(timeStr) > toMinutes(lateThreshold);
+    // Enabled flag: shift-specific override → org setting → default true (backward compat)
+    const lateEnabled = (shift?.late_entry_threshold_enabled != null)
+      ? shift.late_entry_threshold_enabled
+      : (settings.late_entry_threshold_enabled ?? true);
+    const is_late = lateEnabled && (toMinutes(timeStr) > toMinutes(lateThreshold));
 
     let record;
     if (existing) {
@@ -165,7 +169,11 @@ router.post('/checkout', auth, async (req, res) => {
     const shift = await getActiveShiftConfig(req.user.id, today);
     // Early exit: shift's own early_exit_threshold → shift end_time → org threshold
     const earlyExitThreshold = shift?.early_exit_threshold || shift?.end_time || settings.early_exit_threshold;
-    const is_early_exit = toMinutes(timeStr) < toMinutes(earlyExitThreshold);
+    // Enabled flag: shift-specific override → org setting → default true (backward compat)
+    const earlyExitEnabled = (shift?.early_exit_threshold_enabled != null)
+      ? shift.early_exit_threshold_enabled
+      : (settings.early_exit_threshold_enabled ?? true);
+    const is_early_exit = earlyExitEnabled && (toMinutes(timeStr) < toMinutes(earlyExitThreshold));
     // Half/full day thresholds: shift-specific → org default
     const halfDayHours = parseFloat(shift?.half_day_hours ?? settings.half_day_hours ?? 4.5);
     const fullDayHours = parseFloat(shift?.full_day_hours ?? settings.full_day_hours ?? 8);

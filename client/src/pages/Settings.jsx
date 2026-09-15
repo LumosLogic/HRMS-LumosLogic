@@ -346,24 +346,28 @@ function AttendanceRulesPanel({ schedule, isAdmin, onSaved }) {
   const effective = shiftConfig || schedule;
 
   const [form, setForm] = useState({
-    late_threshold:        '',
-    early_exit_threshold:  '',
-    half_day_hours:        4,
-    full_day_hours:        8,
-    max_early_leave_count: 3,
+    late_threshold:               '',
+    early_exit_threshold:         '',
+    half_day_hours:               4,
+    full_day_hours:               8,
+    max_early_leave_count:        3,
+    late_entry_threshold_enabled: true,
+    early_exit_threshold_enabled: true,
   });
 
   useEffect(() => {
     if (!effective) return;
     setForm({
-      late_threshold:        effective.late_threshold        || '',
-      early_exit_threshold:  effective.early_exit_threshold  || '',
-      half_day_hours:        effective.half_day_hours        ?? 4,
-      full_day_hours:        effective.full_day_hours        ?? 8,
-      max_early_leave_count: effective.max_early_leave_count ?? 3,
+      late_threshold:               effective.late_threshold        || '',
+      early_exit_threshold:         effective.early_exit_threshold  || '',
+      half_day_hours:               effective.half_day_hours        ?? 4,
+      full_day_hours:               effective.full_day_hours        ?? 8,
+      max_early_leave_count:        effective.max_early_leave_count ?? 3,
+      late_entry_threshold_enabled: effective.late_entry_threshold_enabled  ?? true,
+      early_exit_threshold_enabled: effective.early_exit_threshold_enabled  ?? true,
     });
     setErrs({});
-  }, [effective?.shift_id, effective?.late_threshold, effective?.half_day_hours]);
+  }, [effective?.shift_id, effective?.late_threshold, effective?.half_day_hours, effective?.late_entry_threshold_enabled, effective?.early_exit_threshold_enabled]);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
@@ -378,9 +382,9 @@ function AttendanceRulesPanel({ schedule, isAdmin, onSaved }) {
     const full      = parseFloat(form.full_day_hours);
     const maxELC    = parseInt(form.max_early_leave_count, 10);
 
-    if (lateMins !== null && startMins !== null && endMins !== null && (lateMins <= startMins || lateMins >= endMins))
+    if (form.late_entry_threshold_enabled && lateMins !== null && startMins !== null && endMins !== null && (lateMins <= startMins || lateMins >= endMins))
       e.late_threshold = 'Must be between Work Start and End time.';
-    if (earlyMins !== null && lateMins !== null && endMins !== null && (earlyMins <= lateMins || earlyMins >= endMins))
+    if (form.early_exit_threshold_enabled && earlyMins !== null && lateMins !== null && endMins !== null && (earlyMins <= lateMins || earlyMins >= endMins))
       e.early_exit_threshold = 'Must be between Late Threshold and End time.';
     if (isNaN(half) || half <= 0) e.half_day_hours = 'Must be a positive number.';
     else if (startMins !== null && endMins !== null) {
@@ -400,11 +404,13 @@ function AttendanceRulesPanel({ schedule, isAdmin, onSaved }) {
   const mutation = useMutation({
     mutationFn: () => {
       const payload = {
-        late_threshold:        form.late_threshold || null,
-        early_exit_threshold:  form.early_exit_threshold || null,
-        half_day_hours:        parseFloat(form.half_day_hours),
-        full_day_hours:        parseFloat(form.full_day_hours),
-        max_early_leave_count: parseInt(form.max_early_leave_count, 10),
+        late_threshold:               form.late_threshold || null,
+        early_exit_threshold:         form.early_exit_threshold || null,
+        half_day_hours:               parseFloat(form.half_day_hours),
+        full_day_hours:               parseFloat(form.full_day_hours),
+        max_early_leave_count:        parseInt(form.max_early_leave_count, 10),
+        late_entry_threshold_enabled: form.late_entry_threshold_enabled,
+        early_exit_threshold_enabled: form.early_exit_threshold_enabled,
       };
       if (selectedShiftId == null) {
         // Org-level: pass-through work schedule fields so they aren't wiped
@@ -439,20 +445,46 @@ function AttendanceRulesPanel({ schedule, isAdmin, onSaved }) {
               <p className="text-xs font-bold text-[#464555] uppercase tracking-wide mb-3">Entry &amp; Exit Thresholds</p>
               <div className="grid grid-cols-2 gap-5">
                 <div>
-                  <label className="form-label">Late Entry Threshold</label>
-                  <input type="time" className={`form-control ${errs.late_threshold ? 'border-rose-400' : ''}`}
-                    value={form.late_threshold} disabled={!isAdmin} onChange={e => set('late_threshold', e.target.value)} />
+                  <label className="form-label flex items-center justify-between">
+                    <span>Late Entry Threshold</span>
+                    {isAdmin && (
+                      <button type="button"
+                        title={form.late_entry_threshold_enabled ? 'Disable Late Entry threshold' : 'Enable Late Entry threshold'}
+                        onClick={() => set('late_entry_threshold_enabled', !form.late_entry_threshold_enabled)}
+                        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus:outline-none ${form.late_entry_threshold_enabled ? 'bg-[#3525cd]' : 'bg-[#c7c4d8]'}`}>
+                        <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${form.late_entry_threshold_enabled ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
+                      </button>
+                    )}
+                  </label>
+                  <input type="time"
+                    className={`form-control ${errs.late_threshold ? 'border-rose-400' : ''} ${!form.late_entry_threshold_enabled ? 'opacity-40' : ''}`}
+                    value={form.late_threshold}
+                    disabled={!isAdmin || !form.late_entry_threshold_enabled}
+                    onChange={e => set('late_threshold', e.target.value)} />
                   {errs.late_threshold
                     ? <p className="text-xs text-rose-500 mt-1">{errs.late_threshold}</p>
-                    : <p className="form-hint">Check-in after this = Late</p>}
+                    : <p className="form-hint">{form.late_entry_threshold_enabled ? 'Check-in after this = Late' : 'Disabled — late detection off'}</p>}
                 </div>
                 <div>
-                  <label className="form-label">Early Exit Threshold</label>
-                  <input type="time" className={`form-control ${errs.early_exit_threshold ? 'border-rose-400' : ''}`}
-                    value={form.early_exit_threshold} disabled={!isAdmin} onChange={e => set('early_exit_threshold', e.target.value)} />
+                  <label className="form-label flex items-center justify-between">
+                    <span>Early Exit Threshold</span>
+                    {isAdmin && (
+                      <button type="button"
+                        title={form.early_exit_threshold_enabled ? 'Disable Early Exit threshold' : 'Enable Early Exit threshold'}
+                        onClick={() => set('early_exit_threshold_enabled', !form.early_exit_threshold_enabled)}
+                        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus:outline-none ${form.early_exit_threshold_enabled ? 'bg-[#3525cd]' : 'bg-[#c7c4d8]'}`}>
+                        <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform ${form.early_exit_threshold_enabled ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
+                      </button>
+                    )}
+                  </label>
+                  <input type="time"
+                    className={`form-control ${errs.early_exit_threshold ? 'border-rose-400' : ''} ${!form.early_exit_threshold_enabled ? 'opacity-40' : ''}`}
+                    value={form.early_exit_threshold}
+                    disabled={!isAdmin || !form.early_exit_threshold_enabled}
+                    onChange={e => set('early_exit_threshold', e.target.value)} />
                   {errs.early_exit_threshold
                     ? <p className="text-xs text-rose-500 mt-1">{errs.early_exit_threshold}</p>
-                    : <p className="form-hint">Check-out before this = Early Exit</p>}
+                    : <p className="form-hint">{form.early_exit_threshold_enabled ? 'Check-out before this = Early Exit' : 'Disabled — early exit detection off'}</p>}
                 </div>
               </div>
             </div>

@@ -19,10 +19,16 @@ router.get('/', auth, async (req, res) => {
 // ─── Settings: Update Work Schedule ──────────────────────────────────────────
 router.put('/', auth, hasPermission('settings', 'manage'), async (req, res) => {
   try {
-    const { start_time, end_time, late_threshold, early_exit_threshold, half_day_hours, work_days, full_day_hours, max_early_leave_count } = req.body;
+    const { start_time, end_time, late_threshold, early_exit_threshold, half_day_hours, work_days, full_day_hours, max_early_leave_count,
+            late_entry_threshold_enabled, early_exit_threshold_enabled } = req.body;
     // Try to update existing; insert if none
     const { data: existing } = await db.from('work_schedule').select('id').eq('organization_id', orgId(req)).limit(1).maybeSingle();
-    const fields = { start_time, end_time, late_threshold, early_exit_threshold, half_day_hours, work_days, full_day_hours, max_early_leave_count };
+    const fields = {
+      start_time, end_time, late_threshold, early_exit_threshold, half_day_hours, work_days, full_day_hours, max_early_leave_count,
+      // Default to true when not explicitly provided (backward compat)
+      late_entry_threshold_enabled:  late_entry_threshold_enabled  ?? true,
+      early_exit_threshold_enabled:  early_exit_threshold_enabled  ?? true,
+    };
     let data, err;
     if (existing) {
       const res2 = await db.from('work_schedule')
@@ -49,7 +55,7 @@ router.get('/shift/:shiftId', auth, async (req, res) => {
 
     const [{ data: shift }, { data: orgSchedule }] = await Promise.all([
       db.from('shifts')
-        .select('id, name, start_time, end_time, days_of_week, late_threshold, early_exit_threshold, half_day_hours, full_day_hours, max_early_leave_count')
+        .select('id, name, start_time, end_time, days_of_week, late_threshold, early_exit_threshold, half_day_hours, full_day_hours, max_early_leave_count, late_entry_threshold_enabled, early_exit_threshold_enabled')
         .eq('id', shiftId)
         .eq('organization_id', oId)
         .maybeSingle(),
@@ -74,8 +80,11 @@ router.get('/shift/:shiftId', auth, async (req, res) => {
       half_day_hours:        shift.half_day_hours        != null ? Number(shift.half_day_hours)        : (orgSchedule?.half_day_hours        != null ? Number(orgSchedule.half_day_hours)        : null),
       full_day_hours:        shift.full_day_hours        != null ? Number(shift.full_day_hours)        : (orgSchedule?.full_day_hours        != null ? Number(orgSchedule.full_day_hours)        : null),
       max_early_leave_count: shift.max_early_leave_count != null ? Number(shift.max_early_leave_count) : (orgSchedule?.max_early_leave_count != null ? Number(orgSchedule.max_early_leave_count) : null),
+      // Enable/disable flags — shift-specific overrides; null on shift → inherit org value → default true
+      late_entry_threshold_enabled:  shift.late_entry_threshold_enabled  ?? orgSchedule?.late_entry_threshold_enabled  ?? true,
+      early_exit_threshold_enabled:  shift.early_exit_threshold_enabled  ?? orgSchedule?.early_exit_threshold_enabled  ?? true,
       // Flags for UI
-      has_shift_override: shift.late_threshold !== null || shift.half_day_hours !== null,
+      has_shift_override: shift.late_threshold !== null || shift.half_day_hours !== null || shift.late_entry_threshold_enabled !== null || shift.early_exit_threshold_enabled !== null,
     };
 
     res.json({ config });
@@ -99,17 +108,20 @@ router.put('/shift/:shiftId', auth, hasPermission('settings', 'manage'), async (
       start_time, end_time, work_days,
       late_threshold, early_exit_threshold,
       half_day_hours, full_day_hours, max_early_leave_count,
+      late_entry_threshold_enabled, early_exit_threshold_enabled,
     } = req.body;
 
     const updates = {};
-    if (start_time !== undefined)            updates.start_time            = start_time;
-    if (end_time !== undefined)              updates.end_time              = end_time;
-    if (work_days !== undefined)             updates.days_of_week          = work_days;
-    if (late_threshold !== undefined)        updates.late_threshold        = late_threshold;
-    if (early_exit_threshold !== undefined)  updates.early_exit_threshold  = early_exit_threshold;
-    if (half_day_hours !== undefined)        updates.half_day_hours        = half_day_hours !== null ? parseFloat(half_day_hours) : null;
-    if (full_day_hours !== undefined)        updates.full_day_hours        = full_day_hours !== null ? parseFloat(full_day_hours) : null;
-    if (max_early_leave_count !== undefined) updates.max_early_leave_count = max_early_leave_count !== null ? parseInt(max_early_leave_count, 10) : null;
+    if (start_time !== undefined)                    updates.start_time                    = start_time;
+    if (end_time !== undefined)                      updates.end_time                      = end_time;
+    if (work_days !== undefined)                     updates.days_of_week                  = work_days;
+    if (late_threshold !== undefined)                updates.late_threshold                = late_threshold;
+    if (early_exit_threshold !== undefined)          updates.early_exit_threshold          = early_exit_threshold;
+    if (half_day_hours !== undefined)                updates.half_day_hours                = half_day_hours !== null ? parseFloat(half_day_hours) : null;
+    if (full_day_hours !== undefined)                updates.full_day_hours                = full_day_hours !== null ? parseFloat(full_day_hours) : null;
+    if (max_early_leave_count !== undefined)         updates.max_early_leave_count         = max_early_leave_count !== null ? parseInt(max_early_leave_count, 10) : null;
+    if (late_entry_threshold_enabled !== undefined)  updates.late_entry_threshold_enabled  = late_entry_threshold_enabled !== null ? !!late_entry_threshold_enabled : null;
+    if (early_exit_threshold_enabled !== undefined)  updates.early_exit_threshold_enabled  = early_exit_threshold_enabled !== null ? !!early_exit_threshold_enabled : null;
 
     if (!Object.keys(updates).length) return res.status(400).json({ error: 'No fields to update' });
 
