@@ -14,6 +14,7 @@ import {
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useFeature } from '@/context/FeatureFlagContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { Avatar } from '@/components/ui/Avatar';
@@ -539,6 +540,7 @@ function deriveWeeklyOff(weeklyOffDay, workSchedule) {
 function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
   const toast = useToast();
   const qc = useQueryClient();
+  const { selectedBranchId } = useBranch();
   const [skillModal, setSkillModal]             = useState(null);
   const [expModal, setExpModal]                 = useState(null);
   const [orgStructEditing, setOrgStructEditing] = useState(false);
@@ -562,7 +564,7 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
     staleTime: 5 * 60 * 1000,
   });
   const { data: allEmployees = [] } = useQuery({
-    queryKey: ['employees-list'],
+    queryKey: ['employees-list', selectedBranchId],
     queryFn: () => apiGet('/employees'),
     staleTime: 5 * 60 * 1000,
     enabled: isAdmin,

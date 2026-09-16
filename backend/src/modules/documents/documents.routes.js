@@ -5,6 +5,8 @@ const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const cloudinary = require('cloudinary').v2;
 const multer     = require('multer');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { resolveEmployeeIds } = require('../../utils/branchFilter');
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -58,23 +60,37 @@ async function attachShares(docs, oId) {
 }
 
 // GET /api/documents/colleagues — lightweight employee list for sharing picker
-router.get('/colleagues', auth, async (req, res) => {
+// Admins see only employees in their accessible branches.
+// Employees retain existing behavior (org-wide, for sharing with any colleague).
+router.get('/colleagues', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
-    const { data, error } = await db
+    const role = req.user.role;
+
+    let query = db
       .from('users')
       .select('id, name, avatar_color, department')
       .eq('organization_id', oId)
       .eq('role', 'employee')
       .neq('id', req.user.id)
       .order('name');
+
+    // Admins: filter colleagues to branch-accessible employees only.
+    // Employees: see all org colleagues — they may share with anyone.
+    if (role === 'admin' || role === 'root_admin') {
+      const empIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (empIds !== null && empIds.length === 0) return res.json([]);
+      if (empIds !== null) query = query.in('id', empIds);
+    }
+
+    const { data, error } = await query;
     if (error) throw error;
     res.json(data || []);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // GET /api/documents
-router.get('/', auth, async (req, res) => {
+router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { userId } = req.query;
@@ -85,7 +101,25 @@ router.get('/', auth, async (req, res) => {
         .select('*')
         .eq('organization_id', oId)
         .order('created_at', { ascending: false });
-      if (userId) query = query.eq('user_id', userId);
+
+      if (userId) {
+        // Admin requested a specific employee's documents.
+        // Enforce branch access: the requested employee must belong to an
+        // accessible branch. resolveEmployeeIds tells us which users are
+        // in-scope; if the requested userId is not among them, return empty.
+        const empIds = await resolveEmployeeIds(req.branchContext, oId);
+        if (empIds !== null) {
+          const numId = Number(userId);
+          if (!empIds.includes(numId)) return res.json([]);
+        }
+        query = query.eq('user_id', Number(userId));
+      } else {
+        // Admin browsing all documents — apply branch filter
+        const empIds = await resolveEmployeeIds(req.branchContext, oId);
+        if (empIds !== null && empIds.length === 0) return res.json([]);
+        if (empIds !== null) query = query.in('user_id', empIds);
+      }
+
       const { data, error } = await query;
       if (error) throw error;
       const docs = await attachShares(data || [], oId);

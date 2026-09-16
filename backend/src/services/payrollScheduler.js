@@ -466,7 +466,7 @@ async function triggerManual({ organizationId, month, year, force = false, actor
       `INSERT INTO payroll_scheduler_runs
          (organization_id, run_date, pay_month, pay_year, status, triggered_by, triggered_actor)
        VALUES ($1, CURRENT_DATE, $2, $3, 'running', 'manual', $4)
-       ON CONFLICT (organization_id, pay_month, pay_year) DO UPDATE
+       ON CONFLICT (organization_id, pay_month, pay_year) WHERE branch_id IS NULL DO UPDATE
           SET status          = 'running',
               triggered_by    = 'manual',
               triggered_actor = EXCLUDED.triggered_actor,

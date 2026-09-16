@@ -6,6 +6,8 @@ const { hasPermission } = require('../../middleware/permissions');
 const { flat, flatOne, orgId, getSettings, isWorkingDay, getRecipients, localDateStr, getOrgContext } = require('../../utils/helpers');
 const { sendMail, leaveAppliedHtml, leaveStatusHtml, leaveDeptApprovalHtml, leaveForwardedToRootHtml } = require('../../services/emailService');
 const engine = require('../../services/leaveWorkflowEngine');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { resolveEmployeeIds } = require('../../utils/branchFilter');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -690,7 +692,7 @@ router.get('/pending-root', auth, hasPermission('leaves', 'approve'), async (req
 });
 
 // ─── ROUTE: GET / — list leaves ───────────────────────────────────────────────
-router.get('/', auth, async (req, res) => {
+router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const { userId, year, month } = req.query;
     let query = db.from('leaves')
@@ -699,9 +701,16 @@ router.get('/', auth, async (req, res) => {
       .order('created_at', { ascending: false });
 
     if (!isAdminRole(req.user.role)) {
+      // Employees see only their own leaves — no branch filter needed
       query = query.eq('user_id', req.user.id);
     } else if (userId) {
+      // Specific employee requested — keep as-is (org scope already enforced above)
       query = query.eq('user_id', parseInt(userId));
+    } else {
+      // Admin viewing all leaves — apply branch filter
+      const empIds = await resolveEmployeeIds(req.branchContext, orgId(req));
+      if (empIds !== null && empIds.length === 0) return res.json([]);
+      if (empIds !== null) query = query.in('user_id', empIds);
     }
     if (year && month) {
       const ym = `${year}-${String(month).padStart(2,'0')}`;

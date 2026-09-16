@@ -6,6 +6,8 @@ const { auth, isAdminRole, blockUser, unblockUser, markRoleChanged } = require('
 const { clearUserCache } = require('../../services/permissionService');
 const { hasPermission } = require('../../middleware/permissions');
 const { orgId, getOrgContext } = require('../../utils/helpers');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { getFilterState } = require('../../utils/branchFilter');
 const { sendMail, welcomeEmployeeHtml, preOnboardingRequestHtml, credentialsEmailHtml } = require('../../services/emailService');
 const crypto = require('crypto');
 const { initOnboarding } = require('../onboarding/onboardingService');
@@ -40,16 +42,33 @@ const EMPLOYEE_ADMIN_COLS = EMPLOYEE_PUBLIC_COLS + ', aadhar_no, pan_number, uan
 // the Employees management page itself so HR can explicitly filter for them).
 const INACTIVE_STATUSES = ['inactive', 'resigned', 'terminated'];
 
-router.get('/', auth, hasPermission('employees', 'view'), async (req, res) => {
+router.get('/', auth, hasPermission('employees', 'view'), withBranchContext, async (req, res) => {
   try {
     // root_admin sees all non-root users (HR admins + employees); others see only employees
     const roleFilter = req.user.role === 'root_admin' ? ['admin', 'employee'] : ['employee'];
     const cols = isAdminRole(req.user.role) ? EMPLOYEE_ADMIN_COLS : EMPLOYEE_PUBLIC_COLS;
+
+    // ── Branch filter (admins only; employees always see org-wide list for their own context) ──
+    const branchState = isAdminRole(req.user.role)
+      ? getFilterState(req.branchContext)
+      : { type: 'all' };
+
+    // State D: no accessible branches → empty list
+    if (branchState.type === 'none') return res.json([]);
+
     let query = db.from('users')
       .select(cols)
       .eq('organization_id', orgId(req))
       .in('role', roleFilter)
       .order('name');
+
+    // Apply branch scoping to users.branch_id
+    if (branchState.type === 'specific') {
+      query = query.eq('branch_id', branchState.branchId);
+    } else if (branchState.type === 'multi') {
+      query = query.in('branch_id', branchState.branchIds);
+    }
+    // type === 'all': no branch filter — org-wide
 
     // BUG_059: exclude inactive/resigned/terminated unless the caller explicitly
     // opts in with ?include_inactive=true (only the employee management page does this).

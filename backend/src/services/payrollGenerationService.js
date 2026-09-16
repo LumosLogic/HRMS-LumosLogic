@@ -49,10 +49,22 @@ function logAudit({ oId, actorId, actorName, action, entityType, entityId, targe
 
 // ─── Eligible employees query ─────────────────────────────────────────────────
 // Returns employees who are active and have a salary structure for the period.
-async function fetchEligibleEmployees(oId, month, year) {
+//
+// Optional `employeeIds` array: when provided, restricts the selection to those
+// user IDs only (branch-scoped generation). Eligibility checks (role=employee,
+// active status, salary structure) still apply on top of the ID filter —
+// the payroll calculation logic is entirely unchanged.
+async function fetchEligibleEmployees(oId, month, year, employeeIds = null) {
   const mStr  = padZ(month);
   const start = `${year}-${mStr}-01`;
   const end   = `${year}-${mStr}-${padZ(daysInMonth(year, month))}`;
+
+  // Build optional branch-filter clause. Params are already $1-$3; branch filter
+  // adds $4 only when employeeIds is provided.
+  const branchClause = employeeIds ? `AND u.id = ANY($4::bigint[])` : '';
+  const params = employeeIds
+    ? [oId, end, start, employeeIds]
+    : [oId, end, start];
 
   const { rows } = await pool.query(
     `SELECT DISTINCT u.id, u.name, u.department, u.employee_id
@@ -65,8 +77,9 @@ async function fetchEligibleEmployees(oId, month, year) {
       WHERE u.organization_id = $1
         AND u.role            = 'employee'
         AND (u.employee_status IS NULL OR u.employee_status NOT IN ('inactive','resigned','terminated'))
+        ${branchClause}
       ORDER BY u.name ASC`,
-    [oId, end, start]
+    params
   );
   return rows;
 }
@@ -251,16 +264,24 @@ async function generateEmployeePayslip({ organizationId, userId, month, year, pa
  * Creates a payroll run for an organisation / period. Processes every eligible
  * employee; individual failures are recorded but do NOT abort the run.
  *
- * @param {object}  p
- * @param {number}  p.organizationId
- * @param {number}  p.month
- * @param {number}  p.year
- * @param {number}  p.generatedBy   — user ID of the actor
- * @param {string}  [p.notes]
- * @param {boolean} [p.force=false] — allow regenerating an existing (non-locked) run
- * @param {string}  [p.ip]
+ * @param {object}    p
+ * @param {number}    p.organizationId
+ * @param {number}    p.month
+ * @param {number}    p.year
+ * @param {number}    p.generatedBy    — user ID of the actor
+ * @param {string}    [p.notes]
+ * @param {boolean}   [p.force=false]  — allow regenerating an existing (non-locked) run
+ * @param {string}    [p.ip]
+ * @param {number[]|null} [p.employeeIds]  — optional branch-scoped employee subset;
+ *                        null/undefined = process all eligible org employees.
+ *                        The payroll calculation per employee is IDENTICAL regardless
+ *                        of whether this filter is active.
+ * @param {number|null} [p.branchId]   — branch this run belongs to.
+ *                        null  = organisation-wide run (All Branches or legacy).
+ *                        <id>  = branch-specific run; only that branch's employees
+ *                                are included and the run is isolated from other branches.
  */
-async function generatePayrollRun({ organizationId, month, year, generatedBy, notes, force = false, ip }) {
+async function generatePayrollRun({ organizationId, month, year, generatedBy, notes, force = false, ip, employeeIds = null, branchId = null }) {
   const oId  = Number(organizationId);
   const m    = Number(month);
   const y    = Number(year);
@@ -282,8 +303,19 @@ async function generatePayrollRun({ organizationId, month, year, generatedBy, no
   }
 
   // ── Step 1: advisory lock + create/reset run ────────────────────────────
-  // pg_advisory_xact_lock ensures only one concurrent generation per period.
-  const lockKey = BigInt(oId) * 10000n + BigInt(y % 100) * 100n + BigInt(m);
+  // pg_advisory_xact_lock ensures only one concurrent generation per period
+  // and per branch.  Using 0 as the sentinel for "All Branches" (null) is safe
+  // because branch IDs are BIGSERIAL and always >= 1.
+  //
+  // Key layout (all decimal): oId × 10 000 000 + branchKey × 10 000 + (y % 100) × 100 + m
+  //   org=1, branch=null, 2026-08  →  10_002_608
+  //   org=1, branch=2,    2026-08  →  10_022_608   (no collision with above)
+  //   org=2, branch=2,    2026-08  →  20_022_608   (different org)
+  const bKey    = BigInt(branchId ?? 0);
+  const lockKey = BigInt(oId) * 10_000_000n
+                + bKey          * 10_000n
+                + BigInt(y % 100) *   100n
+                + BigInt(m);
 
   let runId;
   let isRegenerate = false;
@@ -293,11 +325,19 @@ async function generatePayrollRun({ organizationId, month, year, generatedBy, no
     await setupClient.query('BEGIN');
     await setupClient.query('SELECT pg_advisory_xact_lock($1)', [String(lockKey)]);
 
+    // Branch-isolated lookup: use IS NOT DISTINCT FROM so NULL = NULL holds true.
+    // This prevents Branch A from finding Branch B's run (and vice versa) and
+    // ensures the org-wide (NULL) run is only matched when branchId is also NULL.
     const existing = await setupClient.query(
       `SELECT id, status FROM payroll_runs
-        WHERE organization_id = $1 AND month = $2 AND year = $3`,
-      [oId, m, y]
+        WHERE organization_id = $1
+          AND branch_id IS NOT DISTINCT FROM $2
+          AND month = $3
+          AND year  = $4`,
+      [oId, branchId ?? null, m, y]
     );
+
+    const branchLabel = branchId ? `branch ${branchId} ` : '';
 
     if (existing.rows.length > 0) {
       const run = existing.rows[0];
@@ -305,7 +345,7 @@ async function generatePayrollRun({ organizationId, month, year, generatedBy, no
       if (run.status === 'locked') {
         await setupClient.query('ROLLBACK');
         throw new GenerationError(
-          `Payroll for ${padZ(m)}/${y} is locked. Unlock it first.`,
+          `Payroll ${branchLabel}for ${padZ(m)}/${y} is locked. Unlock it first.`,
           'PAYROLL_LOCKED',
           { existingRunId: run.id }
         );
@@ -313,7 +353,7 @@ async function generatePayrollRun({ organizationId, month, year, generatedBy, no
       if (run.status === 'processing') {
         await setupClient.query('ROLLBACK');
         throw new GenerationError(
-          `Payroll for ${padZ(m)}/${y} is already being processed.`,
+          `Payroll ${branchLabel}for ${padZ(m)}/${y} is already being processed.`,
           'ALREADY_PROCESSING',
           { existingRunId: run.id }
         );
@@ -321,14 +361,15 @@ async function generatePayrollRun({ organizationId, month, year, generatedBy, no
       if (!force) {
         await setupClient.query('ROLLBACK');
         throw new GenerationError(
-          `Payroll for ${padZ(m)}/${y} already exists (status: ${run.status}). ` +
+          `Payroll ${branchLabel}for ${padZ(m)}/${y} already exists (status: ${run.status}). ` +
           'Pass force=true to regenerate.',
           'PAYROLL_EXISTS',
           { existingRunId: run.id, currentStatus: run.status }
         );
       }
 
-      // Reset existing run for regeneration
+      // Reset ONLY this run — identified by primary key so a force-regen of
+      // Branch A can never touch Branch B's run for the same period.
       await setupClient.query(
         `UPDATE payroll_runs SET
            status = 'processing', generated_by = $1, generated_at = NOW(),
@@ -337,6 +378,7 @@ async function generatePayrollRun({ organizationId, month, year, generatedBy, no
          WHERE id = $3 AND organization_id = $4`,
         [generatedBy, notes ?? null, run.id, oId]
       );
+      // Delete employee rows only for THIS run's ID — never by period alone.
       await setupClient.query(
         `DELETE FROM payroll_run_employees WHERE payroll_run_id = $1`,
         [run.id]
@@ -345,9 +387,9 @@ async function generatePayrollRun({ organizationId, month, year, generatedBy, no
       isRegenerate  = true;
     } else {
       const res = await setupClient.query(
-        `INSERT INTO payroll_runs (organization_id, month, year, status, generated_by, notes)
-         VALUES ($1, $2, $3, 'processing', $4, $5) RETURNING id`,
-        [oId, m, y, generatedBy, notes ?? null]
+        `INSERT INTO payroll_runs (organization_id, branch_id, month, year, status, generated_by, notes)
+         VALUES ($1, $2, $3, $4, 'processing', $5, $6) RETURNING id`,
+        [oId, branchId ?? null, m, y, generatedBy, notes ?? null]
       );
       runId = res.rows[0].id;
     }
@@ -360,8 +402,8 @@ async function generatePayrollRun({ organizationId, month, year, generatedBy, no
     setupClient.release();
   }
 
-  // ── Step 2: fetch eligible employees ─────────────────────────────────────
-  const employees = await fetchEligibleEmployees(oId, m, y);
+  // ── Step 2: fetch eligible employees (branch-scoped if employeeIds provided) ─
+  const employees = await fetchEligibleEmployees(oId, m, y, employeeIds || null);
 
   if (employees.length === 0) {
     await pool.query(
@@ -448,7 +490,7 @@ async function generatePayrollRun({ organizationId, month, year, generatedBy, no
     action:     isRegenerate ? 'payroll_regenerated' : 'payroll_generated',
     entityType: 'payroll_run',
     entityId:   runId,
-    newValues:  { month: m, year: y, status: finalStatus, successCount, errorCount },
+    newValues:  { month: m, year: y, branchId: branchId ?? null, status: finalStatus, successCount, errorCount },
     ip,
   });
 
@@ -457,6 +499,7 @@ async function generatePayrollRun({ organizationId, month, year, generatedBy, no
     status:       finalStatus,
     month:        m,
     year:         y,
+    branchId:     branchId ?? null,
     successCount,
     errorCount,
     totalGross:   round2(totalGross),
@@ -469,8 +512,16 @@ async function generatePayrollRun({ organizationId, month, year, generatedBy, no
 /**
  * Runs calculations for all eligible employees without writing anything.
  * Returns a summary for HR to review before triggering generation.
+ *
+ * @param {object}    p
+ * @param {number}    p.organizationId
+ * @param {number}    p.month
+ * @param {number}    p.year
+ * @param {number[]|null} [p.employeeIds] — optional branch-scoped employee subset
+ * @param {number|null}  [p.branchId]    — branch context; mirrors generatePayrollRun's semantics.
+ *                                         Used to find the correct existing run for the preview banner.
  */
-async function previewPayrollRun({ organizationId, month, year }) {
+async function previewPayrollRun({ organizationId, month, year, employeeIds = null, branchId = null }) {
   const oId = Number(organizationId);
   const m   = Number(month);
   const y   = Number(year);
@@ -478,7 +529,7 @@ async function previewPayrollRun({ organizationId, month, year }) {
   if (m < 1 || m > 12)       throw new GenerationError(`Invalid month: ${m}`, 'INVALID_MONTH');
   if (y < 2000 || y > 2100)  throw new GenerationError(`Invalid year: ${y}`, 'INVALID_YEAR');
 
-  const employees = await fetchEligibleEmployees(oId, m, y);
+  const employees = await fetchEligibleEmployees(oId, m, y, employeeIds || null);
 
   // Preview is read-only: run all employees concurrently for speed.
   // No partial-failure isolation needed here since nothing is written.
@@ -513,10 +564,16 @@ async function previewPayrollRun({ organizationId, month, year }) {
 
   const eligible = items.filter(i => i.status === 'eligible');
 
-  // Check if a run already exists for this period
+  // Check if a run already exists for this period + branch combination.
+  // Must mirror generatePayrollRun's lookup so the preview banner is accurate:
+  // Dalal preview shows Dalal's run; Bhuj preview shows Bhuj's run.
   const existing = await pool.query(
-    `SELECT id, status FROM payroll_runs WHERE organization_id = $1 AND month = $2 AND year = $3`,
-    [oId, m, y]
+    `SELECT id, status, branch_id FROM payroll_runs
+      WHERE organization_id = $1
+        AND branch_id IS NOT DISTINCT FROM $2
+        AND month = $3
+        AND year  = $4`,
+    [oId, branchId ?? null, m, y]
   );
 
   return {

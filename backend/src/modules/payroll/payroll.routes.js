@@ -4,6 +4,9 @@ const { db, pool } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission, hasAnyPermission } = require('../../middleware/permissions');
 const { orgId } = require('../../utils/helpers');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { getFilterState, getBranchUserSQLFilter, resolveEmployeeIds } = require('../../utils/branchFilter');
+const { validateBranchAccess } = require('../../services/branchService');
 const { calculatePayroll, PayrollError } = require('../../services/payrollEngine');
 const {
   generatePayrollRun,
@@ -43,6 +46,46 @@ router.post('/calculate-preview', auth, hasPermission('payroll', 'view'), async 
 });
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
+
+// ── Branch helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Derives the branch_id value to store on a payroll_runs row from the current
+ * branch filter state:
+ *   'specific' → the selected branch ID   (branch-isolated run)
+ *   'all'      → null                     (org-wide run)
+ *   'multi'    → null                     (covers multiple branches — stored as org-wide)
+ *   'none'     → should never reach here; callers block 'none' before calling this
+ */
+function resolveBranchId(branchState) {
+  if (branchState.type === 'specific') return branchState.branchId;
+  return null;
+}
+
+/**
+ * Asserts that the current user can access a payroll run row.
+ * Called AFTER the run has been fetched with organization_id scope.
+ *
+ * branch_id = NULL  →  accessible to any org admin (backward compat for historical runs).
+ * branch_id = <id>  →  user must have branch access via hr_branch_access / root_admin role.
+ *
+ * Returns silently on success; returns an HTTP 403 response and returns true on failure.
+ * Pattern: `if (await assertRunBranchAccess(req, res, run)) return;`
+ */
+async function assertRunBranchAccess(req, res, run) {
+  if (run.branch_id == null) {
+    // Historical / org-wide run — any org admin may access (existing behaviour preserved).
+    return false;
+  }
+  const ok = await validateBranchAccess(
+    req.user.id, req.user.organization_id, req.user.role, run.branch_id
+  );
+  if (!ok) {
+    res.status(403).json({ error: 'You do not have access to this branch\'s payroll run.' });
+    return true;
+  }
+  return false;
+}
 
 // ── Audit helper (fire-and-forget) ────────────────────────────────────────────
 function logPayroll({ oId, actorId, actorName, action, entityType, entityId, targetUserId, oldValues, newValues, ip }) {
@@ -247,11 +290,17 @@ router.post('/apply-probation-bulk', auth, hasPermission('payroll', 'manage_sett
 
 // GET /api/payroll/employees — all employees with their current salary status
 // Must be defined before /salary-structures/:id to avoid param collision
-router.get('/employees', auth, hasPermission('payroll', 'manage_structures'), async (req, res) => {
+router.get('/employees', auth, hasPermission('payroll', 'manage_structures'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
+    const branchState = getFilterState(req.branchContext);
+
+    // State D: no accessible branches
+    if (branchState.type === 'none') return res.json([]);
+
+    const bf = getBranchUserSQLFilter(branchState, 1, 'u'); // $1 = oId
+    // BUG_131 FIX: return ALL salary structure fields so the ReviseModal pre-populates them.
     const { rows, error } = await pool.query(
-      // BUG_131 FIX: return ALL salary structure fields so the ReviseModal pre-populates them.
       `SELECT
            u.id, u.name, u.email, u.department, u.position,
            u.employee_id, u.avatar_color, u.joining_date,
@@ -283,8 +332,9 @@ router.get('/employees', auth, hasPermission('payroll', 'manage_structures'), as
         WHERE u.organization_id = $1
           AND u.role = 'employee'
           AND (u.employee_status IS NULL OR u.employee_status NOT IN ('inactive','resigned','terminated'))
+          ${bf.clause}
         ORDER BY u.name ASC`,
-      [oId]
+      [oId, ...bf.params]
     );
     if (error) throw error;
     res.json(rows || []);
@@ -737,14 +787,27 @@ router.get('/payslips', auth, async (req, res) => {
 });
 
 // GET /api/payroll/payslips/all — admin: all employees for a period
-router.get('/payslips/all', auth, hasPermission('payroll', 'view_payslips'), async (req, res) => {
+router.get('/payslips/all', auth, hasPermission('payroll', 'view_payslips'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const { month, year } = req.query;
+    const branchState = getFilterState(req.branchContext);
+
+    // State D: no accessible branches
+    if (branchState.type === 'none') return res.json([]);
+
     const conditions = [`ps.organization_id = $1`];
     const params     = [oId];
     if (month) { conditions.push(`ps.month = $${params.length + 1}`); params.push(month); }
     if (year)  { conditions.push(`ps.year  = $${params.length + 1}`); params.push(Number(year)); }
+
+    // Apply branch filter via the users JOIN
+    const bf = getBranchUserSQLFilter(branchState, params.length, 'u');
+    if (bf.clause) {
+      conditions.push(bf.clause.replace(/^AND /, ''));
+      params.push(...bf.params);
+    }
+
     const { rows } = await pool.query(
       `SELECT ps.*,
               u.name AS user_name, u.department, u.position, u.avatar_color
@@ -993,26 +1056,70 @@ function genErrResponse(res, err) {
 }
 
 // POST /api/payroll/preview — dry-run calculations, no writes
-router.post('/preview', auth, hasPermission('payroll', 'generate'), async (req, res) => {
+router.post('/preview', auth, hasPermission('payroll', 'generate'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const { month, year } = req.body;
     if (!month || !year) return res.status(400).json({ error: 'month and year are required' });
+
+    const branchState = getFilterState(req.branchContext);
+    if (branchState.type === 'none') {
+      return res.status(403).json({ error: 'You do not have access to any branch.' });
+    }
+
+    let employeeIds = null;
+    if (branchState.type !== 'all') {
+      employeeIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (employeeIds !== null && employeeIds.length === 0) {
+        return res.json({ employeeCount: 0, eligibleCount: 0, errorCount: 0, totalGross: 0, totalDeductions: 0, totalNet: 0, employees: [] });
+      }
+    }
+
+    // Derive branch_id so the existing-run check in previewPayrollRun matches the
+    // correct run (Dalal preview sees Dalal's run, not Bhuj's).
+    const branchId = resolveBranchId(branchState);
+
     const result = await previewPayrollRun({
       organizationId: oId,
-      month: parseInt(month, 10),
-      year:  parseInt(year,  10),
+      month:          parseInt(month, 10),
+      year:           parseInt(year,  10),
+      employeeIds,
+      branchId,
     });
     res.json(result);
   } catch (err) { genErrResponse(res, err); }
 });
 
 // POST /api/payroll/generate — create a payroll run and write payslip snapshots
-router.post('/generate', auth, hasPermission('payroll', 'generate'), async (req, res) => {
+router.post('/generate', auth, hasPermission('payroll', 'generate'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const { month, year, notes, force } = req.body;
     if (!month || !year) return res.status(400).json({ error: 'month and year are required' });
+
+    // Resolve branch-scoped employee subset.
+    // 'none'     → no accessible branches → block generation entirely
+    // 'all'      → employeeIds = null → org-wide (existing behavior)
+    // 'specific' / 'multi' → employeeIds = filtered array
+    const branchState = getFilterState(req.branchContext);
+    if (branchState.type === 'none') {
+      return res.status(403).json({ error: 'You do not have access to any branch. Payroll generation requires branch access.' });
+    }
+
+    // Resolve to an employee ID array (null = org-wide)
+    let employeeIds = null;
+    if (branchState.type !== 'all') {
+      employeeIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (employeeIds !== null && employeeIds.length === 0) {
+        return res.status(400).json({ error: 'No employees found in the selected branch(es). Ensure employees are assigned to the branch.' });
+      }
+    }
+
+    // Derive branch_id for the payroll_runs row so each branch run is isolated.
+    // 'specific' → store the selected branch ID
+    // 'all' / 'multi' → store NULL (org-wide run)
+    const branchId = resolveBranchId(branchState);
+
     const result = await generatePayrollRun({
       organizationId: oId,
       month:          parseInt(month, 10),
@@ -1021,6 +1128,8 @@ router.post('/generate', auth, hasPermission('payroll', 'generate'), async (req,
       notes:          notes  || null,
       force:          Boolean(force),
       ip:             req.ip,
+      employeeIds,
+      branchId,
     });
     res.status(201).json(result);
   } catch (err) { genErrResponse(res, err); }
@@ -1032,6 +1141,12 @@ router.post('/lock/:id', auth, hasPermission('payroll', 'lock'), async (req, res
     const oId   = orgId(req);
     const runId = parseInt(req.params.id, 10);
     if (!runId) return res.status(400).json({ error: 'Invalid run ID' });
+    const { rows: runCheck } = await pool.query(
+      `SELECT branch_id FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
+      [runId, oId]
+    );
+    if (!runCheck.length) return res.status(404).json({ error: 'Payroll run not found' });
+    if (await assertRunBranchAccess(req, res, runCheck[0])) return;
     const result = await lockPayrollRun({
       organizationId: oId,
       runId,
@@ -1079,20 +1194,42 @@ router.post('/unlock/:id', auth, hasPermission('payroll', 'unlock'), async (req,
   } catch (err) { genErrResponse(res, err); }
 });
 
-// GET /api/payroll/runs — list all payroll runs for the org
-router.get('/runs', auth, hasPermission('payroll', 'view'), async (req, res) => {
+// GET /api/payroll/runs — list payroll runs for the org, filtered by branch context
+router.get('/runs', auth, hasPermission('payroll', 'view'), withBranchContext, async (req, res) => {
   try {
-    const oId = orgId(req);
+    const oId         = orgId(req);
+    const branchState = getFilterState(req.branchContext);
+
+    if (branchState.type === 'none') return res.json([]);
+
+    // Build branch filter clause.
+    // 'all'      → no filter (see every run in the org: branch-specific + legacy NULL)
+    // 'specific' → runs for this branch + historical org-wide (NULL) runs
+    // 'multi'    → runs for accessible branches + historical org-wide (NULL) runs
+    const params = [oId];
+    let branchWhere = '';
+    if (branchState.type === 'specific') {
+      params.push(branchState.branchId);
+      branchWhere = `AND (pr.branch_id = $${params.length} OR pr.branch_id IS NULL)`;
+    } else if (branchState.type === 'multi') {
+      params.push(branchState.branchIds);
+      branchWhere = `AND (pr.branch_id = ANY($${params.length}::bigint[]) OR pr.branch_id IS NULL)`;
+    }
+    // 'all' → branchWhere stays '' (no additional filter)
+
     const { rows } = await pool.query(
       `SELECT pr.*,
-              u.name  AS generated_by_name,
-              lu.name AS locked_by_name
+              u.name   AS generated_by_name,
+              lu.name  AS locked_by_name,
+              b.name   AS branch_name
          FROM payroll_runs pr
-         LEFT JOIN users u  ON u.id  = pr.generated_by
-         LEFT JOIN users lu ON lu.id = pr.locked_by
+         LEFT JOIN users    u  ON u.id  = pr.generated_by
+         LEFT JOIN users    lu ON lu.id = pr.locked_by
+         LEFT JOIN branches b  ON b.id  = pr.branch_id
         WHERE pr.organization_id = $1
+          ${branchWhere}
         ORDER BY pr.year DESC, pr.month DESC`,
-      [oId]
+      params
     );
     res.json(rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1107,15 +1244,19 @@ router.get('/runs/:id', auth, hasPermission('payroll', 'view'), async (req, res)
 
     const runRes = await pool.query(
       `SELECT pr.*,
-              u.name  AS generated_by_name,
-              lu.name AS locked_by_name
+              u.name   AS generated_by_name,
+              lu.name  AS locked_by_name,
+              b.name   AS branch_name
          FROM payroll_runs pr
-         LEFT JOIN users u  ON u.id  = pr.generated_by
-         LEFT JOIN users lu ON lu.id = pr.locked_by
+         LEFT JOIN users    u  ON u.id  = pr.generated_by
+         LEFT JOIN users    lu ON lu.id = pr.locked_by
+         LEFT JOIN branches b  ON b.id  = pr.branch_id
         WHERE pr.id = $1 AND pr.organization_id = $2`,
       [runId, oId]
     );
     if (!runRes.rows.length) return res.status(404).json({ error: 'Payroll run not found' });
+
+    if (await assertRunBranchAccess(req, res, runRes.rows[0])) return;
 
     const { rows: employees } = await pool.query(
       `SELECT pre.id, pre.user_id, pre.status AS employee_status,

@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Trash2, Fingerprint, RefreshCw, AlertTriangle, Search } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiDelete } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -99,16 +100,17 @@ export default function BiometricPinMapping() {
   const { isAdmin } = useAuth();
   const toast       = useToast();
   const qc          = useQueryClient();
+  const { selectedBranchId } = useBranch();
   const [addOpen,    setAddOpen]    = useState(false);
   const [confirmDel, setConfirmDel] = useState(null);
   const [isReprocessing, setIsReprocessing] = useState(false);
 
   const { data: _map, isLoading } = useQuery({
-    queryKey: ['biometric-map'],
+    queryKey: ['biometric-map', selectedBranchId],
     queryFn:  () => apiGet('/biometric/employee-map'),
   });
   const { data: _emps } = useQuery({
-    queryKey: ['employees'],
+    queryKey: ['employees', 'all', selectedBranchId],
     queryFn:  () => apiGet('/employees'),
   });
 

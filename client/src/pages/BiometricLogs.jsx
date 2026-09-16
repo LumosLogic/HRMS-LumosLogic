@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { ScrollText, ChevronLeft, ChevronRight, Filter, Upload, X, CheckCircle, AlertCircle, Eye, Database, ArrowRight } from 'lucide-react';
 import { apiGet, apiUpload } from '@/lib/api';
+import { useBranch } from '@/context/BranchContext';
 
 const PAGE_SIZE = 20;
 
@@ -58,6 +59,7 @@ export default function BiometricLogs() {
   const [searchParams] = useSearchParams();
   const initDevice = searchParams.get('device') || '';
   const queryClient = useQueryClient();
+  const { selectedBranchId } = useBranch();
 
   const [dateFrom,   setDateFrom]   = useState(getToday());
   const [dateTo,     setDateTo]     = useState(getToday());
@@ -143,7 +145,7 @@ export default function BiometricLogs() {
   };
 
   const { data: _res, isLoading } = useQuery({
-    queryKey: ['biometric-logs', params],
+    queryKey: ['biometric-logs', params, selectedBranchId],
     queryFn:  () => apiGet('/biometric/logs', params),
     keepPreviousData: true,
   });

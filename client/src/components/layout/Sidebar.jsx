@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { FeatureFlagContext, FeatureFlagsLoadedContext } from '@/context/FeatureFlagContext';
+import { BranchSelector } from '@/components/layout/BranchSelector';
 import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '@/lib/api';
 import { initials, cn } from '@/lib/utils';
@@ -304,6 +305,9 @@ export function Sidebar({ onClose, prefix = '', onMenuClick, onSearchOpen }) {
           <span>Search...</span>
         </button>
       </div>
+
+      {/* Branch Selector — shown only for multi-branch admins */}
+      <BranchSelector />
 
       {/* Nav */}
       <nav className="flex-1 p-3 overflow-y-auto space-y-1">

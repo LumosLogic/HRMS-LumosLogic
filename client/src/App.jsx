@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { ToastProvider } from '@/context/ToastContext';
 import { FeatureFlagProvider, useFeature } from '@/context/FeatureFlagContext';
+import { BranchProvider } from '@/context/BranchContext';
 import { AppLayout }      from '@/components/layout/AppLayout';
 import { RootLayout }     from '@/components/layout/RootLayout';
 import { EmployeeLayout } from '@/components/layout/EmployeeLayout';
@@ -352,10 +353,12 @@ export default function App() {
         <ToastProvider>
           <MaintenanceGate>
             <FeatureFlagProvider>
-              <Suspense fallback={<PageLoader />}>
-                <AppRoutes />
-              </Suspense>
-              <ForcePasswordChangeModal />
+              <BranchProvider>
+                <Suspense fallback={<PageLoader />}>
+                  <AppRoutes />
+                </Suspense>
+                <ForcePasswordChangeModal />
+              </BranchProvider>
             </FeatureFlagProvider>
           </MaintenanceGate>
         </ToastProvider>

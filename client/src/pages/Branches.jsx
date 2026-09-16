@@ -1,11 +1,16 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, Building2, MapPin, ToggleLeft, ToggleRight } from 'lucide-react';
+import {
+  Plus, Pencil, Trash2, Building2, MapPin, ToggleLeft, ToggleRight,
+  ShieldCheck, X, UserCheck,
+} from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
+
+// ─── Branch Create/Edit Modal ─────────────────────────────────────────────────
 
 function BranchModal({ open, onClose, branch }) {
   const toast  = useToast();
@@ -28,6 +33,7 @@ function BranchModal({ open, onClose, branch }) {
     mutationFn: () => isEdit ? apiPut(`/branches/${branch.id}`, form) : apiPost('/branches', form),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['branches'] });
+      qc.invalidateQueries({ queryKey: ['branches-my-access'] });
       toast(isEdit ? 'Branch updated!' : 'Branch created!', 'success');
       onClose();
     },
@@ -91,13 +97,132 @@ function BranchModal({ open, onClose, branch }) {
   );
 }
 
+// ─── HR Access Management Modal ───────────────────────────────────────────────
+
+function HRAccessModal({ open, onClose, branch }) {
+  const toast = useToast();
+  const qc    = useQueryClient();
+
+  // Fetch HR users in this org
+  const { data: hrUsers = [] } = useQuery({
+    queryKey: ['hr-users-for-branch-access'],
+    queryFn: () => apiGet('/employees', { role: 'admin' }),
+    enabled: open,
+    select: d => (Array.isArray(d) ? d : []).filter(u => u.role === 'admin'),
+  });
+
+  // Fetch who currently has access to this branch
+  const { data: accessData, isLoading: accessLoading } = useQuery({
+    queryKey: ['branch-hr-access-users', branch?.id],
+    queryFn: () => apiGet('/branches/user-access-by-branch/' + branch.id),
+    enabled: open && !!branch?.id,
+  });
+  const usersWithAccess = accessData?.users || [];
+
+  // Grant access mutation
+  const grantMut = useMutation({
+    mutationFn: ({ userId }) => apiPost('/branches/user-access', { userId, branchId: branch.id }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['branch-hr-access-users', branch?.id] });
+      toast('Access granted', 'success');
+    },
+    onError: e => toast(e.message, 'error'),
+  });
+
+  // Revoke access mutation
+  const revokeMut = useMutation({
+    mutationFn: ({ userId }) => apiDelete(`/branches/user-access/${userId}/branch/${branch.id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['branch-hr-access-users', branch?.id] });
+      toast('Access revoked', 'warning');
+    },
+    onError: e => toast(e.message, 'error'),
+  });
+
+  const userIdsWithAccess = new Set(usersWithAccess.map(u => u.user_id));
+
+  const eligibleHRUsers = hrUsers.filter(u => !userIdsWithAccess.has(u.id));
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title={`HR Access — ${branch?.name || ''}`}
+      size="md"
+      footer={
+        <div className="flex justify-end">
+          <button className="btn btn-outline" onClick={onClose}>Close</button>
+        </div>
+      }
+    >
+      <div className="space-y-5">
+        {/* Users currently with access */}
+        <div>
+          <p className="text-xs font-black uppercase tracking-wider text-[#777587] mb-2">Has Access</p>
+          {accessLoading ? (
+            <div className="text-xs text-[#777587] py-2">Loading…</div>
+          ) : usersWithAccess.length === 0 ? (
+            <p className="text-xs text-[#777587] italic py-2">No HR users have access to this branch yet.</p>
+          ) : (
+            <div className="space-y-2">
+              {usersWithAccess.map(u => (
+                <div key={u.user_id} className="flex items-center gap-3 p-2.5 rounded-lg bg-[#f0f3ff] border border-[#3525cd]/10">
+                  <UserCheck size={14} className="text-[#3525cd] flex-shrink-0" />
+                  <span className="text-sm font-semibold text-[#151c27] flex-1">{u.user_name}</span>
+                  {u.all_branches && (
+                    <span className="text-[0.65rem] font-bold bg-[#3525cd]/10 text-[#3525cd] px-1.5 py-0.5 rounded">All Branches</span>
+                  )}
+                  {!u.all_branches && (
+                    <button
+                      onClick={() => revokeMut.mutate({ userId: u.user_id })}
+                      disabled={revokeMut.isPending}
+                      className="p-1 rounded text-rose-400 hover:bg-rose-50 hover:text-rose-600 transition-colors"
+                      title="Revoke access"
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Grant access to HR users */}
+        {eligibleHRUsers.length > 0 && (
+          <div>
+            <p className="text-xs font-black uppercase tracking-wider text-[#777587] mb-2">Grant Access</p>
+            <div className="space-y-1.5 max-h-44 overflow-y-auto">
+              {eligibleHRUsers.map(u => (
+                <div key={u.id} className="flex items-center gap-3 p-2.5 rounded-lg border border-[#c7c4d8] hover:bg-[#f9f9ff]">
+                  <span className="text-sm text-[#464555] flex-1">{u.name}</span>
+                  <button
+                    onClick={() => grantMut.mutate({ userId: u.id })}
+                    disabled={grantMut.isPending}
+                    className="text-xs font-semibold px-2.5 py-1 rounded-lg bg-[#3525cd] text-white hover:bg-[#2a1eaa] transition-colors disabled:opacity-50"
+                  >
+                    Grant
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </Modal>
+  );
+}
+
+// ─── Main Branches Page ───────────────────────────────────────────────────────
+
 export default function Branches() {
-  const { isAdmin } = useAuth();
-  const toast       = useToast();
-  const qc          = useQueryClient();
-  const [addOpen,    setAddOpen]    = useState(false);
-  const [editBranch, setEditBranch] = useState(null);
-  const [confirmDel, setConfirmDel] = useState(null);
+  const { isAdmin, isRootAdmin } = useAuth();
+  const toast = useToast();
+  const qc    = useQueryClient();
+  const [addOpen,      setAddOpen]      = useState(false);
+  const [editBranch,   setEditBranch]   = useState(null);
+  const [confirmDel,   setConfirmDel]   = useState(null);
+  const [accessBranch, setAccessBranch] = useState(null); // for HR access modal
 
   const { data: _data, isLoading } = useQuery({
     queryKey: ['branches'],
@@ -107,7 +232,11 @@ export default function Branches() {
 
   const delMut = useMutation({
     mutationFn: id => apiDelete(`/branches/${id}`),
-    onSuccess: () => { toast('Branch deleted', 'warning'); qc.invalidateQueries({ queryKey: ['branches'] }); },
+    onSuccess: () => {
+      toast('Branch deleted', 'warning');
+      qc.invalidateQueries({ queryKey: ['branches'] });
+      qc.invalidateQueries({ queryKey: ['branches-my-access'] });
+    },
     onError: e => toast(e.message, 'error'),
   });
 
@@ -215,6 +344,16 @@ export default function Branches() {
                     {isAdmin && (
                       <td className="px-5 py-3.5">
                         <div className="flex items-center gap-1">
+                          {/* HR Access management — root admin only */}
+                          {isRootAdmin && (
+                            <button
+                              onClick={() => setAccessBranch(b)}
+                              className="p-1.5 rounded-lg text-[#464555] hover:bg-[#f0f3ff] hover:text-[#3525cd] transition-colors"
+                              title="Manage HR access"
+                            >
+                              <ShieldCheck size={13} />
+                            </button>
+                          )}
                           <button onClick={() => setEditBranch(b)}
                             className="p-1.5 rounded-lg text-[#464555] hover:bg-[#f0f3ff] hover:text-[#3525cd] transition-colors" title="Edit">
                             <Pencil size={13} />
@@ -236,6 +375,9 @@ export default function Branches() {
 
       {addOpen    && <BranchModal open onClose={() => setAddOpen(false)} />}
       {editBranch && <BranchModal open onClose={() => setEditBranch(null)} branch={editBranch} />}
+      {accessBranch && (
+        <HRAccessModal open onClose={() => setAccessBranch(null)} branch={accessBranch} />
+      )}
 
       <ConfirmModal
         open={!!confirmDel}

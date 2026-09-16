@@ -4,6 +4,8 @@ const router  = express.Router();
 const { pool } = require('../../config/db-pg-adapter');
 const { auth, adminOnly } = require('../../middleware/auth');
 const { invalidateBiometricIpCache } = require('../../middleware/biometricIpGuard');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { getFilterState } = require('../../utils/branchFilter');
 const { scheduleSyncForSn } = require('./biometricHeartbeat.handler');
 const { processAttlogLine } = require('./biometricPush.handler');
 const biometricEmitter = require('../../utils/biometricEmitter');
@@ -23,16 +25,36 @@ const upload = multer({
 });
 
 // ─── GET /api/biometric/devices ───────────────────────────────────────────────
-router.get('/devices', auth, adminOnly, async (req, res) => {
+router.get('/devices', auth, adminOnly, withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
+    const branchState = getFilterState(req.branchContext);
+
+    // State D: no accessible branches → no devices
+    if (branchState.type === 'none') return res.json([]);
+
+    // Build optional branch WHERE clause using biometric_devices.branch_id directly.
+    // Devices with NULL branch_id (unassigned) are excluded from specific/multi views —
+    // they cannot be attributed to a branch until an admin assigns one.
+    let branchClause = '';
+    const params = [orgId];
+
+    if (branchState.type === 'specific') {
+      branchClause = `AND d.branch_id = $${params.length + 1}`;
+      params.push(branchState.branchId);
+    } else if (branchState.type === 'multi') {
+      branchClause = `AND d.branch_id = ANY($${params.length + 1}::bigint[])`;
+      params.push(branchState.branchIds);
+    }
+    // type === 'all': no additional filter — all org devices returned
+
     const result = await pool.query(
       `SELECT d.*, b.name AS branch_name
        FROM biometric_devices d
        LEFT JOIN branches b ON b.id = d.branch_id
-       WHERE d.org_id = $1
+       WHERE d.org_id = $1 ${branchClause}
        ORDER BY d.device_name`,
-      [orgId]
+      params
     );
     const now = Date.now();
     const devices = result.rows.map(d => ({
@@ -139,17 +161,35 @@ router.get('/live-logs', auth, adminOnly, async (req, res) => {
 });
 
 // ─── GET /api/biometric/logs ──────────────────────────────────────────────────
-router.get('/logs', auth, adminOnly, async (req, res) => {
+router.get('/logs', auth, adminOnly, withBranchContext, async (req, res) => {
   try {
     const orgId  = req.user.organization_id;
     const page   = Math.max(1, parseInt(req.query.page)  || 1);
     const limit  = Math.min(200, parseInt(req.query.limit) || 50);
     const offset = (page - 1) * limit;
+    const branchState = getFilterState(req.branchContext);
+
+    // State D: no accessible branches → empty result
+    if (branchState.type === 'none') return res.json({ data: [], page, limit, total: 0 });
 
     // Build filter conditions with a shared params array (only filter values, no limit/offset)
     const filterParams = [orgId];
     let where = 'WHERE l.org_id = $1';
     let idx = 2;
+
+    // Branch filter: use employee's branch (users.branch_id) as the authoritative branch.
+    // Derived via: l.employee_pin → biometric_employee_map m → users u → u.branch_id.
+    // The existing LEFT JOINs already resolve this path. For specific/multi branch views,
+    // logs with no resolved employee (u IS NULL — unmapped PINs) are excluded because
+    // their branch cannot be determined. They remain visible under All Branches (type=all).
+    if (branchState.type === 'specific') {
+      where += ` AND u.branch_id = $${idx++}`;
+      filterParams.push(branchState.branchId);
+    } else if (branchState.type === 'multi') {
+      where += ` AND u.branch_id = ANY($${idx++}::bigint[])`;
+      filterParams.push(branchState.branchIds);
+    }
+    // type === 'all': no branch clause — all org logs returned (including unmapped PINs)
 
     if (req.query.device_serial) {
       where += ` AND l.device_serial = $${idx++}`;
@@ -220,17 +260,37 @@ router.get('/logs', auth, adminOnly, async (req, res) => {
 });
 
 // ─── GET /api/biometric/employee-map ─────────────────────────────────────────
-router.get('/employee-map', auth, adminOnly, async (req, res) => {
+router.get('/employee-map', auth, adminOnly, withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
+    const branchState = getFilterState(req.branchContext);
+
+    // State D: no accessible branches → empty
+    if (branchState.type === 'none') return res.json([]);
+
+    // Branch filter operates on the employee's branch (users.branch_id) —
+    // authoritative organizational branch for employee-map visibility.
+    // The existing JOIN to users u is used; no new JOIN required.
+    const params = [orgId];
+    let branchClause = '';
+
+    if (branchState.type === 'specific') {
+      branchClause = `AND u.branch_id = $${params.length + 1}`;
+      params.push(branchState.branchId);
+    } else if (branchState.type === 'multi') {
+      branchClause = `AND u.branch_id = ANY($${params.length + 1}::bigint[])`;
+      params.push(branchState.branchIds);
+    }
+    // type === 'all': no branch clause — all org mappings returned
+
     const result = await pool.query(
       `SELECT m.id, m.employee_pin, m.user_id, m.created_at,
               u.name AS employee_name, u.department, u.device_enrollment_id
        FROM biometric_employee_map m
        JOIN users u ON u.id = m.user_id
-       WHERE m.org_id = $1
+       WHERE m.org_id = $1 ${branchClause}
        ORDER BY m.employee_pin::int NULLS LAST`,
-      [orgId]
+      params
     );
     res.json(result.rows);
   } catch (err) { res.status(500).json({ error: err.message }); }

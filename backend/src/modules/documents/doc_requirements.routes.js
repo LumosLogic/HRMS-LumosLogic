@@ -1,9 +1,11 @@
 const express    = require('express');
 const router     = express.Router();
-const { db } = require('../../config/db');
+const { db, pool } = require('../../config/db');
 const { auth }   = require('../../middleware/auth');
 const cloudinary = require('cloudinary').v2;
 const multer     = require('multer');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { getFilterState, validateBranchAccess } = require('../../utils/branchFilter');
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -15,6 +17,73 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
+// ─── Applicability helpers ─────────────────────────────────────────────────
+
+/**
+ * Returns true if a requirement applies to an employee.
+ *
+ * Rules (both must pass):
+ *   Branch check:   assigned_branch_ids IS NULL/empty  →  no restriction
+ *                   OR empBranchId IS in assigned_branch_ids
+ *
+ *   Employee check: assigned_employee_ids IS NULL/empty  →  no restriction
+ *                   OR empId IS in assigned_employee_ids
+ *
+ * If the employee has no branch (branch_id = NULL), the branch check passes
+ * only when the requirement has no branch restriction.
+ */
+function requirementAppliesTo(req, empId, empBranchId) {
+  const branchPass = (
+    !req.assigned_branch_ids ||
+    req.assigned_branch_ids.length === 0 ||
+    (empBranchId != null && req.assigned_branch_ids.includes(Number(empBranchId)))
+  );
+  const empPass = (
+    !req.assigned_employee_ids ||
+    req.assigned_employee_ids.length === 0 ||
+    req.assigned_employee_ids.includes(Number(empId))
+  );
+  return branchPass && empPass;
+}
+
+/**
+ * Returns true if a requirement is relevant for a given set of branch IDs (admin listing).
+ *
+ * A requirement is relevant when:
+ *   - It has no branch restriction (assigned_branch_ids IS NULL/empty)
+ *   - OR at least one of the admin's accessible branch IDs is in its assigned_branch_ids
+ *
+ * Used for the admin requirement list to show only requirements applicable to the
+ * currently selected/accessible branches.
+ */
+function requirementRelevantForBranches(req, branchIds) {
+  if (!req.assigned_branch_ids || req.assigned_branch_ids.length === 0) return true;
+  return branchIds.some(bid => req.assigned_branch_ids.includes(Number(bid)));
+}
+
+/**
+ * Validates that each branch ID belongs to the org and (for non-root admins)
+ * that the requesting user has access to it.
+ * Returns { valid: true } or { valid: false, error: string }.
+ */
+async function validateBranchIds(branchIds, orgId, userId, role) {
+  if (!Array.isArray(branchIds) || branchIds.length === 0) return { valid: true };
+  const nums = branchIds.map(Number).filter(n => Number.isInteger(n) && n > 0);
+  if (nums.length !== branchIds.length) return { valid: false, error: 'Invalid branch ID(s)' };
+
+  for (const bid of nums) {
+    // validateBranchAccess checks org ownership first, then role access
+    const ok = await validateBranchAccess(userId, orgId, role, bid);
+    if (!ok) {
+      return {
+        valid: false,
+        error: `Branch ID ${bid} is not accessible or does not belong to your organization.`,
+      };
+    }
+  }
+  return { valid: true };
+}
+
 const ALLOWED_MIMES = [
   'application/pdf', 'image/jpeg', 'image/png', 'image/webp',
   'application/msword',
@@ -22,9 +91,9 @@ const ALLOWED_MIMES = [
 ];
 
 // GET /api/doc-requirements
-// Admin: all requirements + submission stats
-// Employee: active requirements + their own submission status
-router.get('/', auth, async (req, res) => {
+// Admin: all requirements + submission stats (branch-filtered)
+// Employee: active requirements applicable to them (branch + employee targeting)
+router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
 
@@ -40,10 +109,28 @@ router.get('/', auth, async (req, res) => {
     const { data: requirements, error } = await query;
     if (error) throw error;
 
-    const reqIds = (requirements || []).map(r => r.id);
-    if (!reqIds.length) return res.json([]);
+    let allReqs = requirements || [];
 
     if (isAdmin(req.user.role)) {
+      // ── Admin: apply branch-context filter ────────────────────────────────
+      const branchState = getFilterState(req.branchContext);
+
+      if (branchState.type === 'none') return res.json([]);
+
+      // Filter which requirements are relevant to the selected/accessible branches.
+      // type=all → no filter (all org requirements returned).
+      // type=specific → show requirements with no branch restriction OR that include this branch.
+      // type=multi → show requirements with no branch restriction OR that include any accessible branch.
+      if (branchState.type === 'specific') {
+        allReqs = allReqs.filter(r => requirementRelevantForBranches(r, [branchState.branchId]));
+      } else if (branchState.type === 'multi') {
+        allReqs = allReqs.filter(r => requirementRelevantForBranches(r, branchState.branchIds));
+      }
+      // type=all: no filter
+
+      const reqIds = allReqs.map(r => r.id);
+      if (!reqIds.length) return res.json([]);
+
       const { data: subs } = await db
         .from('employee_doc_submissions')
         .select('requirement_id, status')
@@ -57,10 +144,22 @@ router.get('/', auth, async (req, res) => {
         statsMap[s.requirement_id][s.status] = (statsMap[s.requirement_id][s.status] || 0) + 1;
       });
 
-      return res.json((requirements || []).map(r => ({ ...r, _stats: statsMap[r.id] || { total: 0 } })));
+      return res.json(allReqs.map(r => ({ ...r, _stats: statsMap[r.id] || { total: 0 } })));
     }
 
-    // Employee: attach their own submission
+    // ── Employee: filter by both branch and employee targeting ─────────────
+    // Fetch the employee's actual branch_id from DB — never infer from X-Branch-Id.
+    const { data: empRow } = await db
+      .from('users')
+      .select('branch_id')
+      .eq('id', req.user.id)
+      .eq('organization_id', oId)
+      .maybeSingle();
+    const empBranchId = empRow?.branch_id ?? null;
+
+    const reqIds = allReqs.map(r => r.id);
+    if (!reqIds.length) return res.json([]);
+
     const { data: mySubs } = await db
       .from('employee_doc_submissions')
       .select('*, reviewer:users!employee_doc_submissions_reviewed_by_fkey(name)')
@@ -71,12 +170,8 @@ router.get('/', auth, async (req, res) => {
     const subMap = {};
     (mySubs || []).forEach(s => { subMap[s.requirement_id] = s; });
 
-    // Filter by assigned_employee_ids if set (NULL = visible to all, backward compatible)
-    const visible = (requirements || []).filter(r =>
-      !r.assigned_employee_ids ||
-      r.assigned_employee_ids.length === 0 ||
-      r.assigned_employee_ids.includes(req.user.id)
-    );
+    // Apply both branch and employee applicability
+    const visible = allReqs.filter(r => requirementAppliesTo(r, req.user.id, empBranchId));
 
     res.json(visible.map(r => ({ ...r, _submission: subMap[r.id] || null })));
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -191,26 +286,36 @@ router.post('/', auth, async (req, res) => {
       name, description, category, is_required, applicable_to,
       accepted_formats, max_file_size_mb, expiry_required,
       expiry_reminder_days, verification_required, allow_reupload, display_order,
+      assigned_branch_ids,
     } = req.body;
 
     if (!name?.trim()) return res.status(400).json({ error: 'Document name is required' });
 
+    // Validate assigned_branch_ids if provided
+    let validatedBranchIds = null;
+    if (Array.isArray(assigned_branch_ids) && assigned_branch_ids.length > 0) {
+      const check = await validateBranchIds(assigned_branch_ids, oId, req.user.id, req.user.role);
+      if (!check.valid) return res.status(400).json({ error: check.error });
+      validatedBranchIds = assigned_branch_ids.map(Number);
+    }
+
     const { data, error } = await db.from('document_requirements').insert({
-      organization_id:      oId,
-      name:                 name.trim(),
-      description:          description?.trim() || null,
-      category:             category || 'other',
-      is_required:          is_required !== false,
-      applicable_to:        applicable_to || 'everyone',
-      accepted_formats:     accepted_formats || ['pdf', 'jpg', 'png'],
-      max_file_size_mb:     max_file_size_mb || 10,
-      expiry_required:      expiry_required || false,
-      expiry_reminder_days: expiry_reminder_days || 30,
+      organization_id:       oId,
+      name:                  name.trim(),
+      description:           description?.trim() || null,
+      category:              category || 'other',
+      is_required:           is_required !== false,
+      applicable_to:         applicable_to || 'everyone',
+      accepted_formats:      accepted_formats || ['pdf', 'jpg', 'png'],
+      max_file_size_mb:      max_file_size_mb || 10,
+      expiry_required:       expiry_required || false,
+      expiry_reminder_days:  expiry_reminder_days || 30,
       verification_required: verification_required !== false,
-      allow_reupload:       allow_reupload !== false,
-      display_order:        display_order || 0,
-      is_active:            true,
-      created_by:           req.user.id,
+      allow_reupload:        allow_reupload !== false,
+      display_order:         display_order || 0,
+      is_active:             true,
+      created_by:            req.user.id,
+      assigned_branch_ids:   validatedBranchIds,
     }).select().single();
 
     if (error) throw error;
@@ -315,21 +420,37 @@ router.patch('/submissions/:id/review', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// POST /api/doc-requirements/:id/assign — assign to specific employees or all (admin only)
-// employee_ids = null/[] means "all employees" (clears assignment). Array of numbers = specific employees only.
-// Structured for easy extension: future support for dept/designation/location would add more fields.
+// POST /api/doc-requirements/:id/assign — assign to specific employees and/or branches (admin only)
+// employee_ids = null/[] → clears employee targeting (org-wide).
+// branch_ids   = null/[] → clears branch targeting (org-wide).
+// Both can be set independently.
 router.post('/:id/assign', auth, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
     const oId = req.user.organization_id;
-    const { employee_ids } = req.body;
+    const { employee_ids, branch_ids } = req.body;
 
-    const assignedIds = (Array.isArray(employee_ids) && employee_ids.length > 0)
+    const assignedEmployeeIds = (Array.isArray(employee_ids) && employee_ids.length > 0)
       ? employee_ids.map(Number)
       : null;
 
+    // Validate and resolve branch IDs
+    let assignedBranchIds = null;
+    if (Array.isArray(branch_ids) && branch_ids.length > 0) {
+      const check = await validateBranchIds(branch_ids, oId, req.user.id, req.user.role);
+      if (!check.valid) return res.status(400).json({ error: check.error });
+      assignedBranchIds = branch_ids.map(Number);
+    }
+
+    const updates = {
+      updated_at: new Date().toISOString(),
+    };
+    // Only update fields explicitly sent in the request
+    if ('employee_ids' in req.body) updates.assigned_employee_ids = assignedEmployeeIds;
+    if ('branch_ids'   in req.body) updates.assigned_branch_ids   = assignedBranchIds;
+
     const { data, error } = await db.from('document_requirements')
-      .update({ assigned_employee_ids: assignedIds, updated_at: new Date().toISOString() })
+      .update(updates)
       .eq('id', req.params.id)
       .eq('organization_id', oId)
       .select().single();
@@ -349,7 +470,7 @@ router.patch('/:id', auth, async (req, res) => {
       name, description, category, is_required, applicable_to,
       accepted_formats, max_file_size_mb, expiry_required,
       expiry_reminder_days, verification_required, allow_reupload,
-      display_order, is_active,
+      display_order, is_active, assigned_branch_ids,
     } = req.body;
 
     const updates = { updated_at: new Date().toISOString() };
@@ -366,6 +487,17 @@ router.patch('/:id', auth, async (req, res) => {
     if (allow_reupload !== undefined)       updates.allow_reupload = allow_reupload;
     if (display_order !== undefined)        updates.display_order = display_order;
     if (is_active !== undefined)            updates.is_active = is_active;
+
+    // Validate and apply assigned_branch_ids when explicitly sent
+    if (assigned_branch_ids !== undefined) {
+      if (Array.isArray(assigned_branch_ids) && assigned_branch_ids.length > 0) {
+        const check = await validateBranchIds(assigned_branch_ids, oId, req.user.id, req.user.role);
+        if (!check.valid) return res.status(400).json({ error: check.error });
+        updates.assigned_branch_ids = assigned_branch_ids.map(Number);
+      } else {
+        updates.assigned_branch_ids = null; // explicitly clear
+      }
+    }
 
     const { data, error } = await db.from('document_requirements')
       .update(updates)
@@ -511,7 +643,7 @@ router.get('/for-employee/:userId', auth, async (req, res) => {
     if (isNaN(empId)) return res.status(400).json({ error: 'Invalid employee ID' });
 
     const { data: emp } = await db.from('users')
-      .select('id, organization_id')
+      .select('id, organization_id, branch_id')
       .eq('id', empId).eq('organization_id', oId).maybeSingle();
     if (!emp) return res.status(404).json({ error: 'Employee not found' });
 
@@ -524,10 +656,11 @@ router.get('/for-employee/:userId', auth, async (req, res) => {
       .order('created_at',    { ascending: true });
     if (error) throw error;
 
+    // Apply both branch and employee applicability using the employee's actual branch_id.
+    // The admin's currently selected branch (X-Branch-Id) is not used here —
+    // only the employee's real users.branch_id determines which requirements apply.
     const applicable = (requirements || []).filter(r =>
-      !r.assigned_employee_ids ||
-      r.assigned_employee_ids.length === 0 ||
-      r.assigned_employee_ids.includes(empId)
+      requirementAppliesTo(r, empId, emp.branch_id)
     );
     if (!applicable.length) return res.json([]);
 
@@ -557,7 +690,7 @@ router.post('/:id/submit-for/:userId', auth, upload.single('file'), async (req, 
     if (isNaN(reqId) || isNaN(empId)) return res.status(400).json({ error: 'Invalid ID' });
 
     const { data: emp } = await db.from('users')
-      .select('id, name, organization_id')
+      .select('id, name, organization_id, branch_id')
       .eq('id', empId).eq('organization_id', oId).maybeSingle();
     if (!emp) return res.status(404).json({ error: 'Employee not found' });
 
@@ -572,12 +705,10 @@ router.post('/:id/submit-for/:userId', auth, upload.single('file'), async (req, 
     if (!requirement)           return res.status(404).json({ error: 'Requirement not found' });
     if (!requirement.is_active) return res.status(400).json({ error: 'This document requirement is no longer active' });
 
-    // Step 5: requirement must be applicable to this specific employee
-    // NULL or empty assigned_employee_ids = applies to everyone in the org
-    // Non-empty array = only applies to the listed employee IDs
-    const assignedIds = requirement.assigned_employee_ids;
-    const appliesTo = !assignedIds || assignedIds.length === 0 || assignedIds.includes(empId);
-    if (!appliesTo)
+    // Step 5: requirement must be applicable to this specific employee.
+    // Uses both branch targeting (assigned_branch_ids) and employee targeting (assigned_employee_ids).
+    // Employee's actual users.branch_id is authoritative — not the admin's selected X-Branch-Id.
+    if (!requirementAppliesTo(requirement, empId, emp.branch_id))
       return res.status(403).json({ error: 'This document requirement does not apply to the selected employee' });
 
     const maxBytes = (requirement.max_file_size_mb || 10) * 1024 * 1024;

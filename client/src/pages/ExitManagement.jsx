@@ -8,6 +8,7 @@ import {
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { Avatar } from '@/components/ui/Avatar';
@@ -545,10 +546,11 @@ function ExitCard({ req, isAdmin }) {
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function ExitManagement() {
   const { isAdmin, isRootAdmin, user } = useAuth();
+  const { selectedBranchId } = useBranch();
   const wrap = '';
   const [resignOpen, setResignOpen] = useState(false);
 
-  const { data: _exitData, isLoading } = useQuery({ queryKey: ['exit-requests'], queryFn: () => apiGet('/exit') });
+  const { data: _exitData, isLoading } = useQuery({ queryKey: ['exit-requests', selectedBranchId], queryFn: () => apiGet('/exit') });
   const requests = Array.isArray(_exitData) ? _exitData : [];
 
   const activeCount      = requests.filter(r => ['pending','approved'].includes(r.status)).length;

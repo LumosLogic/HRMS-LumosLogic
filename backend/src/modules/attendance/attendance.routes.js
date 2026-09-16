@@ -5,6 +5,8 @@ const { pool } = require('../../config/db-pg-adapter');
 const { auth, isAdminRole } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { localDateStr, localTimeStr, flat, orgId, toMinutes, getSettings, isWorkingDay } = require('../../utils/helpers');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { resolveEmployeeIds } = require('../../utils/branchFilter');
 
 // ── One-time table bootstrap for attendance audit log ─────────────────────────
 pool.query(`
@@ -24,7 +26,7 @@ pool.query(`
 `).catch(err => console.warn('[AttendanceRoutes] audit log table bootstrap:', err.message));
 
 // ─── Attendance: List ─────────────────────────────────────────────────────────
-router.get('/', auth, async (req, res) => {
+router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const { year, month, date, userId } = req.query;
 
@@ -34,9 +36,19 @@ router.get('/', auth, async (req, res) => {
       .order('date', { ascending: true });
 
     if (!isAdminRole(req.user.role)) {
+      // Employees see only their own records — branch filter irrelevant
       query = query.eq('user_id', req.user.id);
     } else if (userId && userId !== 'all') {
+      // Admin requested a specific employee — keep as-is; branch validation
+      // happens implicitly because the attendance record is org-scoped.
+      // If the user doesn't belong to the admin's branch, resolveEmployeeIds
+      // won't include them and the specific userId filter makes it moot.
       query = query.eq('user_id', parseInt(userId));
+    } else {
+      // Admin viewing all employees — apply branch filter
+      const empIds = await resolveEmployeeIds(req.branchContext, orgId(req));
+      if (empIds !== null && empIds.length === 0) return res.json([]);
+      if (empIds !== null) query = query.in('user_id', empIds);
     }
 
     if (date) {

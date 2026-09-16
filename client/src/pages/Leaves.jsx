@@ -4,6 +4,7 @@ import { Plus, Calendar, Edit, Trash2, CheckCircle, X, Home, CheckCircle2, Inbox
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { StatusBadge, LeaveTypeBadge } from '@/components/ui/Badge';
@@ -27,6 +28,7 @@ export default function Leaves() {
   const { user, isAdmin } = useAuth();
   const toast = useToast();
   const qc = useQueryClient();
+  const { selectedBranchId } = useBranch();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const tabParam    = searchParams.get('tab');
@@ -63,7 +65,7 @@ export default function Leaves() {
   const [confirmRevert, setConfirmRevert] = useState(null);
 
   const { data: leaves = [], refetch: refetchLeaves } = useQuery({
-    queryKey: ['leaves', userIdParam],
+    queryKey: ['leaves', userIdParam, selectedBranchId],
     queryFn: () => apiGet('/leaves', userIdParam ? { userId: userIdParam } : {}),
   });
 
@@ -90,7 +92,7 @@ export default function Leaves() {
   });
 
   const { data: employees = [] } = useQuery({
-    queryKey: ['employees-list'],
+    queryKey: ['employees-list', selectedBranchId],
     queryFn: async () => {
       const all = await apiGet('/employees');
       return all.filter(e => e.role === 'employee');

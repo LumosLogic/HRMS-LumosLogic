@@ -4,6 +4,7 @@ import { ChevronLeft, ChevronRight, Clock, Home, Umbrella, UserCheck, XCircle, T
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut } from '@/lib/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { StatusBadge, LeaveTypeBadge } from '@/components/ui/Badge';
@@ -19,6 +20,7 @@ const LEAVE_TYPE_LABEL = { annual:'Annual', sick:'Sick', casual:'Casual', emerge
 export default function Calendar() {
   const { user, isAdmin } = useAuth();
   const toast = useToast();
+  const { selectedBranchId } = useBranch();
   const [searchParams, setSearchParams] = useSearchParams();
   const [date, setDate]   = useState(new Date());
   const [mode, setMode]   = useState('month');
@@ -54,7 +56,7 @@ export default function Calendar() {
   const today = new Date();
 
   const { data: attendance = [], isLoading, refetch } = useQuery({
-    queryKey: ['calendar', year, month],
+    queryKey: ['calendar', year, month, selectedBranchId],
     queryFn: () => apiGet('/attendance', { year, month }),
   });
 
@@ -73,12 +75,12 @@ export default function Calendar() {
 
   // Fetch leaves for the month to show leave types in calendar
   const { data: leaves = [] } = useQuery({
-    queryKey: ['calendar-leaves', year, month],
+    queryKey: ['calendar-leaves', year, month, selectedBranchId],
     queryFn: () => apiGet('/leaves', { year, month }),
   });
 
   const { data: employees = [] } = useQuery({
-    queryKey: ['employees-list'],
+    queryKey: ['employees-list', selectedBranchId],
     queryFn: async () => {
       const all = await apiGet('/employees');
       return all.filter(e => e.role === 'employee');

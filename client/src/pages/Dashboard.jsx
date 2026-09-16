@@ -18,6 +18,7 @@ import {
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { StatusBadge, LeaveTypeBadge } from '@/components/ui/Badge';
@@ -691,13 +692,14 @@ export default function Dashboard() {
   const toast    = useToast();
   const navigate = useNavigate();
   const qc       = useQueryClient();
+  const { selectedBranchId } = useBranch();
   const [dashDate, setDashDate]   = useState('');
   const [selectedEmp, setSelectedEmp] = useState(null);
   const [attModal, setAttModal] = useState(null);
 
   const qs = dashDate ? { date: dashDate } : {};
   const { data, isLoading, isError, error, refetch, dataUpdatedAt } = useQuery({
-    queryKey: ['dashboard', dashDate],
+    queryKey: ['dashboard', dashDate, selectedBranchId],
     queryFn: async () => {
       const [d, culture] = await Promise.all([
         apiGet('/dashboard', qs),

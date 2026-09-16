@@ -3,17 +3,31 @@ const router  = express.Router();
 const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { resolveEmployeeIds } = require('../../utils/branchFilter');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
 // ─── Goals ────────────────────────────────────────────────────────────────────
-router.get('/goals', auth, async (req, res) => {
+router.get('/goals', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { userId, cycle } = req.query;
     let q = db.from('performance_goals').select('*').eq('organization_id', oId).order('created_at', { ascending: false });
-    if (!isAdmin(req.user.role)) q = q.eq('user_id', req.user.id);
-    else if (userId) q = q.eq('user_id', userId);
+
+    if (!isAdmin(req.user.role)) {
+      // Employees see only their own goals — branch filter does not apply
+      q = q.eq('user_id', req.user.id);
+    } else if (userId) {
+      // Admin requested a specific employee — keep as-is; org scope already enforced above
+      q = q.eq('user_id', userId);
+    } else {
+      // Admin viewing all — apply branch filter
+      const empIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (empIds !== null && empIds.length === 0) return res.json([]);
+      if (empIds !== null) q = q.in('user_id', empIds);
+    }
+
     if (cycle) q = q.eq('review_cycle', cycle);
     const { data, error } = await q;
     if (error) throw error;
@@ -127,13 +141,25 @@ router.delete('/goals/:id', auth, async (req, res) => {
 });
 
 // ─── Reviews ──────────────────────────────────────────────────────────────────
-router.get('/reviews', auth, async (req, res) => {
+router.get('/reviews', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { userId, cycle } = req.query;
     let q = db.from('performance_reviews').select('*').eq('organization_id', oId).order('created_at', { ascending: false });
-    if (!isAdmin(req.user.role)) q = q.eq('user_id', req.user.id);
-    else if (userId) q = q.eq('user_id', userId);
+
+    if (!isAdmin(req.user.role)) {
+      // Employees see only their own reviews — branch filter does not apply
+      q = q.eq('user_id', req.user.id);
+    } else if (userId) {
+      // Admin requested a specific employee
+      q = q.eq('user_id', userId);
+    } else {
+      // Admin viewing all — apply branch filter
+      const empIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (empIds !== null && empIds.length === 0) return res.json([]);
+      if (empIds !== null) q = q.in('user_id', empIds);
+    }
+
     if (cycle) q = q.eq('review_cycle', cycle);
     const { data, error } = await q;
     if (error) throw error;

@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, Circle, UserPlus, ClipboardList, ChevronDown, ChevronUp, Search, X } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut } from '@/lib/api';
 import { Avatar } from '@/components/ui/Avatar';
 
@@ -181,13 +182,14 @@ function MyOnboarding() {
 function AdminOnboarding() {
   const toast = useToast();
   const qc    = useQueryClient();
+  const { selectedBranchId } = useBranch();
   const [expanded,    setExpanded]    = useState(null);
   // ENH_ONBOARD_007: search and filter state
   const [onbSearch,   setOnbSearch]   = useState('');
   const [onbFilter,   setOnbFilter]   = useState('all'); // 'all' | 'incomplete' | 'complete' | 'stuck'
 
-  const { data: _ovData, isLoading } = useQuery({ queryKey: ['onboarding-overview'], queryFn: () => apiGet('/onboarding/overview') });
-  const { data: _eData }             = useQuery({ queryKey: ['employees'],            queryFn: () => apiGet('/employees') });
+  const { data: _ovData, isLoading } = useQuery({ queryKey: ['onboarding-overview', selectedBranchId], queryFn: () => apiGet('/onboarding/overview') });
+  const { data: _eData }             = useQuery({ queryKey: ['employees', 'all', selectedBranchId],    queryFn: () => apiGet('/employees') });
   const overview  = Array.isArray(_ovData) ? _ovData : [];
   const employees = Array.isArray(_eData)  ? _eData  : [];
 

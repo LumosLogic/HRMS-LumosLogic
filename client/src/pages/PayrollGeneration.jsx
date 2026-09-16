@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
 import { useAuth } from '@/context/AuthContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost } from '@/lib/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { MONTHS } from '@/lib/utils';
@@ -56,6 +57,7 @@ export default function PayrollGeneration() {
   const qc       = useQueryClient();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { selectedBranchId } = useBranch();
 
   const isRootAdmin = user?.role === 'root_admin';
   const basePath    = isRootAdmin ? '/root' : '';
@@ -68,7 +70,7 @@ export default function PayrollGeneration() {
   const [forceMessage, setForceMessage] = useState('');
 
   const { data: runs = [], isLoading: runsLoading } = useQuery({
-    queryKey: ['payroll-runs'],
+    queryKey: ['payroll-runs', selectedBranchId],
     queryFn:  () => apiGet('/payroll/runs'),
   });
 

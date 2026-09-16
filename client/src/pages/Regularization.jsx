@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { Plus, ClipboardList, CheckCircle2, XCircle, Clock, ChevronRight, ChevronLeft, Trash2, Search, Download, SortDesc, X, CalendarRange, Send, Eye, User, LogOut, AlertTriangle } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -759,6 +760,7 @@ function exportCSV(rows) {
 
 export default function Regularization() {
   const { isAdmin, isEmployee, isRootAdmin } = useAuth();
+  const { selectedBranchId } = useBranch();
   const wrap = '';
   const [searchParams] = useSearchParams();
   const dateParam = searchParams.get('date') || '';
@@ -814,7 +816,7 @@ export default function Regularization() {
     staleTime: 60 * 1000,
   });
 
-  const { data: _regData, isLoading } = useQuery({ queryKey: ['regularization'], queryFn: () => apiGet('/regularization') });
+  const { data: _regData, isLoading } = useQuery({ queryKey: ['regularization', selectedBranchId], queryFn: () => apiGet('/regularization') });
   const requests = Array.isArray(_regData) ? _regData : [];
 
   // BUG_094: scroll to highlighted request; clear filters so the item is visible

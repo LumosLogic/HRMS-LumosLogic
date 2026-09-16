@@ -3,23 +3,45 @@ const router  = express.Router();
 const { db } = require('../../config/db');
 const { auth, isAdminRole } = require('../../middleware/auth');
 const { localDateStr, flat, orgId, getSettings } = require('../../utils/helpers');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { getFilterState } = require('../../utils/branchFilter');
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
-router.get('/', auth, async (req, res) => {
+router.get('/', auth, withBranchContext, async (req, res) => {
   let _step = 'init';
   try {
     const realToday = localDateStr();
     const today     = req.query.date || realToday;
     const isToday   = today === realToday;
 
-    // ── 1. Get all employees (never include admin) ───────────────────────────
+    // ── 1. Get employees scoped to current branch context ───────────────────
     _step = 'employees';
     // BUG_117: exclude inactive/resigned/terminated from dashboard KPI counts
     // adapter's not_in wraps with (IS NULL OR NOT IN) so NULL-status = active employees included
-    const { data: allEmployees } = await db.from('users')
+    const branchState = getFilterState(req.branchContext);
+
+    let empQuery = db.from('users')
       .select('id, name, avatar_color, department, created_at')
       .eq('role', 'employee').eq('organization_id', orgId(req))
       .not('employee_status', 'in', ['inactive', 'resigned', 'terminated']);
+
+    // Apply branch filter for admin views (employee self-view not applicable for dashboard)
+    if (isAdminRole(req.user.role)) {
+      if (branchState.type === 'none') {
+        // No accessible branches — return zero-KPI dashboard
+        return res.json({
+          totalEmployees: 0, presentToday: 0, onLeaveToday: 0, lateToday: 0,
+          earlyExitToday: 0, halfDayToday: 0, wfhToday: 0, checkedInToday: 0,
+          newThisMonth: 0, pendingLeaves: 0, recentActivity: [], pendingLeaveList: [],
+          myToday: null, today, isToday, newJoiners: [],
+        });
+      }
+      if (branchState.type === 'specific') empQuery = empQuery.eq('branch_id', branchState.branchId);
+      else if (branchState.type === 'multi') empQuery = empQuery.in('branch_id', branchState.branchIds);
+      // 'all': no additional filter
+    }
+
+    const { data: allEmployees } = await empQuery;
     const totalEmployees = (allEmployees || []).length;
     const empIds         = (allEmployees || []).map(e => e.id);
 
@@ -87,22 +109,28 @@ router.get('/', auth, async (req, res) => {
     }
     const recentActivity = [...activityMap.values()].slice(0, 15);
 
-    // ── 5. Pending leaves ────────────────────────────────────────────────────
+    // ── 5. Pending leaves (branch-scoped when in a specific branch context) ───
     _step = 'leaves';
     // BUG_054/056/070: Count ALL pending statuses including pending_approval
     const ALL_PENDING = ['pending', 'pending_root', 'pending_dept', 'pending_approval'];
-    const { count: pendingLeaves } = await db.from('leaves')
+
+    let pendingLeavesQuery = db.from('leaves')
       .select('*', { count: 'exact', head: true })
       .in('status', ALL_PENDING)
       .eq('organization_id', orgId(req));
+    if (empIds.length > 0) pendingLeavesQuery = pendingLeavesQuery.in('user_id', empIds);
+
+    const { count: pendingLeaves } = await pendingLeavesQuery;
 
     let pendingLeaveList;
     if (isAdminRole(req.user.role)) {
       // BUG_070: Include all pending statuses so widget shows actual pending requests
-      const { data: plRaw } = await db.from('leaves')
+      let plQuery = db.from('leaves')
         .select('*, users!leaves_user_id_fkey(name, email, department, avatar_color)')
         .in('status', ALL_PENDING).eq('organization_id', orgId(req))
         .order('created_at', { ascending: false }).limit(5);
+      if (empIds.length > 0) plQuery = plQuery.in('user_id', empIds);
+      const { data: plRaw } = await plQuery;
       pendingLeaveList = flat(plRaw);
     } else {
       const { data: plRaw } = await db.from('leaves')

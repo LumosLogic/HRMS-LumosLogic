@@ -7,11 +7,13 @@ import {
   Briefcase, ScanLine, User, Home, Plus, ShieldCheck, ClipboardList,
   Clock, CheckCircle, XCircle, AlertTriangle, BarChart2, Search,
   ChevronDown, RotateCcw, FileCheck, UploadCloud, Settings, UserPlus, Calendar,
+  Building2,
 } from 'lucide-react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { Avatar } from '@/components/ui/Avatar';
@@ -545,6 +547,7 @@ function UploadSharedDocPanel({ allEmployees, colleagues, isEmployee, onCancel, 
 // ── Admin: Shared Documents Tab ───────────────────────────────────────────────
 function SharedDocumentsTab({ onUploadClick }) {
   const { user, isRootAdmin, isAdmin, can } = useAuth();
+  const { selectedBranchId } = useBranch();
   const canUpload = can('documents', 'upload');
   const toast = useToast();
   const qc = useQueryClient();
@@ -563,17 +566,17 @@ function SharedDocumentsTab({ onUploadClick }) {
   const [accessDrawerDoc, setAccessDrawerDoc] = useState(null);
 
   const { data: _docs = [], isLoading } = useQuery({
-    queryKey: ['documents', 'admin-all'],
+    queryKey: ['documents', 'admin-all', selectedBranchId],
     queryFn:  () => apiGet('/documents'),
   });
 
   const { data: allEmployees = [] } = useQuery({
-    queryKey: ['employees-list-docs'],
+    queryKey: ['employees-list-docs', selectedBranchId],
     queryFn:  async () => { const all = await apiGet('/employees'); return all.filter(e => e.role === 'employee'); },
   });
 
   const { data: colleagues = [] } = useQuery({
-    queryKey: ['doc-colleagues'],
+    queryKey: ['doc-colleagues', selectedBranchId],
     queryFn:  () => apiGet('/documents/colleagues'),
   });
 
@@ -1125,10 +1128,25 @@ function RequirementModal({ req, onClose, onSaved, existingRequirements = [] }) 
 function RequirementAssignModal({ requirement, employees, onClose, onSaved }) {
   const toast = useToast();
   const qc = useQueryClient();
-  const [mode, setMode]     = useState(requirement.assigned_employee_ids?.length ? 'specific' : 'all');
-  const [selected, setSelected] = useState((requirement.assigned_employee_ids || []).map(String));
-  const [search, setSearch] = useState('');
-  const [saving, setSaving] = useState(false);
+  const { selectedBranchId } = useBranch();
+
+  // Derive initial mode from existing requirement data
+  const hasBranches = requirement.assigned_branch_ids?.length > 0;
+  const hasEmployees = requirement.assigned_employee_ids?.length > 0;
+  const initMode = hasBranches ? 'branch' : hasEmployees ? 'specific' : 'all';
+
+  const [mode, setMode]             = useState(initMode);
+  const [selected, setSelected]     = useState((requirement.assigned_employee_ids || []).map(String));
+  const [selBranches, setSelBranches] = useState((requirement.assigned_branch_ids || []).map(String));
+  const [search, setSearch]         = useState('');
+  const [saving, setSaving]         = useState(false);
+
+  // Fetch org branches for branch picker
+  const { data: branches = [] } = useQuery({
+    queryKey: ['branches'],
+    queryFn:  () => apiGet('/branches'),
+  });
+  const activeBranches = branches.filter(b => b.is_active !== false);
 
   const filtered = useMemo(() => {
     if (!search.trim()) return employees;
@@ -1141,15 +1159,31 @@ function RequirementAssignModal({ requirement, employees, onClose, onSaved }) {
     setSelected(prev => prev.includes(sid) ? prev.filter(x => x !== sid) : [...prev, sid]);
   }
 
+  function toggleBranch(id) {
+    const sid = String(id);
+    setSelBranches(prev => prev.includes(sid) ? prev.filter(x => x !== sid) : [...prev, sid]);
+  }
+
   async function handleSave() {
     if (mode === 'specific' && selected.length === 0) { toast('Select at least one employee', 'error'); return; }
+    if (mode === 'branch'   && selBranches.length === 0) { toast('Select at least one branch', 'error'); return; }
     setSaving(true);
     try {
-      await apiPost(`/doc-requirements/${requirement.id}/assign`, {
-        employee_ids: mode === 'all' ? null : selected.map(Number),
-      });
+      const payload = {};
+      if (mode === 'all') {
+        payload.employee_ids = null;
+        payload.branch_ids   = null;
+      } else if (mode === 'specific') {
+        payload.employee_ids = selected.map(Number);
+        payload.branch_ids   = null;
+      } else {
+        // mode === 'branch'
+        payload.branch_ids   = selBranches.map(Number);
+        payload.employee_ids = null;
+      }
+      await apiPost(`/doc-requirements/${requirement.id}/assign`, payload);
       toast('Assignment saved!', 'success');
-      qc.invalidateQueries({ queryKey: ['doc-requirements'] });
+      qc.invalidateQueries({ queryKey: ['doc-requirements', selectedBranchId] });
       onSaved();
     } catch (err) { toast(err.message, 'error'); }
     finally { setSaving(false); }
@@ -1172,10 +1206,11 @@ function RequirementAssignModal({ requirement, employees, onClose, onSaved }) {
         <div className="p-5 flex-1 overflow-y-auto space-y-4">
           <div>
             <label className="form-label mb-2">Assign To</label>
-            <div className="grid grid-cols-2 gap-2">
+            <div className="grid grid-cols-3 gap-2">
               {[
                 { v: 'all',      label: 'All Employees',      desc: 'Visible to everyone in the organization', Icon: Globe },
                 { v: 'specific', label: 'Specific Employees', desc: 'Only visible to selected employees',      Icon: Users },
+                { v: 'branch',   label: 'By Branch',          desc: 'Only visible to employees in selected branches', Icon: Building2 },
               ].map(opt => (
                 <label key={opt.v} className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${mode === opt.v ? 'border-[#3525cd] bg-[#f0f3ff]' : 'border-[#e7eefe] hover:border-[#c7c4d8]'}`}>
                   <input type="radio" name="assign-mode" value={opt.v} checked={mode === opt.v} onChange={() => setMode(opt.v)} className="mt-0.5 text-[#3525cd]" />
@@ -1193,6 +1228,42 @@ function RequirementAssignModal({ requirement, employees, onClose, onSaved }) {
               <p className="text-xs text-[#3525cd] font-semibold flex items-center gap-2">
                 <Globe size={13} /> Visible to all {employees.length} active employees.
               </p>
+            </div>
+          )}
+
+          {mode === 'branch' && (
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="form-label mb-0">Select Branches</label>
+                {selBranches.length > 0 && <span className="text-xs font-bold text-[#3525cd]">{selBranches.length} selected</span>}
+              </div>
+              {selBranches.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-2">
+                  {selBranches.map(sid => {
+                    const br = activeBranches.find(b => String(b.id) === sid);
+                    return br ? (
+                      <span key={sid} className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[0.65rem] font-bold bg-[#3525cd]/10 text-[#3525cd] border border-[#3525cd]/20">
+                        {br.name}
+                        <button onClick={() => toggleBranch(sid)} className="ml-0.5 hover:text-rose-500 transition-colors"><X size={10} /></button>
+                      </span>
+                    ) : null;
+                  })}
+                </div>
+              )}
+              <div className="border border-[#e7eefe] rounded-xl max-h-44 overflow-y-auto">
+                {activeBranches.length === 0 ? (
+                  <p className="text-xs text-center text-[#9ca3af] py-6">No active branches found</p>
+                ) : activeBranches.map(br => (
+                  <label key={br.id} className="flex items-center gap-3 px-3 py-2.5 hover:bg-[#fafaff] cursor-pointer transition-colors border-b border-[#f0f3ff] last:border-0">
+                    <input type="checkbox" checked={selBranches.includes(String(br.id))} onChange={() => toggleBranch(br.id)} className="text-[#3525cd] rounded flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold text-[#151c27] truncate">{br.name}</p>
+                      {br.location && <p className="text-[0.6rem] text-[#9ca3af]">{br.location}</p>}
+                    </div>
+                    {selBranches.includes(String(br.id)) && <CheckCircle2 size={13} className="text-[#3525cd] flex-shrink-0" />}
+                  </label>
+                ))}
+              </div>
             </div>
           )}
 
@@ -1253,17 +1324,18 @@ function RequirementAssignModal({ requirement, employees, onClose, onSaved }) {
 function EmployeeRequirementsTab() {
   const toast = useToast();
   const qc = useQueryClient();
+  const { selectedBranchId } = useBranch();
   const [modal, setModal]           = useState(null);
   const [assignModal, setAssignModal] = useState(null); // requirement object
   const [confirmDel, setConfirmDel] = useState(null);
 
   const { data: requirements = [], isLoading } = useQuery({
-    queryKey: ['doc-requirements'],
+    queryKey: ['doc-requirements', selectedBranchId],
     queryFn:  () => apiGet('/doc-requirements'),
   });
 
   const { data: allEmployees = [] } = useQuery({
-    queryKey: ['employees-list-docs'],
+    queryKey: ['employees-list-docs', selectedBranchId],
     queryFn:  async () => { const all = await apiGet('/employees'); return all.filter(e => e.role === 'employee' && e.status === 'active'); },
   });
 
@@ -1280,6 +1352,13 @@ function EmployeeRequirementsTab() {
   });
 
   function getAssignedLabel(req) {
+    if (req.assigned_branch_ids?.length) {
+      return (
+        <span className="flex items-center gap-1 text-[#3525cd] font-bold">
+          <Building2 size={10} /> {req.assigned_branch_ids.length} branch{req.assigned_branch_ids.length !== 1 ? 'es' : ''}
+        </span>
+      );
+    }
     if (!req.assigned_employee_ids?.length) return <span className="text-[#9ca3af]">All</span>;
     return (
       <span className="flex items-center gap-1 text-[#3525cd] font-bold">
@@ -2027,6 +2106,7 @@ function SettingsTab() {
 function AdminDocumentsPage() {
   const qc = useQueryClient();
   const { isRootAdmin, can } = useAuth();
+  const { selectedBranchId } = useBranch();
   const canUpload = can('documents', 'upload');
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get('tab') || 'shared';
@@ -2035,7 +2115,7 @@ function AdminDocumentsPage() {
   const [showCreateReq, setShowCreateReq] = useState(false);
 
   const { data: allEmployees = [] } = useQuery({
-    queryKey: ['employees-list-docs'],
+    queryKey: ['employees-list-docs', selectedBranchId],
     queryFn:  async () => { const all = await apiGet('/employees'); return all.filter(e => e.role === 'employee'); },
   });
 

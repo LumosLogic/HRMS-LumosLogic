@@ -3,6 +3,8 @@ const router  = express.Router();
 const { db, pool } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { resolveEmployeeIds } = require('../../utils/branchFilter');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
@@ -43,12 +45,20 @@ router.get('/', auth, async (req, res) => {
 });
 
 // GET /api/onboarding/overview
-router.get('/overview', auth, async (req, res) => {
+router.get('/overview', auth, withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = req.user.organization_id;
-    const { data, error } = await db.from('onboarding_checklists')
+
+    // Resolve branch-scoped employee IDs before querying checklists
+    const empIds = await resolveEmployeeIds(req.branchContext, oId);
+    if (empIds !== null && empIds.length === 0) return res.json([]);
+
+    let checklistQuery = db.from('onboarding_checklists')
       .select('*').eq('organization_id', oId).order('created_at', { ascending: false });
+    if (empIds !== null) checklistQuery = checklistQuery.in('user_id', empIds);
+
+    const { data, error } = await checklistQuery;
     if (error) throw error;
 
     const rows = data || [];

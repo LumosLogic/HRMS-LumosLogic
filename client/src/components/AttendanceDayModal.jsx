@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { UserCheck, XCircle, Home, Timer, Coffee, LogIn, LogOut } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut } from '@/lib/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
@@ -87,6 +88,7 @@ export function AttendanceDayModal({ dateStr, initialTab = 'all', onClose, onRef
   const { user, isAdmin } = useAuth();
   const toast = useToast();
   const qc = useQueryClient();
+  const { selectedBranchId } = useBranch();
   const [activeTab, setActiveTab] = useState(initialTab || 'all');
   const [editRec, setEditRec] = useState(null);
   const [confirmAbsent, setConfirmAbsent] = useState(null);
@@ -96,13 +98,13 @@ export function AttendanceDayModal({ dateStr, initialTab = 'all', onClose, onRef
   const month = d.getMonth() + 1;
 
   const { data: attendance = [], refetch: refetchAtt } = useQuery({
-    queryKey: ['att-day-modal', year, month],
+    queryKey: ['att-day-modal', year, month, selectedBranchId],
     queryFn:  () => apiGet('/attendance', { year, month }),
     staleTime: 30000,
   });
 
   const { data: employees = [] } = useQuery({
-    queryKey: ['employees-list'],
+    queryKey: ['employees-list', selectedBranchId],
     queryFn:  async () => {
       const all = await apiGet('/employees');
       return all.filter(e => e.role === 'employee');
@@ -111,7 +113,7 @@ export function AttendanceDayModal({ dateStr, initialTab = 'all', onClose, onRef
   });
 
   const { data: leaves = [] } = useQuery({
-    queryKey: ['leaves-month', year, month],
+    queryKey: ['leaves-month', year, month, selectedBranchId],
     queryFn:  () => apiGet('/leaves', { year, month }),
     staleTime: 60000,
   });

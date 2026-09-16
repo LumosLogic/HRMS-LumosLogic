@@ -5,6 +5,7 @@ import { ChevronLeft, ChevronRight, Plus, Pencil, Trash2, Building2, Mail, UserC
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useFeature } from '@/context/FeatureFlagContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import EmployeeProfileV2 from '@/components/EmployeeProfileV2';
 import { Modal } from '@/components/ui/Modal';
@@ -2326,6 +2327,7 @@ export default function Employees() {
   const qc       = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
+  const { selectedBranchId } = useBranch();
   const { id: routeId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const employeesBase = location.pathname.startsWith('/root/') ? '/root/employees' : '/employees';
@@ -2407,7 +2409,7 @@ export default function Employees() {
   // Other pages (Calendar, TeamCalendar, etc.) do NOT pass this flag so they
   // automatically get only active+probation employees from the backend.
   const { data: allEmployees = [], isLoading } = useQuery({
-    queryKey: ['employees', 'all'],
+    queryKey: ['employees', 'all', selectedBranchId],
     queryFn:  () => apiGet('/employees', { include_inactive: 'true' }),
   });
 

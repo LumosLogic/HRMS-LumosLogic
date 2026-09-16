@@ -4,11 +4,13 @@ const { db, pool } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { generateEmployeePayslip } = require('../../services/payrollGenerationService');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { resolveEmployeeIds } = require('../../utils/branchFilter');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
 // GET /api/regularization
-router.get('/', auth, async (req, res) => {
+router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const uid = req.user.id;
@@ -16,7 +18,15 @@ router.get('/', auth, async (req, res) => {
       .select('*')
       .eq('organization_id', oId)
       .order('created_at', { ascending: false });
-    if (!isAdmin(req.user.role)) q = q.eq('user_id', uid);
+    if (!isAdmin(req.user.role)) {
+      // Employees see only their own regularization requests — no branch filter needed
+      q = q.eq('user_id', uid);
+    } else {
+      // Admin view — apply branch filter
+      const empIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (empIds !== null && empIds.length === 0) return res.json([]);
+      if (empIds !== null) q = q.in('user_id', empIds);
+    }
     const { data, error } = await q;
     if (error) throw error;
 

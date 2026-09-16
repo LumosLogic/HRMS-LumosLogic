@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom';
 import { Plus, Target, Star, TrendingUp, Pencil, Trash2, ChevronDown, ChevronUp, CheckCircle2, Search, X, Filter, Paperclip, MessageSquare, Send } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -329,6 +330,7 @@ function GoalDetailsPanel({ goalId, isAdmin, newComment, setNewComment, onCommen
 
 export default function Performance() {
   const { isAdmin, isEmployee } = useAuth();
+  const { selectedBranchId } = useBranch();
   const wrap = '';
   const toast = useToast();
   const qc    = useQueryClient();
@@ -352,9 +354,9 @@ export default function Performance() {
   const highlightGoalId = searchParams.get('highlight') ? parseInt(searchParams.get('highlight'), 10) : null;
   const [highlightActive, setHighlightActive] = useState(true);
 
-  const { data: _goalsData,   isLoading: gLoad } = useQuery({ queryKey: ['perf-goals',   cycle], queryFn: () => apiGet('/performance/goals',   { cycle }) });
-  const { data: _reviewsData, isLoading: rLoad } = useQuery({ queryKey: ['perf-reviews', cycle], queryFn: () => apiGet('/performance/reviews', { cycle }) });
-  const { data: _empData }                       = useQuery({ queryKey: ['employees'],           queryFn: () => apiGet('/employees'), enabled: isAdmin });
+  const { data: _goalsData,   isLoading: gLoad } = useQuery({ queryKey: ['perf-goals',   cycle, selectedBranchId], queryFn: () => apiGet('/performance/goals',   { cycle }) });
+  const { data: _reviewsData, isLoading: rLoad } = useQuery({ queryKey: ['perf-reviews', cycle, selectedBranchId], queryFn: () => apiGet('/performance/reviews', { cycle }) });
+  const { data: _empData }                       = useQuery({ queryKey: ['employees', 'all', selectedBranchId],    queryFn: () => apiGet('/employees'), enabled: isAdmin });
   const goals     = Array.isArray(_goalsData)   ? _goalsData   : [];
   const reviews   = Array.isArray(_reviewsData) ? _reviewsData : [];
   const employees = Array.isArray(_empData)     ? _empData     : [];

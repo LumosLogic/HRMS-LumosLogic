@@ -1,12 +1,15 @@
-const getToken = () => localStorage.getItem('lt_token');
+const getToken    = () => localStorage.getItem('lt_token');
+const getBranchId = () => localStorage.getItem('lt_selected_branch'); // null = All Branches
 
 async function apiFetch(method, endpoint, body = null) {
-  const token = getToken();
+  const token    = getToken();
+  const branchId = getBranchId();
   const opts = {
     method,
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(token    ? { Authorization: `Bearer ${token}` } : {}),
+      ...(branchId ? { 'X-Branch-Id': branchId }         : {}),
     },
   };
   if (body) opts.body = JSON.stringify(body);

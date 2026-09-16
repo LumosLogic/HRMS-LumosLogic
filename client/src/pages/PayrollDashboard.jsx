@@ -12,6 +12,7 @@ import {
 } from 'chart.js';
 import { Bar, Doughnut } from 'react-chartjs-2';
 import { useAuth } from '@/context/AuthContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet } from '@/lib/api';
 import { MONTHS } from '@/lib/utils';
 
@@ -69,13 +70,14 @@ function MonthYearPicker({ month, year, onMonth, onYear }) {
 
 export default function PayrollDashboard() {
   const { user } = useAuth();
+  const { selectedBranchId } = useBranch();
   const basePath = user?.role === 'root_admin' ? '/root' : '';
   const now      = new Date();
   const [month, setMonth] = useState(0); // 0 = all
   const [year,  setYear]  = useState(now.getFullYear());
 
   const { data, isLoading } = useQuery({
-    queryKey: ['payroll-dashboard', month, year],
+    queryKey: ['payroll-dashboard', month, year, selectedBranchId],
     queryFn:  () => apiGet('/payroll/dashboard', {
       ...(month ? { month } : {}),
       year,

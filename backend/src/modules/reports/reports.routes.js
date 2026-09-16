@@ -4,6 +4,8 @@ const { db, pool } = require('../../config/db');
 const { auth, adminOnly } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { getOrgPolicy } = require('../../utils/orgPolicy');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { resolveEmployeeIds } = require('../../utils/branchFilter');
 
 function toCSV(rows, cols) {
   const header = cols.map(c => c.label).join(',');
@@ -44,7 +46,7 @@ function nowIST() {
 function todayIST() { return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date()); }
 
 // GET /api/reports/attendance?year=&month=&userId=&format=csv
-router.get('/attendance', auth, async (req, res) => {
+router.get('/attendance', auth, withBranchContext, async (req, res) => {
   try {
     const oId    = req.user.organization_id;
     const policy = await getOrgPolicy(oId);
@@ -61,7 +63,18 @@ router.get('/attendance', auth, async (req, res) => {
     } else if (year) {
       q = q.gte('date', `${year}-01-01`).lte('date', `${year}-12-31`);
     }
-    if (userId) q = q.eq('user_id', userId);
+    if (userId) {
+      q = q.eq('user_id', userId);
+    } else {
+      // Apply branch filter when no specific employee is requested
+      const empIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (empIds !== null && empIds.length === 0) {
+        return format === 'csv'
+          ? res.setHeader('Content-Type','text/csv').send('date,name,status\n')
+          : res.json([]);
+      }
+      if (empIds !== null) q = q.in('user_id', empIds);
+    }
     const { data, error } = await q;
     if (error) throw error;
 

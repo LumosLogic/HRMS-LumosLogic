@@ -4,17 +4,30 @@ const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { initOffboarding } = require('../offboarding/offboardingService');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { resolveEmployeeIds } = require('../../utils/branchFilter');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
 // GET /api/exit
-router.get('/', auth, async (req, res) => {
+router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { userId } = req.query;
     let q = db.from('exit_requests').select('*').eq('organization_id', oId).order('created_at', { ascending: false });
-    if (!isAdmin(req.user.role)) q = q.eq('user_id', req.user.id);
-    else if (userId) q = q.eq('user_id', parseInt(userId));
+
+    if (!isAdmin(req.user.role)) {
+      // Employees see only their own exit request — branch filter does not apply
+      q = q.eq('user_id', req.user.id);
+    } else if (userId) {
+      // Admin requested a specific employee — keep as-is; org scope already enforced above
+      q = q.eq('user_id', parseInt(userId));
+    } else {
+      // Admin viewing all — apply branch filter
+      const empIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (empIds !== null && empIds.length === 0) return res.json([]);
+      if (empIds !== null) q = q.in('user_id', empIds);
+    }
     const { data, error } = await q;
     if (error) throw error;
 
