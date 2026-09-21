@@ -55,64 +55,52 @@ router.get('/:id/professional', auth, async (req, res) => {
 });
 
 // PUT /api/profile/:id/professional  — admin only
+// Only fields present in the request body are updated; absent fields are left
+// untouched.  This prevents partial section saves (e.g. Org Structure only)
+// from nulling out fields managed by the sibling section (Employment Details).
 router.put('/:id/professional', auth, adminOnly, async (req, res) => {
   try {
     const empId = parseInt(req.params.id);
-    const {
-      employee_id, department, position, grade, pay_cadre, cost_centre,
-      division, sub_division, location, employment_type, work_mode,
-      employee_status, joining_date, confirmation_date,
-      probation_applicable, probation_months,
-      salary_on, salary_structure, ctc, salary_effective_date,
-      weekly_off_day, work_hours_per_day,
-      branch_id, department_id, designation_id, reporting_to, hod_id,
-      device_enrollment_id, department_ids,
-    } = req.body;
+    const body  = req.body;
 
-    const update = {
-      employee_id:     employee_id     || null,
-      department:      department      || null,
-      position:        position        || null,
-      grade:           grade           || null,
-      pay_cadre:       pay_cadre       || null,
-      cost_centre:     cost_centre     || null,
-      division:        division        || null,
-      sub_division:    sub_division    || null,
-      location:        location        || null,
-      employment_type: employment_type || null,
-      work_mode:       work_mode       || null,
-      employee_status: employee_status || null,
-      joining_date:    joining_date    || null,
-      confirmation_date: confirmation_date || null,
-      probation_applicable, probation_months: probation_months || null,
+    const NULLABLE_FIELDS = [
+      'employee_id', 'department', 'position', 'grade', 'pay_cadre', 'cost_centre',
+      'division', 'sub_division', 'location', 'employment_type', 'work_mode',
+      'employee_status', 'joining_date', 'confirmation_date', 'probation_months',
+      'salary_on', 'salary_structure', 'ctc', 'salary_effective_date',
+      'weekly_off_day', 'work_hours_per_day',
+      'branch_id', 'department_id', 'designation_id', 'reporting_to', 'hod_id',
+      'device_enrollment_id',
+    ];
+
+    const update = { updated_at: new Date().toISOString(), updated_by: req.user.id };
+
+    for (const key of NULLABLE_FIELDS) {
+      if (Object.hasOwn(body, key)) {
+        update[key] = body[key] || null;
+      }
+    }
+
+    if (Object.hasOwn(body, 'probation_applicable')) {
+      update.probation_applicable = body.probation_applicable;
       // When probation is turned off, clear stale dates so payroll
       // immediately treats the employee as active (mirrors employees.routes.js:299-301)
-      ...(probation_applicable === false && { probation_start_date: null, probation_end_date: null }),
-      salary_on: salary_on || null, salary_structure: salary_structure || null,
-      ctc: ctc || null,
-      salary_effective_date: salary_effective_date || null,
-      weekly_off_day: weekly_off_day || null,
-      work_hours_per_day: work_hours_per_day || null,
-      branch_id: branch_id || null,
-      department_id: department_id || null,
-      designation_id: designation_id || null,
-      reporting_to: reporting_to || null,
-      hod_id: hod_id || null,
-      device_enrollment_id: device_enrollment_id || null,
-      updated_at: new Date().toISOString(),
-      updated_by: req.user.id,
-    };
+      if (body.probation_applicable === false) {
+        update.probation_start_date = null;
+        update.probation_end_date   = null;
+      }
+    }
 
     const { data, error } = await db.from('users')
       .update(update).eq('id', empId).eq('organization_id', orgId(req)).select().single();
     if (error) throw error;
 
     // Sync multi-department assignments if provided
-    if (Array.isArray(department_ids)) {
+    if (Array.isArray(body.department_ids)) {
       await db.from('user_departments').delete().eq('user_id', empId);
-      if (department_ids.length > 0) {
+      if (body.department_ids.length > 0) {
         await db.from('user_departments').insert(
-          department_ids.map(did => ({ user_id: empId, department_id: did, organization_id: orgId(req) }))
+          body.department_ids.map(did => ({ user_id: empId, department_id: did, organization_id: orgId(req) }))
         );
       }
     }
