@@ -12,8 +12,18 @@ function round2(v) { return Math.round((Number(v) || 0) * 100) / 100; }
 
 // ── Payroll Summary ───────────────────────────────────────────────────────────
 // One row per payroll run for the requested month/year.
-async function getPayrollSummary({ organizationId, month, year }) {
+// branchIds: null = org-wide, [] = no access (caller must guard), [...] = filter these branches.
+async function getPayrollSummary({ organizationId, month, year, branchIds = null }) {
   const oId = Number(organizationId);
+  if (Array.isArray(branchIds) && branchIds.length === 0) return [];
+
+  const params = [oId, month || null, year || null];
+  let branchClause = '';
+  if (branchIds !== null) {
+    params.push(branchIds);
+    branchClause = `AND pr.branch_id = ANY($${params.length}::bigint[])`;
+  }
+
   const { rows } = await pool.query(
     `SELECT
          pr.id           AS run_id,
@@ -35,16 +45,26 @@ async function getPayrollSummary({ organizationId, month, year }) {
       WHERE pr.organization_id = $1
         AND ($2::int IS NULL OR pr.month = $2)
         AND ($3::int IS NULL OR pr.year  = $3)
+        ${branchClause}
       ORDER BY pr.year DESC, pr.month DESC`,
-    [oId, month || null, year || null]
+    params
   );
   return rows;
 }
 
 // ── Department Summary ────────────────────────────────────────────────────────
-async function getDepartmentSummary({ organizationId, month, year }) {
+async function getDepartmentSummary({ organizationId, month, year, branchIds = null }) {
   const oId  = Number(organizationId);
+  if (Array.isArray(branchIds) && branchIds.length === 0) return [];
   const mStr = month ? padZ(month) : null;
+
+  const params = [oId, mStr, year || null];
+  let branchClause = '';
+  if (branchIds !== null) {
+    params.push(branchIds);
+    branchClause = `AND u.branch_id = ANY($${params.length}::bigint[])`;
+  }
+
   const { rows } = await pool.query(
     `SELECT
          COALESCE(u.department, 'Unassigned') AS department,
@@ -61,9 +81,10 @@ async function getDepartmentSummary({ organizationId, month, year }) {
         AND ($2::text IS NULL OR ps.month = $2)
         AND ($3::int  IS NULL OR ps.year  = $3)
         AND ps.status != 'cancelled'
+        ${branchClause}
       GROUP BY COALESCE(u.department, 'Unassigned')
       ORDER BY total_gross DESC`,
-    [oId, mStr, year || null]
+    params
   );
   return rows.map(r => ({
     ...r,
@@ -78,9 +99,18 @@ async function getDepartmentSummary({ organizationId, month, year }) {
 
 // ── Salary Register ───────────────────────────────────────────────────────────
 // Full per-employee breakdown for a pay period.
-async function getSalaryRegister({ organizationId, month, year }) {
+async function getSalaryRegister({ organizationId, month, year, branchIds = null }) {
   const oId  = Number(organizationId);
+  if (Array.isArray(branchIds) && branchIds.length === 0) return [];
   const mStr = month ? padZ(month) : null;
+
+  const params = [oId, mStr, year || null];
+  let branchClause = '';
+  if (branchIds !== null) {
+    params.push(branchIds);
+    branchClause = `AND u.branch_id = ANY($${params.length}::bigint[])`;
+  }
+
   const { rows } = await pool.query(
     `SELECT
          COALESCE(u.employee_id, u.id::text) AS employee_id,
@@ -122,16 +152,26 @@ async function getSalaryRegister({ organizationId, month, year }) {
         AND ($2::text IS NULL OR ps.month = $2)
         AND ($3::int  IS NULL OR ps.year  = $3)
         AND ps.status != 'cancelled'
+        ${branchClause}
       ORDER BY u.department, u.name`,
-    [oId, mStr, year || null]
+    params
   );
   return rows;
 }
 
 // ── LOP Report ────────────────────────────────────────────────────────────────
-async function getLopReport({ organizationId, month, year }) {
+async function getLopReport({ organizationId, month, year, branchIds = null }) {
   const oId  = Number(organizationId);
+  if (Array.isArray(branchIds) && branchIds.length === 0) return [];
   const mStr = month ? padZ(month) : null;
+
+  const params = [oId, mStr, year || null];
+  let branchClause = '';
+  if (branchIds !== null) {
+    params.push(branchIds);
+    branchClause = `AND u.branch_id = ANY($${params.length}::bigint[])`;
+  }
+
   const { rows } = await pool.query(
     `SELECT
          COALESCE(u.employee_id, u.id::text) AS employee_id,
@@ -155,15 +195,25 @@ async function getLopReport({ organizationId, month, year }) {
         AND ($3::int  IS NULL OR ps.year  = $3)
         AND ps.lop_days > 0
         AND ps.status != 'cancelled'
+        ${branchClause}
       ORDER BY ps.lop_days DESC, u.name`,
-    [oId, mStr, year || null]
+    params
   );
   return rows;
 }
 
 // ── Adjustment Summary ────────────────────────────────────────────────────────
-async function getAdjustmentSummary({ organizationId, month, year }) {
+async function getAdjustmentSummary({ organizationId, month, year, branchIds = null }) {
   const oId = Number(organizationId);
+  if (Array.isArray(branchIds) && branchIds.length === 0) return [];
+
+  const params = [oId, month || null, year || null];
+  let branchClause = '';
+  if (branchIds !== null) {
+    params.push(branchIds);
+    branchClause = `AND u.branch_id = ANY($${params.length}::bigint[])`;
+  }
+
   const { rows } = await pool.query(
     `SELECT
          pa.adjustment_category,
@@ -177,16 +227,27 @@ async function getAdjustmentSummary({ organizationId, month, year }) {
         AND ($2::int IS NULL OR pa.effective_month = $2)
         AND ($3::int IS NULL OR pa.effective_year  = $3)
         AND pa.deleted_at IS NULL
+        ${branchClause}
       GROUP BY pa.adjustment_category, pa.addition_or_deduction
       ORDER BY pa.adjustment_category`,
-    [oId, month || null, year || null]
+    params
   );
   return rows.map(r => ({ ...r, total_amount: round2(r.total_amount) }));
 }
 
 // ── Monthly Trend (for dashboard chart) ──────────────────────────────────────
-async function getMonthlyTrend({ organizationId, months = 6 }) {
+async function getMonthlyTrend({ organizationId, months = 6, branchIds = null }) {
   const oId = Number(organizationId);
+  if (Array.isArray(branchIds) && branchIds.length === 0) return [];
+
+  const params = [oId];
+  let branchClause = '';
+  if (branchIds !== null) {
+    params.push(branchIds);
+    branchClause = `AND pr.branch_id = ANY($${params.length}::bigint[])`;
+  }
+  params.push(months);
+
   const { rows } = await pool.query(
     `SELECT
          pr.year,
@@ -198,9 +259,10 @@ async function getMonthlyTrend({ organizationId, months = 6 }) {
        FROM payroll_runs pr
       WHERE pr.organization_id = $1
         AND pr.status NOT IN ('draft','processing','failed')
+        ${branchClause}
       ORDER BY pr.year DESC, pr.month DESC
-      LIMIT $2`,
-    [oId, months]
+      LIMIT $${params.length}`,
+    params
   );
   return rows.reverse(); // chronological order
 }

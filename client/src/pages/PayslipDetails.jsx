@@ -3,7 +3,7 @@ import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowLeft, Lock, AlertCircle, Printer, Download } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
-import { apiGet } from '@/lib/api';
+import { apiGet, apiDownload } from '@/lib/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { MONTHS } from '@/lib/utils';
 import Payslip from '@/components/Payslip';
@@ -47,16 +47,7 @@ export default function PayslipDetails() {
   async function downloadPdf() {
     setDownloading(true);
     try {
-      const token = localStorage.getItem('lt_token');
-      const res = await fetch(`/api/payroll/payslips/${id}/pdf`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) {
-        const d = await res.json().catch(() => ({}));
-        alert(d.error || 'Download failed');
-        return;
-      }
-      const blob = await res.blob();
+      const blob = await apiDownload(`/payroll/payslips/${id}/pdf`);
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
       a.href     = url;
@@ -65,6 +56,8 @@ export default function PayslipDetails() {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(err.message || 'Download failed');
     } finally {
       setDownloading(false);
     }

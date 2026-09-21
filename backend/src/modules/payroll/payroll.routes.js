@@ -63,6 +63,17 @@ function resolveBranchId(branchState) {
 }
 
 /**
+ * Derives the branch IDs array for report/dashboard filtering from the branch filter state.
+ * Returns null = org-wide (no filter), [] = no access (caller returns empty), [...] = filter.
+ */
+function reportBranchIds(branchState) {
+  if (branchState.type === 'all')      return null;
+  if (branchState.type === 'specific') return [branchState.branchId];
+  if (branchState.type === 'multi')    return branchState.branchIds;
+  return []; // 'none' — no accessible branches
+}
+
+/**
  * Asserts that the current user can access a payroll run row.
  * Called AFTER the run has been fetched with organization_id scope.
  *
@@ -832,6 +843,19 @@ router.post('/payslips/generate', auth, hasPermission('payroll', 'generate'), as
     const { user_id, month, year, other_deductions, notes } = req.body;
     if (!user_id || !month || !year) return res.status(400).json({ error: 'user_id, month, year required' });
 
+    // FAIL-10 FIX: Validate admin has branch access to the target employee.
+    // Fetch the employee to confirm org membership and get their branch_id.
+    const { rows: empRows } = await pool.query(
+      `SELECT id, branch_id FROM users WHERE id = $1 AND organization_id = $2`,
+      [Number(user_id), oId]
+    );
+    if (!empRows.length) return res.status(404).json({ error: 'Employee not found in this organization' });
+    const empBranchId = empRows[0].branch_id;
+    if (empBranchId != null) {
+      const ok = await validateBranchAccess(req.user.id, oId, req.user.role, empBranchId);
+      if (!ok) return res.status(403).json({ error: 'You do not have access to this employee\'s branch.' });
+    }
+
     // BUG_133 FIX: Fetch salary structure — check employee_salary_structures (primary table)
     // first, then fall back to the legacy payroll_structures table.
     // The date filter uses <= first day of the month so future-dated structures are excluded.
@@ -1025,15 +1049,23 @@ router.put('/payslips/:id/publish', auth, hasPermission('payroll', 'generate'), 
     const id  = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ error: 'Invalid payslip ID' });
 
-    // Verify payslip belongs to this org and is not locked before publishing
+    // FAIL-9 FIX: Fetch payslip with its run's branch_id for branch authorization.
     const { rows } = await pool.query(
-      `SELECT id, status, locked FROM payslips
-        WHERE id = $1 AND organization_id = $2`,
+      `SELECT ps.id, ps.status, ps.locked, ps.payroll_run_id, pr.branch_id
+         FROM payslips ps
+         LEFT JOIN payroll_runs pr ON pr.id = ps.payroll_run_id AND pr.organization_id = $2
+        WHERE ps.id = $1 AND ps.organization_id = $2`,
       [id, oId]
     );
     if (!rows.length) return res.status(404).json({ error: 'Payslip not found' });
-    if (rows[0].locked) {
+    const slip = rows[0];
+    if (slip.locked) {
       return res.status(409).json({ error: 'Payslip is locked and cannot be published without unlocking.' });
+    }
+    // If payslip belongs to a branch-specific run, validate branch access.
+    // Payslips with no payroll_run or with a NULL-branch run are accessible to all org admins.
+    if (slip.payroll_run_id != null && slip.branch_id != null) {
+      if (await assertRunBranchAccess(req, res, { branch_id: slip.branch_id })) return;
     }
 
     await pool.query(
@@ -1183,6 +1215,12 @@ router.post('/unlock/:id', auth, hasPermission('payroll', 'unlock'), async (req,
     const oId   = orgId(req);
     const runId = parseInt(req.params.id, 10);
     if (!runId) return res.status(400).json({ error: 'Invalid run ID' });
+    const { rows: unlockCheck } = await pool.query(
+      `SELECT branch_id FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
+      [runId, oId]
+    );
+    if (!unlockCheck.length) return res.status(404).json({ error: 'Payroll run not found' });
+    if (await assertRunBranchAccess(req, res, unlockCheck[0])) return;
     const result = await unlockPayrollRun({
       organizationId: oId,
       runId,
@@ -1288,6 +1326,7 @@ router.get('/payslips/:id/details', auth, hasPermission('payroll', 'view'), asyn
     const { rows } = await pool.query(
       `SELECT ps.*,
               u.name, u.employee_id, u.department, u.position, u.email, u.avatar_color,
+              u.branch_id AS user_branch_id,
               pr.month  AS run_month,
               pr.year   AS run_year,
               pr.status AS run_status
@@ -1299,10 +1338,14 @@ router.get('/payslips/:id/details', auth, hasPermission('payroll', 'view'), asyn
     );
     if (!rows.length) return res.status(404).json({ error: 'Payslip not found' });
 
-    // Non-admin employees may only view their own payslips
     const slip = rows[0];
-    if (!isAdmin(req.user.role) && slip.user_id !== req.user.id) {
-      return res.status(403).json({ error: 'Access denied' });
+    // Non-admin employees may only view their own payslips (unchanged behavior)
+    if (!isAdmin(req.user.role)) {
+      if (slip.user_id !== req.user.id) return res.status(403).json({ error: 'Access denied' });
+    } else if (slip.user_branch_id != null) {
+      // NR-1 FIX: Admin/HR must have branch access to view this employee's payslip
+      const ok = await validateBranchAccess(req.user.id, oId, req.user.role, slip.user_branch_id);
+      if (!ok) return res.status(403).json({ error: 'You do not have access to this employee\'s branch.' });
     }
     res.json(slip);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1316,7 +1359,7 @@ router.get('/payslips/:id/pdf', auth, async (req, res) => {
     if (!payslipId) return res.status(400).json({ error: 'Invalid payslip ID' });
 
     const { rows } = await pool.query(
-      `SELECT ps.*, u.name, u.email, u.employee_id, u.department
+      `SELECT ps.*, u.name, u.email, u.employee_id, u.department, u.branch_id AS user_branch_id
          FROM payslips ps
          JOIN users u ON u.id = ps.user_id
         WHERE ps.id = $1 AND ps.organization_id = $2`,
@@ -1325,8 +1368,13 @@ router.get('/payslips/:id/pdf', auth, async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Payslip not found' });
 
     const ps = rows[0];
-    if (!isAdmin(req.user.role) && Number(ps.user_id) !== Number(req.user.id)) {
-      return res.status(403).json({ error: 'Access denied' });
+    // Non-admin employees may only view their own payslips (unchanged behavior)
+    if (!isAdmin(req.user.role)) {
+      if (Number(ps.user_id) !== Number(req.user.id)) return res.status(403).json({ error: 'Access denied' });
+    } else if (ps.user_branch_id != null) {
+      // NR-1 FIX: Admin/HR must have branch access to download this employee's payslip PDF
+      const ok = await validateBranchAccess(req.user.id, oId, req.user.role, ps.user_branch_id);
+      if (!ok) return res.status(403).json({ error: 'You do not have access to this employee\'s branch.' });
     }
 
     const { generatePayslipPDF } = require('../../services/payrollEmailService');
@@ -1425,7 +1473,8 @@ router.get('/payslips/:id', auth, async (req, res) => {
     if (!payslipId) return res.status(400).json({ error: 'Invalid payslip ID' });
 
     const { rows } = await pool.query(
-      `SELECT ps.*, u.name, u.employee_id, u.department, u.position, u.avatar_color
+      `SELECT ps.*, u.name, u.employee_id, u.department, u.position, u.avatar_color,
+              u.branch_id AS user_branch_id
          FROM payslips ps
          JOIN  users u ON u.id = ps.user_id
         WHERE ps.id = $1 AND ps.organization_id = $2`,
@@ -1434,8 +1483,13 @@ router.get('/payslips/:id', auth, async (req, res) => {
     if (!rows.length) return res.status(404).json({ error: 'Payslip not found' });
 
     const slip = rows[0];
-    if (!isAdmin(req.user.role) && slip.user_id !== req.user.id) {
-      return res.status(403).json({ error: 'Access denied' });
+    // Non-admin employees may only view their own payslips (unchanged behavior)
+    if (!isAdmin(req.user.role)) {
+      if (slip.user_id !== req.user.id) return res.status(403).json({ error: 'Access denied' });
+    } else if (slip.user_branch_id != null) {
+      // NR-1 FIX: Admin/HR must have branch access to view this employee's payslip
+      const ok = await validateBranchAccess(req.user.id, oId, req.user.role, slip.user_branch_id);
+      if (!ok) return res.status(403).json({ error: 'You do not have access to this employee\'s branch.' });
     }
     res.json(slip);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1473,6 +1527,18 @@ router.get('/adjustments', auth, hasPermission('payroll', 'manage_adjustments'),
   try {
     const oId = orgId(req);
     const { runId, userId, month, year } = req.query;
+
+    // FAIL-5 FIX: when filtering by runId, validate branch access to that run first.
+    if (runId) {
+      const runIdInt = parseInt(runId, 10);
+      const { rows: runCheck } = await pool.query(
+        `SELECT branch_id FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
+        [runIdInt, oId]
+      );
+      if (!runCheck.length) return res.status(404).json({ error: 'Payroll run not found' });
+      if (await assertRunBranchAccess(req, res, runCheck[0])) return;
+    }
+
     const rows = await listAdjustments({
       organizationId: oId,
       payrollRunId: runId ? parseInt(runId, 10) : null,
@@ -1500,6 +1566,16 @@ router.post('/adjustments', auth, hasPermission('payroll', 'manage_adjustments')
     if (amount === undefined || amount === null) return res.status(400).json({ error: 'amount is required' });
     if (!effective_month || !effective_year) return res.status(400).json({ error: 'effective_month and effective_year are required' });
 
+    // FAIL-2 FIX: validate branch access to the associated payroll run.
+    if (payroll_run_id) {
+      const { rows: runCheck } = await pool.query(
+        `SELECT branch_id FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
+        [Number(payroll_run_id), oId]
+      );
+      if (!runCheck.length) return res.status(404).json({ error: 'Payroll run not found' });
+      if (await assertRunBranchAccess(req, res, runCheck[0])) return;
+    }
+
     const adj = await createAdjustment({
       organizationId: oId,
       payrollRunId:  payroll_run_id || null,
@@ -1525,6 +1601,21 @@ router.put('/adjustments/:id', auth, hasPermission('payroll', 'manage_adjustment
     const oId = orgId(req);
     const id  = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ error: 'Invalid adjustment ID' });
+
+    // FAIL-3 FIX: fetch the adjustment's current run to validate branch access.
+    const { rows: adjCheck } = await pool.query(
+      `SELECT payroll_run_id FROM payroll_adjustments WHERE id = $1 AND organization_id = $2 AND deleted_at IS NULL`,
+      [id, oId]
+    );
+    if (!adjCheck.length) return res.status(404).json({ error: 'Adjustment not found' });
+    if (adjCheck[0].payroll_run_id) {
+      const { rows: runCheck } = await pool.query(
+        `SELECT branch_id FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
+        [adjCheck[0].payroll_run_id, oId]
+      );
+      if (runCheck.length && await assertRunBranchAccess(req, res, runCheck[0])) return;
+    }
+
     const adj = await updateAdjustment({
       organizationId: oId,
       adjustmentId: id,
@@ -1542,6 +1633,21 @@ router.delete('/adjustments/:id', auth, hasPermission('payroll', 'manage_adjustm
     const oId = orgId(req);
     const id  = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ error: 'Invalid adjustment ID' });
+
+    // FAIL-4 FIX: fetch the adjustment's current run to validate branch access.
+    const { rows: adjCheck } = await pool.query(
+      `SELECT payroll_run_id FROM payroll_adjustments WHERE id = $1 AND organization_id = $2 AND deleted_at IS NULL`,
+      [id, oId]
+    );
+    if (!adjCheck.length) return res.status(404).json({ error: 'Adjustment not found' });
+    if (adjCheck[0].payroll_run_id) {
+      const { rows: runCheck } = await pool.query(
+        `SELECT branch_id FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
+        [adjCheck[0].payroll_run_id, oId]
+      );
+      if (runCheck.length && await assertRunBranchAccess(req, res, runCheck[0])) return;
+    }
+
     await deleteAdjustment({ organizationId: oId, adjustmentId: id, deletedBy: req.user.id, ip: req.ip });
     res.json({ ok: true });
   } catch (err) { res.status(err.status || 500).json({ error: err.message, code: err.code }); }
@@ -1556,6 +1662,18 @@ router.get('/overrides', auth, hasPermission('payroll', 'manage_overrides'), asy
   try {
     const oId = orgId(req);
     const { runId, userId } = req.query;
+
+    // FAIL-8 FIX: when filtering by runId, validate branch access to that run first.
+    if (runId) {
+      const runIdInt = parseInt(runId, 10);
+      const { rows: runCheck } = await pool.query(
+        `SELECT branch_id FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
+        [runIdInt, oId]
+      );
+      if (!runCheck.length) return res.status(404).json({ error: 'Payroll run not found' });
+      if (await assertRunBranchAccess(req, res, runCheck[0])) return;
+    }
+
     const rows = await listOverrides({
       organizationId: oId,
       payrollRunId: runId ? parseInt(runId, 10) : null,
@@ -1573,6 +1691,14 @@ router.post('/overrides', auth, hasPermission('payroll', 'manage_overrides'), as
     if (!payroll_run_id) return res.status(400).json({ error: 'payroll_run_id is required' });
     if (!user_id)        return res.status(400).json({ error: 'user_id is required' });
     if (!reason)         return res.status(400).json({ error: 'reason is required' });
+
+    // FAIL-6 FIX: validate branch access to the associated payroll run.
+    const { rows: runCheck } = await pool.query(
+      `SELECT branch_id FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
+      [Number(payroll_run_id), oId]
+    );
+    if (!runCheck.length) return res.status(404).json({ error: 'Payroll run not found' });
+    if (await assertRunBranchAccess(req, res, runCheck[0])) return;
 
     const ov = await createOverride({
       organizationId: oId,
@@ -1594,6 +1720,21 @@ router.delete('/overrides/:id', auth, hasPermission('payroll', 'manage_overrides
     const oId = orgId(req);
     const id  = parseInt(req.params.id, 10);
     if (!id) return res.status(400).json({ error: 'Invalid override ID' });
+
+    // FAIL-7 FIX: fetch the override's run to validate branch access before deletion.
+    const { rows: ovCheck } = await pool.query(
+      `SELECT payroll_run_id FROM payroll_attendance_overrides WHERE id = $1 AND organization_id = $2`,
+      [id, oId]
+    );
+    if (!ovCheck.length) return res.status(404).json({ error: 'Override not found' });
+    if (ovCheck[0].payroll_run_id) {
+      const { rows: runCheck } = await pool.query(
+        `SELECT branch_id FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
+        [ovCheck[0].payroll_run_id, oId]
+      );
+      if (runCheck.length && await assertRunBranchAccess(req, res, runCheck[0])) return;
+    }
+
     await deleteOverride({ organizationId: oId, overrideId: id, deletedBy: req.user.id, ip: req.ip });
     res.json({ ok: true });
   } catch (err) { res.status(err.status || 500).json({ error: err.message, code: err.code }); }
@@ -1611,10 +1752,11 @@ router.post('/runs/:id/verify', auth, hasPermission('payroll', 'verify'), async 
     if (!runId) return res.status(400).json({ error: 'Invalid run ID' });
 
     const { rows } = await pool.query(
-      `SELECT id, status FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
+      `SELECT id, status, branch_id FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
       [runId, oId]
     );
     if (!rows.length) return res.status(404).json({ error: 'Payroll run not found' });
+    if (await assertRunBranchAccess(req, res, rows[0])) return;
     if (!['completed','completed_with_errors'].includes(rows[0].status)) {
       return res.status(409).json({ error: `Cannot verify a run with status '${rows[0].status}'` });
     }
@@ -1642,10 +1784,11 @@ router.post('/runs/:id/approve', auth, hasPermission('payroll', 'approve'), asyn
     if (!runId) return res.status(400).json({ error: 'Invalid run ID' });
 
     const { rows } = await pool.query(
-      `SELECT id, status FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
+      `SELECT id, status, branch_id FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
       [runId, oId]
     );
     if (!rows.length) return res.status(404).json({ error: 'Payroll run not found' });
+    if (await assertRunBranchAccess(req, res, rows[0])) return;
     if (rows[0].status !== 'verified') {
       return res.status(409).json({ error: `Cannot approve a run with status '${rows[0].status}'. Run must be verified first.` });
     }
@@ -1705,10 +1848,11 @@ router.post('/runs/:id/mark-paid', auth, hasPermission('payroll', 'mark_paid'), 
     if (!runId) return res.status(400).json({ error: 'Invalid run ID' });
 
     const { rows } = await pool.query(
-      `SELECT id, status FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
+      `SELECT id, status, branch_id FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
       [runId, oId]
     );
     if (!rows.length) return res.status(404).json({ error: 'Payroll run not found' });
+    if (await assertRunBranchAccess(req, res, rows[0])) return;
     if (!['locked', 'approved'].includes(rows[0].status)) {
       return res.status(409).json({ error: `Cannot mark as paid from status '${rows[0].status}'` });
     }
@@ -1736,10 +1880,11 @@ router.post('/runs/:id/send-emails', auth, hasPermission('payroll', 'approve'), 
     if (!runId) return res.status(400).json({ error: 'Invalid run ID' });
 
     const { rows } = await pool.query(
-      `SELECT id, status, month, year FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
+      `SELECT id, status, month, year, branch_id FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
       [runId, oId]
     );
     if (!rows.length) return res.status(404).json({ error: 'Payroll run not found' });
+    if (await assertRunBranchAccess(req, res, rows[0])) return;
 
     const run = rows[0];
     if (!['approved', 'locked', 'paid'].includes(run.status)) {
@@ -1771,16 +1916,23 @@ router.post('/runs/:id/send-emails', auth, hasPermission('payroll', 'approve'), 
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // GET /api/payroll/dashboard?month=&year=
-router.get('/dashboard', auth, hasPermission('payroll', 'view'), async (req, res) => {
+// NR-3 FIX: Add branch context so limited HR only sees their branch's payroll data.
+router.get('/dashboard', auth, hasPermission('payroll', 'view'), withBranchContext, async (req, res) => {
   try {
     const oId   = orgId(req);
     const month = req.query.month ? parseInt(req.query.month, 10) : null;
     const year  = req.query.year  ? parseInt(req.query.year,  10) : null;
 
+    const branchState = getFilterState(req.branchContext);
+    if (branchState.type === 'none') {
+      return res.json({ kpi: {}, summary: [], deptBreakdown: [], trend: [] });
+    }
+    const bIds = reportBranchIds(branchState);
+
     const [summary, deptBreakdown, trend] = await Promise.all([
-      getPayrollSummary({ organizationId: oId, month, year }),
-      getDepartmentSummary({ organizationId: oId, month, year }),
-      getMonthlyTrend({ organizationId: oId, months: 6 }),
+      getPayrollSummary({ organizationId: oId, month, year, branchIds: bIds }),
+      getDepartmentSummary({ organizationId: oId, month, year, branchIds: bIds }),
+      getMonthlyTrend({ organizationId: oId, months: 6, branchIds: bIds }),
     ]);
 
     // KPI cards — aggregate across all runs in the filter period
@@ -1795,18 +1947,31 @@ router.get('/dashboard', auth, hasPermission('payroll', 'view'), async (req, res
 
     kpi.avgSalary = kpi.employeesPaid > 0 ? kpi.totalNet / kpi.employeesPaid : 0;
 
-    // Pending runs (not yet paid)
+    // Pending runs — branch-filtered
+    const pendingParams = [oId, month, year];
+    let pendingBranchClause = '';
+    if (bIds !== null) {
+      pendingParams.push(bIds);
+      pendingBranchClause = `AND branch_id = ANY($${pendingParams.length}::bigint[])`;
+    }
     const { rows: pending } = await pool.query(
       `SELECT COUNT(*)::int AS count FROM payroll_runs
         WHERE organization_id = $1
           AND status NOT IN ('paid','failed','draft')
           AND ($2::int IS NULL OR month = $2)
-          AND ($3::int IS NULL OR year  = $3)`,
-      [oId, month, year]
+          AND ($3::int IS NULL OR year  = $3)
+          ${pendingBranchClause}`,
+      pendingParams
     );
     kpi.pendingRuns = pending[0]?.count || 0;
 
-    // Adjustment totals
+    // Adjustment totals — branch-filtered through payroll_runs
+    const adjParams = [oId, month, year];
+    let adjBranchClause = '';
+    if (bIds !== null) {
+      adjParams.push(bIds);
+      adjBranchClause = `AND pr.branch_id = ANY($${adjParams.length}::bigint[])`;
+    }
     const { rows: adjAgg } = await pool.query(
       `SELECT
            SUM(CASE WHEN addition_or_deduction = 'addition' THEN amount ELSE 0 END) AS total_bonuses,
@@ -1816,8 +1981,9 @@ router.get('/dashboard', auth, hasPermission('payroll', 'view'), async (req, res
         WHERE pa.organization_id = $1
           AND pa.deleted_at IS NULL
           AND ($2::int IS NULL OR pr.month = $2)
-          AND ($3::int IS NULL OR pr.year  = $3)`,
-      [oId, month, year]
+          AND ($3::int IS NULL OR pr.year  = $3)
+          ${adjBranchClause}`,
+      adjParams
     );
     kpi.totalBonuses        = Number(adjAgg[0]?.total_bonuses || 0);
     kpi.totalDeductionAdj   = Number(adjAgg[0]?.total_deduction_adj || 0);
@@ -1839,9 +2005,13 @@ function reportParams(req) {
 }
 
 // GET /api/payroll/reports/summary
-router.get('/reports/summary', auth, hasPermission('payroll', 'run_reports'), async (req, res) => {
+// NR-2 FIX: branch context filtering for all report endpoints.
+router.get('/reports/summary', auth, hasPermission('payroll', 'run_reports'), withBranchContext, async (req, res) => {
   try {
-    const data = await getPayrollSummary(reportParams(req));
+    const branchState = getFilterState(req.branchContext);
+    if (branchState.type === 'none') return res.json([]);
+    const bIds = reportBranchIds(branchState);
+    const data = await getPayrollSummary({ ...reportParams(req), branchIds: bIds });
     if (req.query.format === 'csv') {
       const fields = [
         { key: 'run_id', label: 'Run ID' }, { key: 'month', label: 'Month' }, { key: 'year', label: 'Year' },
@@ -1861,9 +2031,12 @@ router.get('/reports/summary', auth, hasPermission('payroll', 'run_reports'), as
 });
 
 // GET /api/payroll/reports/department
-router.get('/reports/department', auth, hasPermission('payroll', 'run_reports'), async (req, res) => {
+router.get('/reports/department', auth, hasPermission('payroll', 'run_reports'), withBranchContext, async (req, res) => {
   try {
-    const data = await getDepartmentSummary(reportParams(req));
+    const branchState = getFilterState(req.branchContext);
+    if (branchState.type === 'none') return res.json([]);
+    const bIds = reportBranchIds(branchState);
+    const data = await getDepartmentSummary({ ...reportParams(req), branchIds: bIds });
     if (req.query.format === 'csv') {
       const fields = [
         { key: 'department' }, { key: 'employee_count', label: 'Employees' },
@@ -1880,9 +2053,12 @@ router.get('/reports/department', auth, hasPermission('payroll', 'run_reports'),
 });
 
 // GET /api/payroll/reports/salary-register
-router.get('/reports/salary-register', auth, hasPermission('payroll', 'run_reports'), async (req, res) => {
+router.get('/reports/salary-register', auth, hasPermission('payroll', 'run_reports'), withBranchContext, async (req, res) => {
   try {
-    const data = await getSalaryRegister(reportParams(req));
+    const branchState = getFilterState(req.branchContext);
+    if (branchState.type === 'none') return res.json([]);
+    const bIds = reportBranchIds(branchState);
+    const data = await getSalaryRegister({ ...reportParams(req), branchIds: bIds });
     if (req.query.format === 'csv') {
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', 'attachment; filename="salary_register.csv"');
@@ -1893,9 +2069,12 @@ router.get('/reports/salary-register', auth, hasPermission('payroll', 'run_repor
 });
 
 // GET /api/payroll/reports/lop
-router.get('/reports/lop', auth, hasPermission('payroll', 'run_reports'), async (req, res) => {
+router.get('/reports/lop', auth, hasPermission('payroll', 'run_reports'), withBranchContext, async (req, res) => {
   try {
-    const data = await getLopReport(reportParams(req));
+    const branchState = getFilterState(req.branchContext);
+    if (branchState.type === 'none') return res.json([]);
+    const bIds = reportBranchIds(branchState);
+    const data = await getLopReport({ ...reportParams(req), branchIds: bIds });
     if (req.query.format === 'csv') {
       const fields = [
         { key: 'employee_id', label: 'Emp ID' }, { key: 'employee_name', label: 'Name' },
@@ -1914,9 +2093,12 @@ router.get('/reports/lop', auth, hasPermission('payroll', 'run_reports'), async 
 });
 
 // GET /api/payroll/reports/adjustments
-router.get('/reports/adjustments', auth, hasPermission('payroll', 'run_reports'), async (req, res) => {
+router.get('/reports/adjustments', auth, hasPermission('payroll', 'run_reports'), withBranchContext, async (req, res) => {
   try {
-    const data = await getAdjustmentSummary(reportParams(req));
+    const branchState = getFilterState(req.branchContext);
+    if (branchState.type === 'none') return res.json([]);
+    const bIds = reportBranchIds(branchState);
+    const data = await getAdjustmentSummary({ ...reportParams(req), branchIds: bIds });
     if (req.query.format === 'csv') {
       const fields = [
         { key: 'adjustment_category', label: 'Category' },
@@ -1942,6 +2124,14 @@ router.get('/bank-file/:runId', auth, hasPermission('payroll', 'bank_files'), as
     const oId   = orgId(req);
     const runId = parseInt(req.params.runId, 10);
     if (!runId) return res.status(400).json({ error: 'Invalid run ID' });
+
+    // FAIL-1 FIX: validate branch access before returning salary/bank data.
+    const { rows: runCheck } = await pool.query(
+      `SELECT branch_id FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
+      [runId, oId]
+    );
+    if (!runCheck.length) return res.status(404).json({ error: 'Payroll run not found' });
+    if (await assertRunBranchAccess(req, res, runCheck[0])) return;
 
     const format = req.query.format || 'generic';
     const result = await generateBankFile({ organizationId: oId, runId, format });

@@ -3,9 +3,12 @@ const router  = express.Router();
 const { db } = require('../../config/db');
 const { auth, adminOnly } = require('../../middleware/auth');
 const { orgId, getSettings, isWorkingDay } = require('../../utils/helpers');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { resolveEmployeeIds } = require('../../utils/branchFilter');
 
 // ─── Analytics ───────────────────────────────────────────────────────────────
-router.get('/', auth, adminOnly, async (req, res) => {
+// Root Admin: org-wide data. HR Admin: scoped to accessible branches.
+router.get('/', auth, adminOnly, withBranchContext, async (req, res) => {
   try {
     const now   = new Date();
     const year  = now.getFullYear();
@@ -18,14 +21,37 @@ router.get('/', auth, adminOnly, async (req, res) => {
     const d30ago = new Date(now); d30ago.setDate(d30ago.getDate() - 29);
     const from30 = d30ago.toISOString().split('T')[0];
 
+    // Resolve accessible employee IDs; null = org-wide (Root Admin)
+    const empIds = await resolveEmployeeIds(req.branchContext, orgId(req));
+    if (empIds !== null && empIds.length === 0) {
+      return res.json({
+        leaveByStatus: { approved: 0, pending: 0, rejected: 0, cancelled: 0 },
+        leaveByType: {}, attByStatus: { present: 0, on_leave: 0, absent: 0, wfh: 0, half_day: 0 },
+        month, year, weeklyTrend: [], monthlyTrend: [], avgPct7: 0, attendanceChange: 0,
+        deptDistribution: [], roleDistribution: [], leaveBalanceByType: [], totalDepts: 0, totalEmpCount: 0,
+      });
+    }
+
+    // Build filtered queries — apply employee ID filter when not org-wide
+    let leavesQ   = db.from('leaves').select('status, leave_type, leave_time').eq('organization_id', orgId(req));
+    let monthAttQ = db.from('attendance').select('status').eq('organization_id', orgId(req)).like('date', `${ym}-%`);
+    let last7AttQ = db.from('attendance').select('date, status').eq('organization_id', orgId(req)).gte('date', from7).lte('date', today7);
+    let empsCountQ = db.from('users').select('*', { count: 'exact', head: true }).eq('role', 'employee').eq('organization_id', orgId(req));
+    let allEmpsQ  = db.from('users').select('department, role, employment_type, position').eq('organization_id', orgId(req)).eq('role', 'employee').not('employee_status', 'in', '("inactive","resigned","terminated")');
+    let last30AttQ = db.from('attendance').select('date, status').eq('organization_id', orgId(req)).gte('date', from30).lte('date', today7);
+    const leavePoliciesQ = db.from('leave_policies').select('leave_type, annual_quota, label').eq('organization_id', orgId(req)).eq('active', true);
+
+    if (empIds !== null) {
+      leavesQ    = leavesQ.in('user_id', empIds);
+      monthAttQ  = monthAttQ.in('user_id', empIds);
+      last7AttQ  = last7AttQ.in('user_id', empIds);
+      empsCountQ = empsCountQ.in('id', empIds);
+      allEmpsQ   = allEmpsQ.in('id', empIds);
+      last30AttQ = last30AttQ.in('user_id', empIds);
+    }
+
     const [{ data: allLeaves }, { data: monthAtt }, { data: last7Att }, { count: totalEmps }, { data: allEmps }, { data: last30Att }, { data: leavePolicies }] = await Promise.all([
-      db.from('leaves').select('status, leave_type, leave_time').eq('organization_id', orgId(req)),
-      db.from('attendance').select('status').eq('organization_id', orgId(req)).like('date', `${ym}-%`),
-      db.from('attendance').select('date, status').eq('organization_id', orgId(req)).gte('date', from7).lte('date', today7),
-      db.from('users').select('*', { count: 'exact', head: true }).eq('role', 'employee').eq('organization_id', orgId(req)),
-      db.from('users').select('department, role, employment_type, position').eq('organization_id', orgId(req)).eq('role', 'employee').not('employee_status', 'in', '("inactive","resigned","terminated")'),
-      db.from('attendance').select('date, status').eq('organization_id', orgId(req)).gte('date', from30).lte('date', today7),
-      db.from('leave_policies').select('leave_type, annual_quota, label').eq('organization_id', orgId(req)).eq('active', true),
+      leavesQ, monthAttQ, last7AttQ, empsCountQ, allEmpsQ, last30AttQ, leavePoliciesQ,
     ]);
 
     const leaveByStatus = { approved: 0, pending: 0, rejected: 0, cancelled: 0 };

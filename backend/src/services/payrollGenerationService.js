@@ -288,7 +288,9 @@ async function generatePayrollRun({ organizationId, month, year, generatedBy, no
 
   if (m < 1 || m > 12)        throw new GenerationError(`Invalid month: ${m}`, 'INVALID_MONTH');
   if (y < 2000 || y > 2100)   throw new GenerationError(`Invalid year: ${y}`, 'INVALID_YEAR');
-  if (!generatedBy)            throw new GenerationError('generatedBy is required', 'INVALID_PARAMS');
+  // null is explicitly allowed — used by the scheduler for system-generated runs.
+  // undefined means the caller omitted the parameter entirely, which is always a bug.
+  if (generatedBy === undefined) throw new GenerationError('generatedBy is required', 'INVALID_PARAMS');
 
   // Block generating payroll for a future month (attendance data doesn't exist yet)
   const now    = new Date();
@@ -487,7 +489,9 @@ async function generatePayrollRun({ organizationId, month, year, generatedBy, no
   logAudit({
     oId,
     actorId:    generatedBy,
-    action:     isRegenerate ? 'payroll_regenerated' : 'payroll_generated',
+    action:     isRegenerate
+      ? 'payroll_regenerated'
+      : (generatedBy === null ? 'payroll_auto_generated' : 'payroll_generated'),
     entityType: 'payroll_run',
     entityId:   runId,
     newValues:  { month: m, year: y, branchId: branchId ?? null, status: finalStatus, successCount, errorCount },

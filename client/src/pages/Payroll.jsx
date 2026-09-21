@@ -3,7 +3,8 @@ import { Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
-import { apiGet, apiPost, apiPut } from '@/lib/api';
+import { useBranch } from '@/context/BranchContext';
+import { apiGet, apiPost, apiPut, apiDownload } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { Avatar } from '@/components/ui/Avatar';
 import { DollarSign, Plus, Play, ChevronDown, ChevronUp, Layers, Download } from 'lucide-react';
@@ -12,7 +13,7 @@ import { MONTHS } from '@/lib/utils';
 const fmt = n => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 0 });
 
 // ── Generate Payslip Modal ────────────────────────────────────────────────────
-function GenerateModal({ open, onClose }) {
+function GenerateModal({ open, onClose, selectedBranchId }) {
   const toast = useToast();
   const qc    = useQueryClient();
   const now   = new Date();
@@ -21,8 +22,9 @@ function GenerateModal({ open, onClose }) {
 
   // BUG_132 FIX: self-fetch active employees (with salary_id set) so the
   // dropdown populates independently of the parent pages employee cache.
+  // Include selectedBranchId in queryKey so branch switching shows the correct employees.
   const { data: _empForGenerate = [] } = useQuery({
-    queryKey: ['payroll-employees-modal'],
+    queryKey: ['payroll-employees-modal', selectedBranchId],
     queryFn: () => apiGet('/payroll/employees'),
     enabled: open,
   });
@@ -91,12 +93,7 @@ function PayslipCard({ ps, isAdmin, onPublish }) {
     e.stopPropagation();
     setDownloading(true);
     try {
-      const token = localStorage.getItem('lt_token');
-      const res = await fetch(`/api/payroll/payslips/${ps.id}/pdf`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) { alert('Download failed'); return; }
-      const blob = await res.blob();
+      const blob = await apiDownload(`/payroll/payslips/${ps.id}/pdf`);
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
       a.href     = url;
@@ -105,6 +102,8 @@ function PayslipCard({ ps, isAdmin, onPublish }) {
       a.click();
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(err.message || 'Download failed');
     } finally { setDownloading(false); }
   }
   const u        = ps.users || {};
@@ -232,6 +231,7 @@ function PayslipCard({ ps, isAdmin, onPublish }) {
 // ── Main Payroll Page ─────────────────────────────────────────────────────────
 export default function Payroll() {
   const { isAdmin, user } = useAuth();
+  const { selectedBranchId } = useBranch();
   const basePath = user?.role === 'root_admin' ? '/root' : '';
   const wrap = '';
   const toast = useToast();
@@ -241,8 +241,10 @@ export default function Payroll() {
   const [filterY,  setFilterY] = useState(now.getFullYear());
   const [filterM,  setFilterM] = useState(now.getMonth() + 1);
 
+  // Include selectedBranchId in admin queryKey so branch switching invalidates the cache.
+  // Employee self-service ('payslips-mine') is not branch-scoped and remains unchanged.
   const { data: _psData, isLoading } = useQuery({
-    queryKey: isAdmin ? ['payslips-all', filterM, filterY] : ['payslips-mine'],
+    queryKey: isAdmin ? ['payslips-all', filterM, filterY, selectedBranchId] : ['payslips-mine'],
     queryFn: () => isAdmin
       ? apiGet('/payroll/payslips/all', { month: String(filterM).padStart(2,'0'), year: filterY })
       : apiGet('/payroll/payslips'),
@@ -313,7 +315,7 @@ export default function Payroll() {
           ? <div className="empty-state"><DollarSign size={48} className="mx-auto mb-3 text-[#c7c4d8]" /><p className="font-semibold text-[#464555] mb-1">No payslips yet</p><p className="text-sm">{isAdmin ? 'Generate payslips for your employees' : 'Your payslips will appear here once generated'}</p></div>
           : <div className="flex flex-col gap-3">{payslips.map(ps => <PayslipCard key={ps.id} ps={ps} isAdmin={isAdmin} onPublish={id => publishMut.mutate(id)} />)}</div>}
 
-      {genOpen && <GenerateModal open onClose={() => setGenOpen(false)} />}
+      {genOpen && <GenerateModal open onClose={() => setGenOpen(false)} selectedBranchId={selectedBranchId} />}
     </div>
   );
 }

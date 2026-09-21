@@ -6,6 +6,7 @@ import {
   Users, IndianRupee, Lock, Unlock, Zap, Settings2, Info, Download,
 } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut } from '@/lib/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { cn, fmtDate } from '@/lib/utils';
@@ -746,13 +747,15 @@ function downloadSalaryStructuresCSV(employees) {
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function SalaryStructure() {
   const toast = useToast();
+  const { selectedBranchId } = useBranch();
   const [search,       setSearch]      = useState('');
   const [filterStatus, setFilterStatus]= useState('all');
   const [editEmp,      setEditEmp]     = useState(null);
   const [historyEmp,   setHistoryEmp]  = useState(null);
 
+  // Include selectedBranchId so branch switching loads the correct employees.
   const { data: employees = [], isLoading } = useQuery({
-    queryKey: ['payroll-employees'],
+    queryKey: ['payroll-employees', selectedBranchId],
     queryFn: () => apiGet('/payroll/employees'),
   });
 

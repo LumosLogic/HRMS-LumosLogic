@@ -4,13 +4,16 @@ const { db, pool } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { orgId } = require('../../utils/helpers');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { resolveEmployeeIds } = require('../../utils/branchFilter');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
 // GET /api/offboarding
-// Admins: see all offboarding tasks or filter by ?userId=X
-// Employees: see only their own tasks
-router.get('/', auth, async (req, res) => {
+// Root Admin: all tasks or filter by ?userId=X.
+// HR Admin: tasks for employees in accessible branches only.
+// Employees: their own tasks only.
+router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const { userId } = req.query;
@@ -22,7 +25,13 @@ router.get('/', auth, async (req, res) => {
       .order('order_index', { ascending: true });
 
     if (isAdmin(req.user.role)) {
-      if (userId) query = query.eq('user_id', parseInt(userId, 10));
+      if (userId) {
+        query = query.eq('user_id', parseInt(userId, 10));
+      } else {
+        const empIds = await resolveEmployeeIds(req.branchContext, oId);
+        if (empIds !== null && empIds.length === 0) return res.json([]);
+        if (empIds !== null) query = query.in('user_id', empIds);
+      }
     } else {
       query = query.eq('user_id', req.user.id);
     }
@@ -34,14 +43,23 @@ router.get('/', auth, async (req, res) => {
 });
 
 // GET /api/offboarding/overview — HR: grouped view per departing employee
-router.get('/overview', auth, hasPermission('exit', 'manage'), async (req, res) => {
+// Root Admin: all employees. HR Admin: employees in accessible branches only.
+router.get('/overview', auth, withBranchContext, hasPermission('exit', 'manage'), async (req, res) => {
   try {
     const oId = orgId(req);
-    const { data, error } = await db
+
+    const empIds = await resolveEmployeeIds(req.branchContext, oId);
+    if (empIds !== null && empIds.length === 0) return res.json([]);
+
+    let q = db
       .from('offboarding_checklists')
       .select('*, users!offboarding_checklists_user_id_fkey(id, name, avatar_color, position, department)')
       .eq('organization_id', oId)
       .order('created_at', { ascending: false });
+
+    if (empIds !== null) q = q.in('user_id', empIds);
+
+    const { data, error } = await q;
     if (error) throw error;
 
     const rows = data || [];

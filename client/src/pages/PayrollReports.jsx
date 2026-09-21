@@ -2,9 +2,11 @@ import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   BarChart3, Download, FileText, Building2, AlertTriangle,
-  PlusCircle, RefreshCw,
+  PlusCircle, RefreshCw, GitBranch,
 } from 'lucide-react';
-import { apiGet } from '@/lib/api';
+import { useBranch } from '@/context/BranchContext';
+import { useToast } from '@/context/ToastContext';
+import { apiGet, apiDownload } from '@/lib/api';
 import { MONTHS, cn } from '@/lib/utils';
 
 const fmt  = n => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 0 });
@@ -84,6 +86,10 @@ function StatusPill({ status }) {
 }
 
 export default function PayrollReports() {
+  const toast = useToast();
+  const { selectedBranchId, selectedBranch } = useBranch();
+  const branchLabel = selectedBranch?.name || 'All Branches';
+
   const now   = new Date();
   const [type,  setType]  = useState('summary');
   const [month, setMonth] = useState(now.getMonth() + 1);
@@ -93,7 +99,7 @@ export default function PayrollReports() {
   const cols         = COLUMNS[type] || [];
 
   const { data, isLoading, refetch } = useQuery({
-    queryKey: ['payroll-report', type, month, year],
+    queryKey: ['payroll-report', type, month, year, selectedBranchId],
     queryFn:  () => apiGet(activeReport.endpoint, {
       month: month || undefined,
       year:  year  || undefined,
@@ -103,16 +109,23 @@ export default function PayrollReports() {
 
   const rows = Array.isArray(data) ? data : [];
 
-  function downloadCsv() {
-    const url  = new URL(activeReport.endpoint, window.location.origin);
-    const base = `${window.location.origin}/api${activeReport.endpoint}`;
-    const params = new URLSearchParams({ format: 'csv' });
-    if (month) params.set('month', month);
-    if (year)  params.set('year',  year);
-    const link = document.createElement('a');
-    link.href  = `/api${activeReport.endpoint}?${params}`;
-    link.download = `${type}_${month || 'all'}_${year}.csv`;
-    link.click();
+  async function downloadCsv() {
+    try {
+      const qs = { format: 'csv' };
+      if (month) qs.month = month;
+      if (year)  qs.year  = year;
+      const blob = await apiDownload(activeReport.endpoint, qs);
+      const url  = URL.createObjectURL(blob);
+      const a    = document.createElement('a');
+      a.href     = url;
+      a.download = `${type}_${month || 'all'}_${year}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast(e.message, 'error');
+    }
   }
 
   return (
@@ -121,10 +134,14 @@ export default function PayrollReports() {
       <div className="page-header">
         <div>
           <div className="page-title">Payroll Reports</div>
-          <div className="page-subtitle">
+          <div className="page-subtitle flex items-center gap-2">
             <span className="text-[#777587]">Payroll</span>
             <span className="mx-1.5 text-[#c7c4d8]">›</span>
             Reports
+            <span className="inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full bg-[#f0f3ff] text-[#3525cd]">
+              <GitBranch size={10} />
+              {branchLabel}
+            </span>
           </div>
         </div>
         <div className="flex items-center gap-2">

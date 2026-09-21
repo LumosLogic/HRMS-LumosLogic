@@ -60,3 +60,28 @@ export async function apiUpload(ep, formData) {
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data;
 }
+
+// Authenticated blob download — sends Bearer token + X-Branch-Id, returns Blob.
+// Use for CSV exports, PDF downloads, or any binary endpoint.
+export async function apiDownload(ep, qs = {}) {
+  const token    = getToken();
+  const branchId = getBranchId();
+  const q = new URLSearchParams(qs).toString();
+  const res = await fetch('/api' + ep + (q ? '?' + q : ''), {
+    method: 'GET',
+    headers: {
+      ...(token    ? { Authorization: `Bearer ${token}` } : {}),
+      ...(branchId ? { 'X-Branch-Id': branchId }         : {}),
+    },
+  });
+  if (res.status === 401) {
+    window.dispatchEvent(new CustomEvent('auth:expired'));
+    throw new Error('Session expired. Please log in again.');
+  }
+  if (res.status === 403) throw new Error('You don\'t have permission to perform this action');
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return res.blob();
+}

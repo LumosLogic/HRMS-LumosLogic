@@ -3,6 +3,8 @@ const router     = express.Router();
 const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { getFilterState, resolveEmployeeIds } = require('../../utils/branchFilter');
 const cloudinary = require('cloudinary').v2;
 const multer     = require('multer');
 
@@ -15,16 +17,35 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 *
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
+// Branch access check for per-record admin operations.
+// Returns true if the admin's branch context allows access to the given employee.
+async function canAdminAccessUser(branchContext, userId, oId) {
+  const state = getFilterState(branchContext);
+  if (state.type === 'all')  return true;
+  if (state.type === 'none') return false;
+  const { data: u } = await db.from('users').select('branch_id')
+    .eq('id', userId).eq('organization_id', oId).maybeSingle();
+  const bid = u?.branch_id;
+  if (state.type === 'specific') return bid === state.branchId;
+  if (state.type === 'multi')    return state.branchIds.includes(bid);
+  return false;
+}
+
 // GET /api/expenses
-// Admins: see all org expenses.
-// Employees: see their own claims + any claims where they are the manager (for the approval queue).
-router.get('/', auth, async (req, res) => {
+// Root Admin: all org expenses.
+// HR Admin: only expenses from employees in accessible branches.
+// Employees: their own claims + claims where they are the manager.
+router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { status } = req.query;
     let q = db.from('expenses').select('*').eq('organization_id', oId).order('created_at', { ascending: false });
     if (!isAdmin(req.user.role)) {
       q = q.or(`user_id.eq.${req.user.id},manager_id.eq.${req.user.id}`);
+    } else {
+      const empIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (empIds !== null && empIds.length === 0) return res.json([]);
+      if (empIds !== null) q = q.in('user_id', empIds);
     }
     if (status) q = q.eq('status', status);
     const { data, error } = await q;
@@ -226,16 +247,17 @@ router.put('/:id/manager-approve', auth, async (req, res) => {
 });
 
 // PUT /api/expenses/:id/review
-router.put('/:id/review', auth, hasPermission('expenses', 'approve'), async (req, res) => {
+router.put('/:id/review', auth, withBranchContext, hasPermission('expenses', 'approve'), async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
     const { status, reviewer_notes } = req.body;
     if (!['approved', 'rejected'].includes(status)) return res.status(400).json({ error: 'Invalid status' });
     const oId = req.user.organization_id;
-    // Org-scoped pre-fetch prevents cross-tenant data read and spurious notifications
     const { data: exp } = await db.from('expenses')
       .select('user_id, title, amount').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
     if (!exp) return res.status(404).json({ error: 'Expense not found' });
+    if (!await canAdminAccessUser(req.branchContext, exp.user_id, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch" });
     const { data, error } = await db.from('expenses')
       .update({ status, reviewer_notes: reviewer_notes || '', reviewed_by: req.user.id, reviewed_at: new Date().toISOString() })
       .eq('id', req.params.id).eq('organization_id', oId).select().single();
@@ -249,14 +271,16 @@ router.put('/:id/review', auth, hasPermission('expenses', 'approve'), async (req
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// PUT /api/expenses/:id — owner can edit pending; admins can edit any
-router.put('/:id', auth, async (req, res) => {
+// PUT /api/expenses/:id — owner can edit pending; admins can edit any within their branch scope
+router.put('/:id', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
-    // Org-scoped pre-fetch prevents cross-tenant authz decisions and writes
     const { data: exp } = await db.from('expenses')
       .select('user_id, status').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
     if (!exp || (exp.user_id !== req.user.id && !isAdmin(req.user.role))) return res.status(403).json({ error: 'Forbidden' });
+    if (isAdmin(req.user.role) && exp.user_id !== req.user.id &&
+        !await canAdminAccessUser(req.branchContext, exp.user_id, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch" });
     if (exp.status !== 'pending' && !isAdmin(req.user.role)) return res.status(400).json({ error: 'Cannot edit a reviewed expense' });
     const { title, category, amount, expense_date, description, receipt_url, merchant_name, receipt_number } = req.body;
     const { data, error } = await db.from('expenses')
@@ -272,14 +296,16 @@ router.put('/:id', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// DELETE /api/expenses/:id — owner can delete pending; admins can delete any pending
-router.delete('/:id', auth, async (req, res) => {
+// DELETE /api/expenses/:id — owner can delete pending; admins can delete any pending within their branch scope
+router.delete('/:id', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
-    // Org-scoped pre-fetch and delete prevent cross-tenant deletion
     const { data: exp } = await db.from('expenses')
       .select('user_id, status').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
     if (!exp || (exp.user_id !== req.user.id && !isAdmin(req.user.role))) return res.status(403).json({ error: 'Forbidden' });
+    if (isAdmin(req.user.role) && exp.user_id !== req.user.id &&
+        !await canAdminAccessUser(req.branchContext, exp.user_id, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch" });
     if (exp.status !== 'pending') return res.status(400).json({ error: 'Cannot delete a reviewed expense' });
     const { error } = await db.from('expenses').delete().eq('id', req.params.id).eq('organization_id', oId);
     if (error) throw error;

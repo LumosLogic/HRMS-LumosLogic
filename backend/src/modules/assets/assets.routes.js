@@ -3,11 +3,16 @@ const router  = express.Router();
 const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { resolveEmployeeIds } = require('../../utils/branchFilter');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
 // GET /api/assets
-router.get('/', auth, async (req, res) => {
+// Root Admin: all org assets.
+// HR Admin: unassigned assets + assets assigned to employees in accessible branches.
+// Employees access their own assets via ?userId=<own-id>.
+router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { userId, status } = req.query;
@@ -15,8 +20,26 @@ router.get('/', auth, async (req, res) => {
       .select('*, assigned_user:users!assets_assigned_to_fkey(id, name, avatar_color, department)')
       .eq('organization_id', oId)
       .order('created_at', { ascending: false });
-    if (userId) q = q.eq('assigned_to', userId);
-    if (status)  q = q.eq('status', status);
+
+    if (userId) {
+      // Specific-employee view: admin must have branch access to that employee
+      if (isAdmin(req.user.role)) {
+        const empIds = await resolveEmployeeIds(req.branchContext, oId);
+        if (empIds !== null && !empIds.includes(parseInt(userId, 10)))
+          return res.status(403).json({ error: "You do not have access to this employee's branch" });
+      }
+      q = q.eq('assigned_to', userId);
+    } else if (isAdmin(req.user.role)) {
+      // Org-wide admin view: branch-filter assigned assets; unassigned always visible
+      const empIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (empIds !== null && empIds.length === 0) {
+        q = q.is('assigned_to', null);
+      } else if (empIds !== null) {
+        q = q.or(`assigned_to.is.null,assigned_to.in.(${empIds.join(',')})`);
+      }
+    }
+
+    if (status) q = q.eq('status', status);
     const { data, error } = await q;
     if (error) throw error;
     res.json(data || []);

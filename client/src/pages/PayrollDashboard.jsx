@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import {
   Users, IndianRupee, TrendingDown, AlertTriangle,
-  Clock, CheckCircle2, BarChart3, Building2, ArrowRight,
+  Clock, CheckCircle2, BarChart3, Building2, ArrowRight, GitBranch,
 } from 'lucide-react';
 import {
   Chart as ChartJS,
@@ -70,7 +70,8 @@ function MonthYearPicker({ month, year, onMonth, onYear }) {
 
 export default function PayrollDashboard() {
   const { user } = useAuth();
-  const { selectedBranchId } = useBranch();
+  const { selectedBranchId, selectedBranch } = useBranch();
+  const branchLabel = selectedBranch?.name || 'All Branches';
   const basePath = user?.role === 'root_admin' ? '/root' : '';
   const now      = new Date();
   const [month, setMonth] = useState(0); // 0 = all
@@ -175,10 +176,14 @@ export default function PayrollDashboard() {
       <div className="page-header">
         <div>
           <div className="page-title">Payroll Dashboard</div>
-          <div className="page-subtitle">
+          <div className="page-subtitle flex items-center gap-2">
             <span className="text-[#777587]">Payroll</span>
             <span className="mx-1.5 text-[#c7c4d8]">›</span>
             Dashboard
+            <span className="inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full bg-[#f0f3ff] text-[#3525cd]">
+              <GitBranch size={10} />
+              {branchLabel}
+            </span>
           </div>
         </div>
         <MonthYearPicker month={month} year={year} onMonth={setMonth} onYear={setYear} />
