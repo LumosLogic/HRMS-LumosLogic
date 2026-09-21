@@ -163,9 +163,33 @@ function getBranchJoinSQLFilter(state, paramOffset = 0, userAlias = 'u') {
   return { whereClause: 'AND 1=0', params: [] };
 }
 
+/**
+ * Returns true if the calling admin's branch context allows access to a specific
+ * employee (user). Uses the employee's users.branch_id to check access.
+ *
+ * Returns true  → admin can access this employee
+ * Returns false → access denied (different branch or no branch access)
+ *
+ * Errors propagate to the caller's outer try/catch.
+ */
+async function canAdminAccessUser(branchContext, userId, oId) {
+  const state = getFilterState(branchContext);
+  if (state.type === 'all')  return true;
+  if (state.type === 'none') return false;
+  const { rows } = await pool.query(
+    'SELECT branch_id FROM users WHERE id = $1 AND organization_id = $2 LIMIT 1',
+    [userId, oId]
+  );
+  const bid = rows[0]?.branch_id ?? null;
+  if (state.type === 'specific') return bid === state.branchId;
+  if (state.type === 'multi')    return state.branchIds.includes(bid);
+  return false;
+}
+
 module.exports = {
   getFilterState,
   resolveEmployeeIds,
   getBranchUserSQLFilter,
   getBranchJoinSQLFilter,
+  canAdminAccessUser,
 };

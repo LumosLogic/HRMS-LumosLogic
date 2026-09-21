@@ -7,7 +7,7 @@ const { clearUserCache } = require('../../services/permissionService');
 const { hasPermission } = require('../../middleware/permissions');
 const { orgId, getOrgContext } = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { getFilterState } = require('../../utils/branchFilter');
+const { getFilterState, canAdminAccessUser } = require('../../utils/branchFilter');
 const { sendMail, welcomeEmployeeHtml, preOnboardingRequestHtml, credentialsEmailHtml } = require('../../services/emailService');
 const crypto = require('crypto');
 const { initOnboarding } = require('../onboarding/onboardingService');
@@ -221,8 +221,14 @@ router.post('/', auth, hasPermission('employees', 'create'), async (req, res) =>
 });
 
 // ─── Employees: Update ────────────────────────────────────────────────────────
-router.put('/:id', auth, hasPermission('employees', 'edit'), async (req, res) => {
+router.put('/:id', auth, hasPermission('employees', 'edit'), withBranchContext, async (req, res) => {
   try {
+    // Branch isolation: admin must have access to the target employee's branch.
+    if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, parseInt(req.params.id), orgId(req)))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
+
     const {
       name, email, role, department, position, avatar_color, password, date_of_birth, department_ids,
       phone, personal_email, joining_date, employment_type, work_mode, employee_status, ctc, salary_effective_date,
@@ -502,9 +508,14 @@ router.put('/:id/statutory', auth, hasPermission('employees', 'edit'), async (re
 });
 
 // ─── Employees: Delete ────────────────────────────────────────────────────────
-router.delete('/:id', auth, hasPermission('employees', 'delete'), async (req, res) => {
+router.delete('/:id', auth, hasPermission('employees', 'delete'), withBranchContext, async (req, res) => {
   try {
     if (parseInt(req.params.id) === req.user.id) return res.status(400).json({ error: 'Cannot delete yourself' });
+    // Branch isolation: admin must have access to the target employee's branch.
+    if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, parseInt(req.params.id), orgId(req)))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
     // Org-scoped pre-fetch prevents reading PII from another org's employee for the audit log
     const { data: emp } = await db.from('users').select('name, email').eq('id', req.params.id).eq('organization_id', orgId(req)).maybeSingle();
     await db.from('users').delete().eq('id', req.params.id).eq('organization_id', orgId(req));
@@ -566,9 +577,14 @@ router.post('/me/avatar', auth, upload.single('file'), async (req, res) => {
 // ─── Send Login Credentials ───────────────────────────────────────────────────
 // Generates a secure temp password, stores it hashed, forces password change,
 // emails the employee, and logs the action. Safe to call multiple times.
-router.post('/:id/send-credentials', auth, async (req, res) => {
+router.post('/:id/send-credentials', auth, withBranchContext, async (req, res) => {
   try {
     if (!isAdminRole(req.user.role)) return res.status(403).json({ error: 'Admin access required' });
+    // Branch isolation: admin must have access to the target employee's branch.
+    if (req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, parseInt(req.params.id, 10), req.user.organization_id))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
     const oId   = orgId(req);
     const empId = parseInt(req.params.id, 10);
 

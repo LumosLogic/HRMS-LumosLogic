@@ -5,7 +5,7 @@ const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { generateEmployeePayslip } = require('../../services/payrollGenerationService');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
@@ -167,7 +167,7 @@ router.post('/', auth, async (req, res) => {
 });
 
 // PUT /api/regularization/:id/review
-router.put('/:id/review', auth, hasPermission('attendance', 'approve_regularization'), async (req, res) => {
+router.put('/:id/review', auth, hasPermission('attendance', 'approve_regularization'), withBranchContext, async (req, res) => {
   if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
   const oId = req.user.organization_id;
   const { status, reviewer_notes } = req.body;
@@ -192,6 +192,14 @@ router.put('/:id/review', auth, hasPermission('attendance', 'approve_regularizat
       return res.status(404).json({ error: 'Request not found' });
     }
     const reg = lockRes.rows[0];
+
+    // Branch isolation: admin must have access to this employee's branch.
+    if (req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, reg.user_id, oId)) {
+        await client.query('ROLLBACK');
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+      }
+    }
 
     // Idempotency guard — prevent double-approval
     if (reg.status !== 'pending') {
@@ -326,14 +334,20 @@ router.put('/:id/review', auth, hasPermission('attendance', 'approve_regularizat
 });
 
 // DELETE /api/regularization/:id — root_admin or admin can delete pending; root_admin can delete any
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', auth, withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
     const oId = req.user.organization_id;
 
     const { data: reg } = await db.from('attendance_regularization')
-      .select('id, status').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
+      .select('id, status, user_id').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
     if (!reg) return res.status(404).json({ error: 'Request not found' });
+
+    // Branch isolation: admin must have access to this employee's branch.
+    if (req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, reg.user_id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
 
     // HR admin can only delete pending; root admin can delete any
     if (req.user.role === 'admin' && reg.status !== 'pending') {

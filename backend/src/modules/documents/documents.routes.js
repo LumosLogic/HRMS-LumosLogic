@@ -6,7 +6,7 @@ const { hasPermission } = require('../../middleware/permissions');
 const cloudinary = require('cloudinary').v2;
 const multer     = require('multer');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -153,7 +153,7 @@ router.get('/', auth, withBranchContext, async (req, res) => {
 });
 
 // POST /api/documents/upload
-router.post('/upload', auth, hasPermission('documents', 'upload'), upload.single('file'), async (req, res) => {
+router.post('/upload', auth, hasPermission('documents', 'upload'), withBranchContext, upload.single('file'), async (req, res) => {
   try {
     const oId = req.user.organization_id;
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
@@ -168,6 +168,12 @@ router.post('/upload', auth, hasPermission('documents', 'upload'), upload.single
 
     const { name, category, userId, expiry_date, visibility, shared_with } = req.body;
     const targetId = isAdmin(req.user.role) && userId ? Number(userId) : req.user.id;
+
+    // Branch isolation: when admin uploads for another employee, validate branch access.
+    if (isAdmin(req.user.role) && userId && req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, targetId, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
 
     // Check for duplicate document (same name + category for same user)
     const { data: dupDoc } = await db.from('employee_documents')

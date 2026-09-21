@@ -7,7 +7,7 @@ const { flat, flatOne, orgId, getSettings, isWorkingDay, getRecipients, localDat
 const { sendMail, leaveAppliedHtml, leaveStatusHtml, leaveDeptApprovalHtml, leaveForwardedToRootHtml } = require('../../services/emailService');
 const engine = require('../../services/leaveWorkflowEngine');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -329,7 +329,7 @@ router.get('/date-check', auth, async (req, res) => {
 });
 
 // ─── ROUTE: GET /team ─────────────────────────────────────────────────────────
-router.get('/team', auth, async (req, res) => {
+router.get('/team', auth, withBranchContext, async (req, res) => {
   try {
     const { startDate, endDate, year, month } = req.query;
     let query = db.from('leaves')
@@ -347,6 +347,13 @@ router.get('/team', auth, async (req, res) => {
       query = query.lte('start_date', `${year}-12-31`).gte('end_date', `${year}-01-01`);
     }
 
+    // Branch isolation: admins only see their branch's employees' approved leaves.
+    if (isAdminRole(req.user.role)) {
+      const empIds = await resolveEmployeeIds(req.branchContext, orgId(req));
+      if (empIds !== null && empIds.length === 0) return res.json([]);
+      if (empIds !== null) query = query.in('user_id', empIds);
+    }
+
     const { data, error } = await query;
     if (error) throw new Error(error.message);
 
@@ -359,12 +366,18 @@ router.get('/team', auth, async (req, res) => {
 });
 
 // ─── ROUTE: GET /balance ──────────────────────────────────────────────────────
-router.get('/balance', auth, async (req, res) => {
+router.get('/balance', auth, withBranchContext, async (req, res) => {
   try {
     const oId   = orgId(req);
     const targetId = (isAdminRole(req.user.role) && req.query.userId)
       ? parseInt(req.query.userId)
       : req.user.id;
+
+    // Branch isolation: validate admin has access to the requested employee.
+    if (isAdminRole(req.user.role) && req.query.userId && req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, targetId, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
 
     // Fetch org's leave-year start month (1=Jan calendar year, 4=Apr financial year, etc.)
     const { data: orgRow } = await db.from('organizations')
@@ -439,13 +452,19 @@ router.get('/balance', auth, async (req, res) => {
 });
 
 // ─── ROUTE: GET /balance/adjustments ─────────────────────────────────────────
-router.get('/balance/adjustments', auth, async (req, res) => {
+router.get('/balance/adjustments', auth, withBranchContext, async (req, res) => {
   try {
     const oId      = orgId(req);
     const year     = parseInt(req.query.year) || new Date().getFullYear();
     const targetId = (isAdminRole(req.user.role) && req.query.userId)
       ? parseInt(req.query.userId)
       : req.user.id;
+
+    // Branch isolation: validate admin has access to the requested employee.
+    if (isAdminRole(req.user.role) && req.query.userId && req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, targetId, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
 
     const { data: rows, error } = await db
       .from('leave_balance_adjustments')
@@ -474,7 +493,7 @@ router.get('/balance/adjustments', auth, async (req, res) => {
 });
 
 // ─── ROUTE: POST /balance/adjust ──────────────────────────────────────────────
-router.post('/balance/adjust', auth, hasPermission('leaves', 'manage'), async (req, res) => {
+router.post('/balance/adjust', auth, hasPermission('leaves', 'manage'), withBranchContext, async (req, res) => {
   try {
     const oId   = orgId(req);
     const { userId, leave_type, delta, reason, year } = req.body;
@@ -491,6 +510,12 @@ router.post('/balance/adjust', auth, hasPermission('leaves', 'manage'), async (r
     const { data: emp } = await db.from('users')
       .select('id').eq('id', parseInt(userId)).eq('organization_id', oId).maybeSingle();
     if (!emp) return res.status(404).json({ error: 'Employee not found in this organisation' });
+
+    // Branch isolation: admin must have access to this employee's branch.
+    if (req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, parseInt(userId), oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
 
     const { data: policy } = await db.from('leave_policies')
       .select('id').eq('organization_id', oId).eq('leave_type', leave_type).eq('active', true).maybeSingle();
@@ -610,7 +635,7 @@ router.get('/is-dept-head', auth, async (req, res) => {
 });
 
 // ─── ROUTE: GET /pending-department (legacy + new flow) ───────────────────────
-router.get('/pending-department', auth, async (req, res) => {
+router.get('/pending-department', auth, withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
 
@@ -659,12 +684,21 @@ router.get('/pending-department', auth, async (req, res) => {
         .map(l => ({ ...l, _flow: 'new' }));
     } catch (_) { /* workflow tables not yet migrated — skip */ }
 
+    // Branch isolation: when called by an HR admin, filter to accessible branch employees.
+    if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
+      const empIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (empIds !== null) {
+        const empSet = new Set(empIds);
+        const combined = [...legacyLeaves, ...newDeptLeaves];
+        return res.json(combined.filter(l => empSet.has(l.user_id)));
+      }
+    }
     res.json([...legacyLeaves, ...newDeptLeaves]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ─── ROUTE: GET /pending-root (legacy + new flow) ─────────────────────────────
-router.get('/pending-root', auth, hasPermission('leaves', 'approve'), async (req, res) => {
+router.get('/pending-root', auth, hasPermission('leaves', 'approve'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
 
@@ -687,6 +721,15 @@ router.get('/pending-root', auth, hasPermission('leaves', 'approve'), async (req
         .map(l => ({ ...l, _flow: 'new' }));
     } catch (_) { /* workflow tables not yet migrated — skip */ }
 
+    // Branch isolation: filter leaves to only those from accessible-branch employees.
+    if (req.user.role !== 'root_admin') {
+      const empIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (empIds !== null) {
+        const empSet = new Set(empIds);
+        const combined = [...legacyLeaves, ...newAdminLeaves];
+        return res.json(combined.filter(l => empSet.has(l.user_id)));
+      }
+    }
     res.json([...legacyLeaves, ...newAdminLeaves]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1003,13 +1046,20 @@ router.put('/:id', auth, async (req, res) => {
 // ─── ROUTE: PUT /:id/approve — workflow-aware unified approve ─────────────────
 // Handles: new workflow (pending_approval), old pending_root, legacy pending.
 // For new workflow: advances to next level OR final-approves.
-router.put('/:id/approve', auth, async (req, res) => {
+router.put('/:id/approve', auth, withBranchContext, async (req, res) => {
   try {
     const oId     = orgId(req);
     const { orgName, orgEmail } = await getOrgContext(oId);
     const { data: leave } = await db.from('leaves')
       .select('*').eq('id', req.params.id).eq('organization_id', oId).single();
     if (!leave) return res.status(404).json({ error: 'Leave not found' });
+
+    // Branch isolation: admin must have access to the leave owner's branch.
+    if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, leave.user_id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
+
     if (leave.status === 'approved') {
       const { data } = await db.from('leaves').select('*, users!leaves_user_id_fkey(name, email)').eq('id', req.params.id).single();
       return res.json(flatOne(data));
@@ -1246,7 +1296,7 @@ router.put('/:id/approve', auth, async (req, res) => {
 });
 
 // ─── ROUTE: PUT /:id/reject — workflow-aware unified reject ───────────────────
-router.put('/:id/reject', auth, async (req, res) => {
+router.put('/:id/reject', auth, withBranchContext, async (req, res) => {
   try {
     const oId     = orgId(req);
     const { orgName, orgEmail } = await getOrgContext(oId);
@@ -1254,6 +1304,12 @@ router.put('/:id/reject', auth, async (req, res) => {
       .select('*').eq('id', req.params.id).eq('organization_id', oId).single();
     if (!leave) return res.status(404).json({ error: 'Leave not found' });
     if (leave.status === 'rejected') return res.json(leave);
+
+    // Branch isolation: admin must have access to the leave owner's branch.
+    if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, leave.user_id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
 
     const { remarks } = req.body || {};
 
@@ -1378,11 +1434,16 @@ router.post('/:id/withdraw', auth, async (req, res) => {
 });
 
 // ─── ROUTE: PUT /:id/revert ───────────────────────────────────────────────────
-router.put('/:id/revert', auth, async (req, res) => {
+router.put('/:id/revert', auth, withBranchContext, async (req, res) => {
   const { data: leave } = await db.from('leaves').select('*').eq('id', req.params.id).eq('organization_id', orgId(req)).maybeSingle();
   if (!leave) return res.status(404).json({ error: 'Leave not found' });
   if (!isAdminRole(req.user.role) && leave.user_id !== req.user.id) return res.status(403).json({ error: 'Not authorized' });
   if (leave.status !== 'approved') return res.status(400).json({ error: 'Only approved leaves can be reverted' });
+  // Branch isolation: admin must have access to the leave owner's branch.
+  if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
+    if (!await canAdminAccessUser(req.branchContext, leave.user_id, orgId(req)))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
+  }
 
   const settings     = await getSettings(orgId(req));
   const holidayDates = await fetchHolidaySet(orgId(req), leave.start_date, leave.end_date);
@@ -1418,11 +1479,16 @@ router.put('/:id/revert', auth, async (req, res) => {
 });
 
 // ─── ROUTE: DELETE /:id ───────────────────────────────────────────────────────
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', auth, withBranchContext, async (req, res) => {
   const { data: leave } = await db.from('leaves').select('*').eq('id', req.params.id).eq('organization_id', orgId(req)).maybeSingle();
   if (!leave) return res.status(404).json({ error: 'Leave not found' });
   if (!isAdminRole(req.user.role) && leave.user_id !== req.user.id) return res.status(403).json({ error: 'Not authorized' });
   if (leave.status === 'approved' && !isAdminRole(req.user.role)) return res.status(400).json({ error: 'Cannot cancel approved leave' });
+  // Branch isolation: admin must have access to the leave owner's branch.
+  if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
+    if (!await canAdminAccessUser(req.branchContext, leave.user_id, orgId(req)))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
+  }
 
   let workDates = [];
   if (leave.status === 'approved') {
@@ -1525,7 +1591,7 @@ router.post('/:id/department-approve', auth, async (req, res) => {
 });
 
 // ─── ROUTE: POST /:id/final-approve (LEGACY) ─────────────────────────────────
-router.post('/:id/final-approve', auth, hasPermission('leaves', 'approve'), async (req, res) => {
+router.post('/:id/final-approve', auth, hasPermission('leaves', 'approve'), withBranchContext, async (req, res) => {
   try {
     const oId     = orgId(req);
     const { orgName, orgEmail } = await getOrgContext(oId);
@@ -1533,6 +1599,11 @@ router.post('/:id/final-approve', auth, hasPermission('leaves', 'approve'), asyn
 
     const { data: leave } = await db.from('leaves').select('*').eq('id', leaveId).eq('organization_id', oId).maybeSingle();
     if (!leave) return res.status(404).json({ error: 'Leave not found' });
+    // Branch isolation: admin must have access to the leave owner's branch.
+    if (req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, leave.user_id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
     if (leave.status === 'approved') return res.json(leave);
     if (leave.status !== 'pending_root') {
       return res.status(400).json({ error: `Cannot final-approve a leave with status '${leave.status}'.`, current_status: leave.status });
@@ -1583,7 +1654,7 @@ router.post('/:id/final-approve', auth, hasPermission('leaves', 'approve'), asyn
 });
 
 // ─── ROUTE: POST /:id/final-reject (LEGACY) ──────────────────────────────────
-router.post('/:id/final-reject', auth, hasPermission('leaves', 'reject'), async (req, res) => {
+router.post('/:id/final-reject', auth, hasPermission('leaves', 'reject'), withBranchContext, async (req, res) => {
   try {
     const oId     = orgId(req);
     const { orgName, orgEmail } = await getOrgContext(oId);
@@ -1591,6 +1662,11 @@ router.post('/:id/final-reject', auth, hasPermission('leaves', 'reject'), async 
 
     const { data: leave } = await db.from('leaves').select('*').eq('id', leaveId).eq('organization_id', oId).maybeSingle();
     if (!leave) return res.status(404).json({ error: 'Leave not found' });
+    // Branch isolation: admin must have access to the leave owner's branch.
+    if (req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, leave.user_id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
     if (leave.status === 'rejected') return res.json(leave);
     if (!['pending_root', 'pending'].includes(leave.status)) {
       return res.status(400).json({ error: `Cannot reject a leave with status '${leave.status}'.`, current_status: leave.status });

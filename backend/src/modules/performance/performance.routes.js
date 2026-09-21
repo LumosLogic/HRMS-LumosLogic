@@ -4,7 +4,7 @@ const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
@@ -74,7 +74,7 @@ router.post('/goals', auth, hasPermission('performance', 'create'), async (req, 
 });
 
 // Admins can update all fields; employees can update all fields on their own goals.
-router.put('/goals/:id', auth, async (req, res) => {
+router.put('/goals/:id', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { title, description, category, target_date, review_cycle, progress, status } = req.body;
@@ -90,6 +90,12 @@ router.put('/goals/:id', auth, async (req, res) => {
 
     if (!isAdmin(req.user.role) && goal.user_id !== req.user.id) {
       return res.status(403).json({ error: 'Access denied' });
+    }
+
+    // Branch isolation: admin must have access to the goal owner's branch.
+    if (isAdmin(req.user.role) && req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, goal.user_id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
     }
 
     const cappedProgress = Math.min(100, Math.max(0, Number(progress) || 0));
@@ -124,7 +130,7 @@ router.put('/goals/:id', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.delete('/goals/:id', auth, async (req, res) => {
+router.delete('/goals/:id', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     // Employees can delete their own goals; admins can delete any goal (BUG_034 fix)
@@ -133,6 +139,11 @@ router.delete('/goals/:id', auth, async (req, res) => {
     if (!goal) return res.status(404).json({ error: 'Goal not found' });
     if (!isAdmin(req.user.role) && goal.user_id !== req.user.id) {
       return res.status(403).json({ error: 'You can only delete your own goals.' });
+    }
+    // Branch isolation: admin must have access to the goal owner's branch.
+    if (isAdmin(req.user.role) && req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, goal.user_id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
     }
     const { error } = await db.from('performance_goals').delete().eq('id', req.params.id).eq('organization_id', oId);
     if (error) throw error;
@@ -197,9 +208,16 @@ router.post('/reviews', auth, hasPermission('performance', 'create'), async (req
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/reviews/:id', auth, hasPermission('performance', 'manage'), async (req, res) => {
+router.put('/reviews/:id', auth, hasPermission('performance', 'manage'), withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
+    // Branch isolation: validate admin has access to the review owner's branch.
+    if (req.user.role !== 'root_admin') {
+      const { data: rev } = await db.from('performance_reviews')
+        .select('user_id').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
+      if (rev && !await canAdminAccessUser(req.branchContext, rev.user_id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
     const { self_rating, self_comments, manager_rating, manager_comments, strengths, improvements, final_rating, status } = req.body;
     const update = {};
     if (self_rating !== undefined)     { update.self_rating = self_rating; update.self_comments = self_comments || ''; }
@@ -219,7 +237,7 @@ router.put('/reviews/:id', auth, hasPermission('performance', 'manage'), async (
 });
 
 // ─── EHN_PR_005: Bulk Goal Creation ──────────────────────────────────────────
-router.post('/goals/bulk', auth, hasPermission('performance', 'create'), async (req, res) => {
+router.post('/goals/bulk', auth, hasPermission('performance', 'create'), withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = req.user.organization_id;
@@ -228,7 +246,18 @@ router.post('/goals/bulk', auth, hasPermission('performance', 'create'), async (
     if (!Array.isArray(user_ids) || user_ids.length === 0) return res.status(400).json({ error: 'user_ids array is required' });
     const cycle = review_cycle || String(new Date().getFullYear());
     const cappedProgress = Math.min(100, Math.max(0, Number(progress) || 0));
-    const rows = user_ids.map(uid => ({
+    // Branch isolation: filter user_ids to only accessible-branch employees.
+    let filteredUserIds = user_ids;
+    if (req.user.role !== 'root_admin') {
+      const empIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (empIds !== null) {
+        const empSet = new Set(empIds.map(Number));
+        filteredUserIds = user_ids.filter(id => empSet.has(Number(id)));
+        if (filteredUserIds.length === 0)
+          return res.status(403).json({ error: 'None of the specified employees are in your accessible branches.' });
+      }
+    }
+    const rows = filteredUserIds.map(uid => ({
       user_id: uid, title: title.trim(), description: description || '',
       category: category || 'individual', target_date: target_date || null,
       review_cycle: cycle, created_by: req.user.id, organization_id: oId,

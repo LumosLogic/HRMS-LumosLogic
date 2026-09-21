@@ -6,7 +6,7 @@ const { auth, isAdminRole } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { localDateStr, localTimeStr, flat, orgId, toMinutes, getSettings, isWorkingDay } = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
 
 // ── One-time table bootstrap for attendance audit log ─────────────────────────
 pool.query(`
@@ -249,8 +249,14 @@ router.post('/break-out', auth, async (req, res) => {
 });
 
 // ─── Attendance: Admin Edit (by ID) ──────────────────────────────────────────
-router.put('/:id', auth, hasPermission('attendance', 'edit'), async (req, res) => {
+router.put('/:id', auth, hasPermission('attendance', 'edit'), withBranchContext, async (req, res) => {
   try {
+    // Branch isolation: verify the attendance record's owner is in an accessible branch.
+    if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
+      const { data: att } = await db.from('attendance').select('user_id').eq('id', req.params.id).maybeSingle();
+      if (att && !await canAdminAccessUser(req.branchContext, att.user_id, orgId(req)))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
     const { check_in, check_out, status, is_late, is_early_exit, notes } = req.body;
     // gross_hours = raw span between check_in and check_out (no break deduction)
     const gross_hours = check_in && check_out
@@ -272,10 +278,15 @@ router.put('/:id', auth, hasPermission('attendance', 'edit'), async (req, res) =
 });
 
 // ─── Attendance: Mark Absent ──────────────────────────────────────────────────
-router.post('/mark-absent', auth, hasPermission('attendance', 'edit'), async (req, res) => {
+router.post('/mark-absent', auth, hasPermission('attendance', 'edit'), withBranchContext, async (req, res) => {
   try {
     const { user_id, date } = req.body;
     if (!user_id || !date) return res.status(400).json({ error: 'user_id and date required' });
+    // Branch isolation.
+    if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, parseInt(user_id), orgId(req)))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
     const { error } = await db.from('attendance')
       .upsert(
         { user_id: parseInt(user_id), date, status: 'absent', organization_id: orgId(req) },
@@ -288,10 +299,15 @@ router.post('/mark-absent', auth, hasPermission('attendance', 'edit'), async (re
 
 // ─── Attendance: Admin Create or Full Edit ────────────────────────────────────
 // Admin create or fully edit any attendance record
-router.post('/admin-edit', auth, hasPermission('attendance', 'edit'), async (req, res) => {
+router.post('/admin-edit', auth, hasPermission('attendance', 'edit'), withBranchContext, async (req, res) => {
   try {
     const { user_id, date, check_in, check_out, status, is_late, is_early_exit, notes } = req.body;
     if (!user_id || !date) return res.status(400).json({ error: 'user_id and date required' });
+    // Branch isolation.
+    if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, parseInt(user_id), orgId(req)))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
     const gross_hours = check_in && check_out
       ? Math.max(0, (toMinutes(check_out) - toMinutes(check_in)) / 60) : 0;
     const { data, error } = await db.from('attendance')
@@ -316,10 +332,15 @@ router.post('/admin-edit', auth, hasPermission('attendance', 'edit'), async (req
 
 // ─── Attendance: Mark Late/Early (POST — create/update) ──────────────────────
 // Mark late come / early exit for an employee on a given date
-router.post('/late-early', auth, hasPermission('attendance', 'edit'), async (req, res) => {
+router.post('/late-early', auth, hasPermission('attendance', 'edit'), withBranchContext, async (req, res) => {
   try {
     const { user_id, date, late_come, late_come_time, early_exit, early_exit_time } = req.body;
     if (!user_id || !date) return res.status(400).json({ error: 'user_id and date are required' });
+    // Branch isolation.
+    if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, user_id, orgId(req)))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
 
     // Fetch existing record for the day
     const { data: existing } = await db.from('attendance')
@@ -359,13 +380,26 @@ router.post('/late-early', auth, hasPermission('attendance', 'edit'), async (req
 
 // ─── Attendance: Late/Early List (GET) ────────────────────────────────────────
 // Return attendance records where is_late or is_early_exit, joined with user info
-router.get('/late-early', auth, async (req, res) => {
+router.get('/late-early', auth, withBranchContext, async (req, res) => {
   try {
     const oid = orgId(req);
-    // Scope to employees only within this org
-    const { data: empRows } = await db.from('users').select('id')
-      .eq('role', 'employee').eq('organization_id', oid);
-    const empIds = (empRows || []).map(e => e.id);
+    let empIds;
+    if (!isAdminRole(req.user.role)) {
+      // Employee — will be further restricted by user_id filter below
+      empIds = [req.user.id];
+    } else {
+      // Admin — apply branch filter
+      const branchEmpIds = await resolveEmployeeIds(req.branchContext, oid);
+      if (branchEmpIds !== null && branchEmpIds.length === 0) return res.json([]);
+      if (branchEmpIds !== null) {
+        empIds = branchEmpIds;
+      } else {
+        // Org-wide (root admin): get all org employees
+        const { data: empRows } = await db.from('users').select('id')
+          .eq('role', 'employee').eq('organization_id', oid);
+        empIds = (empRows || []).map(e => e.id);
+      }
+    }
 
     let query = db.from('attendance')
       .select('*, users(name, email, avatar_color, department)')
@@ -377,9 +411,6 @@ router.get('/late-early', auth, async (req, res) => {
     // Optional date filter
     if (req.query.date) query = query.eq('date', req.query.date);
 
-    // Employees see only their own records
-    if (!isAdminRole(req.user.role)) query = query.eq('user_id', req.user.id);
-
     const { data, error } = await query;
     if (error) throw new Error(error.message);
 
@@ -390,13 +421,19 @@ router.get('/late-early', auth, async (req, res) => {
 
 // ─── Attendance: Update Late/Early Flags (PUT by ID) ─────────────────────────
 // Update late/early flags on an existing attendance record
-router.put('/late-early/:id', auth, hasPermission('attendance', 'edit'), async (req, res) => {
+router.put('/late-early/:id', auth, hasPermission('attendance', 'edit'), withBranchContext, async (req, res) => {
   try {
     const { late_come, late_come_time, early_exit, early_exit_time } = req.body;
 
     const { data: existing, error: fetchErr } = await db.from('attendance')
       .select('*').eq('id', req.params.id).single();
     if (fetchErr || !existing) return res.status(404).json({ error: 'Record not found' });
+
+    // Branch isolation.
+    if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, existing.user_id, orgId(req)))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
 
     const updates = {};
     if (late_come === 'yes' && late_come_time)   { updates.is_late       = true;  updates.check_in  = late_come_time;  }
@@ -415,11 +452,17 @@ router.put('/late-early/:id', auth, hasPermission('attendance', 'edit'), async (
 
 // ─── Attendance: Clear Late/Early Flags (DELETE by ID) ───────────────────────
 // Clear late/early flags from an attendance record
-router.delete('/late-early/:id', auth, hasPermission('attendance', 'edit'), async (req, res) => {
+router.delete('/late-early/:id', auth, hasPermission('attendance', 'edit'), withBranchContext, async (req, res) => {
   try {
     const { data: existing } = await db.from('attendance')
       .select('*').eq('id', req.params.id).single();
     if (!existing) return res.status(404).json({ error: 'Record not found' });
+
+    // Branch isolation.
+    if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, existing.user_id, orgId(req)))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
 
     await db.from('attendance')
       .update({ is_late: false, is_early_exit: false, check_in: null, check_out: null })

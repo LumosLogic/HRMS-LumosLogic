@@ -5,7 +5,7 @@ const { auth } = require('../../middleware/auth');
 const { hasPermission, hasAnyPermission } = require('../../middleware/permissions');
 const { orgId } = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { getFilterState, getBranchUserSQLFilter, resolveEmployeeIds } = require('../../utils/branchFilter');
+const { getFilterState, getBranchUserSQLFilter, resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
 const { validateBranchAccess } = require('../../services/branchService');
 const { calculatePayroll, PayrollError } = require('../../services/payrollEngine');
 const {
@@ -23,12 +23,17 @@ const { sendPayslipsBatch } = require('../../services/payrollEmailService');
 // Runs the payroll engine for one employee/period. No writes. Returns the full
 // calculation breakdown so HR can verify before generating the payslip.
 // Moved before all other routes so it doesn't collide with parameterized paths.
-router.post('/calculate-preview', auth, hasPermission('payroll', 'view'), async (req, res) => {
+router.post('/calculate-preview', auth, hasPermission('payroll', 'view'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const { user_id, month, year } = req.body;
     if (!user_id || !month || !year) {
       return res.status(400).json({ error: 'user_id, month, and year are required' });
+    }
+    // Branch isolation: validate admin has access to this employee's branch.
+    if (isAdmin(req.user.role) && req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, parseInt(user_id, 10), oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
     }
     const result = await calculatePayroll({
       organizationId: oId,
@@ -353,10 +358,12 @@ router.get('/employees', auth, hasPermission('payroll', 'manage_structures'), wi
 });
 
 // GET /api/payroll/salary-structures — list active salary per employee
-router.get('/salary-structures', auth, hasPermission('payroll', 'manage_structures'), async (req, res) => {
+router.get('/salary-structures', auth, hasPermission('payroll', 'manage_structures'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const { userId } = req.query;
+    const branchState = getFilterState(req.branchContext);
+    if (branchState.type === 'none') return res.json([]);
 
     let query = db.from('employee_salary_structures')
       .select('*, users!employee_salary_structures_user_id_fkey(id, name, email, department, position, avatar_color, employee_id)')
@@ -364,7 +371,19 @@ router.get('/salary-structures', auth, hasPermission('payroll', 'manage_structur
       .is('effective_to', null)
       .order('created_at', { ascending: false });
 
-    if (userId) query = query.eq('user_id', parseInt(userId));
+    if (userId) {
+      // Specific employee — validate branch access.
+      if (req.user.role !== 'root_admin') {
+        if (!await canAdminAccessUser(req.branchContext, parseInt(userId), oId))
+          return res.status(403).json({ error: "You do not have access to this employee's branch." });
+      }
+      query = query.eq('user_id', parseInt(userId));
+    } else if (branchState.type !== 'all') {
+      // Org-wide list — apply branch filter for limited HR admins.
+      const empIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (empIds !== null && empIds.length === 0) return res.json([]);
+      if (empIds !== null) query = query.in('user_id', empIds);
+    }
 
     const { data, error } = await query;
     if (error) throw error;
@@ -383,7 +402,7 @@ router.get('/salary-structures', auth, hasPermission('payroll', 'manage_structur
 });
 
 // GET /api/payroll/salary-structures/history/:userId — all versions for one employee
-router.get('/salary-structures/history/:userId', auth, hasPermission('payroll', 'manage_structures'), async (req, res) => {
+router.get('/salary-structures/history/:userId', auth, hasPermission('payroll', 'manage_structures'), withBranchContext, async (req, res) => {
   try {
     const oId    = orgId(req);
     const userId = parseInt(req.params.userId);
@@ -393,6 +412,12 @@ router.get('/salary-structures/history/:userId', auth, hasPermission('payroll', 
     const { data: emp } = await db.from('users')
       .select('id').eq('id', userId).eq('organization_id', oId).maybeSingle();
     if (!emp) return res.status(404).json({ error: 'Employee not found' });
+
+    // Branch isolation: validate admin has access to this employee's branch.
+    if (req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, userId, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
 
     const { data, error } = await db.from('employee_salary_structures')
       .select('*, creator:users!employee_salary_structures_created_by_fkey(name)')
@@ -410,7 +435,7 @@ router.get('/salary-structures/history/:userId', auth, hasPermission('payroll', 
 });
 
 // GET /api/payroll/salary-structures/:id — single version
-router.get('/salary-structures/:id', auth, hasPermission('payroll', 'manage_structures'), async (req, res) => {
+router.get('/salary-structures/:id', auth, hasPermission('payroll', 'manage_structures'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const id  = parseInt(req.params.id);
@@ -422,12 +447,18 @@ router.get('/salary-structures/:id', auth, hasPermission('payroll', 'manage_stru
     if (error) throw error;
     if (!data) return res.status(404).json({ error: 'Salary structure not found' });
 
+    // Branch isolation: validate admin has access to this salary structure's owner.
+    if (req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, data.user_id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
+
     res.json({ ...data, user_name: data.users?.name, users: undefined });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // POST /api/payroll/salary-structures — create new salary version (closes previous active)
-router.post('/salary-structures', auth, hasPermission('payroll', 'manage_structures'), async (req, res) => {
+router.post('/salary-structures', auth, hasPermission('payroll', 'manage_structures'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const {
@@ -449,6 +480,12 @@ router.post('/salary-structures', auth, hasPermission('payroll', 'manage_structu
     const { data: employee } = await db.from('users')
       .select('id, name').eq('id', user_id).eq('organization_id', oId).maybeSingle();
     if (!employee) return res.status(404).json({ error: 'Employee not found in this organization' });
+
+    // Branch isolation: admin must have access to this employee's branch.
+    if (req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, user_id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
 
     const gross_salary =
       Number(basic) + Number(hra) + Number(da) +
@@ -554,7 +591,7 @@ router.post('/salary-structures', auth, hasPermission('payroll', 'manage_structu
 // PUT /api/payroll/salary-structures/:id — in-place correction of the current active structure.
 // Does NOT create a new version or change effective_from / effective_to.
 // Use when salary components were entered incorrectly and need to be fixed for the current period.
-router.put('/salary-structures/:id', auth, hasPermission('payroll', 'manage_structures'), async (req, res) => {
+router.put('/salary-structures/:id', auth, hasPermission('payroll', 'manage_structures'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const id  = parseInt(req.params.id, 10);
@@ -586,6 +623,12 @@ router.put('/salary-structures/:id', auth, hasPermission('payroll', 'manage_stru
       return res.status(404).json({
         error: 'Active salary structure not found. Only the current active record can be corrected in-place.',
       });
+    }
+
+    // Branch isolation: admin must have access to this salary structure's owner.
+    if (req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, existing[0].user_id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
     }
 
     // Validate provided effective_from is a real date
@@ -1523,7 +1566,7 @@ const {
 const { generateBankFile, SUPPORTED_FORMATS } = require('../../services/payrollBankService');
 
 // GET /api/payroll/adjustments
-router.get('/adjustments', auth, hasPermission('payroll', 'manage_adjustments'), async (req, res) => {
+router.get('/adjustments', auth, hasPermission('payroll', 'manage_adjustments'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const { runId, userId, month, year } = req.query;
@@ -1539,6 +1582,12 @@ router.get('/adjustments', auth, hasPermission('payroll', 'manage_adjustments'),
       if (await assertRunBranchAccess(req, res, runCheck[0])) return;
     }
 
+    // Branch isolation: when filtering by userId without a runId, validate branch access to that employee.
+    if (!runId && userId) {
+      if (!await canAdminAccessUser(req.branchContext, parseInt(userId, 10), oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
+
     const rows = await listAdjustments({
       organizationId: oId,
       payrollRunId: runId ? parseInt(runId, 10) : null,
@@ -1551,7 +1600,7 @@ router.get('/adjustments', auth, hasPermission('payroll', 'manage_adjustments'),
 });
 
 // POST /api/payroll/adjustments
-router.post('/adjustments', auth, hasPermission('payroll', 'manage_adjustments'), async (req, res) => {
+router.post('/adjustments', auth, hasPermission('payroll', 'manage_adjustments'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const {
@@ -1574,6 +1623,12 @@ router.post('/adjustments', auth, hasPermission('payroll', 'manage_adjustments')
       );
       if (!runCheck.length) return res.status(404).json({ error: 'Payroll run not found' });
       if (await assertRunBranchAccess(req, res, runCheck[0])) return;
+    }
+
+    // Branch isolation: when no run is associated, validate branch access via the employee.
+    if (!payroll_run_id && req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, parseInt(user_id, 10), oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
     }
 
     const adj = await createAdjustment({

@@ -4,7 +4,7 @@ const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { getFilterState, resolveEmployeeIds } = require('../../utils/branchFilter');
+const { getFilterState, resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
 const cloudinary = require('cloudinary').v2;
 const multer     = require('multer');
 
@@ -16,20 +16,6 @@ cloudinary.config({
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
-
-// Branch access check for per-record admin operations.
-// Returns true if the admin's branch context allows access to the given employee.
-async function canAdminAccessUser(branchContext, userId, oId) {
-  const state = getFilterState(branchContext);
-  if (state.type === 'all')  return true;
-  if (state.type === 'none') return false;
-  const { data: u } = await db.from('users').select('branch_id')
-    .eq('id', userId).eq('organization_id', oId).maybeSingle();
-  const bid = u?.branch_id;
-  if (state.type === 'specific') return bid === state.branchId;
-  if (state.type === 'multi')    return state.branchIds.includes(bid);
-  return false;
-}
 
 // GET /api/expenses
 // Root Admin: all org expenses.
