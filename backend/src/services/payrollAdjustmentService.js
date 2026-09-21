@@ -186,13 +186,15 @@ async function deleteAdjustment({ organizationId, adjustmentId, deletedBy, ip })
   });
 }
 
-async function listAdjustments({ organizationId, payrollRunId, userId, month, year }) {
+async function listAdjustments({ organizationId, payrollRunId, userId, userIds, month, year }) {
   const oId    = Number(organizationId);
   const conds  = ['pa.organization_id = $1', 'pa.deleted_at IS NULL'];
   const params = [oId];
 
   if (payrollRunId) { conds.push(`pa.payroll_run_id = $${params.length + 1}`); params.push(payrollRunId); }
   if (userId)       { conds.push(`pa.user_id = $${params.length + 1}`);        params.push(userId); }
+  // Branch-scope filter: restrict to a specific set of employee IDs (from resolveEmployeeIds)
+  if (userIds && userIds.length > 0) { conds.push(`pa.user_id = ANY($${params.length + 1}::int[])`); params.push(userIds); }
   if (month)        { conds.push(`pa.effective_month = $${params.length + 1}`); params.push(month); }
   if (year)         { conds.push(`pa.effective_year  = $${params.length + 1}`); params.push(year); }
 

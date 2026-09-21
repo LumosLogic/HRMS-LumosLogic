@@ -1588,12 +1588,23 @@ router.get('/adjustments', auth, hasPermission('payroll', 'manage_adjustments'),
         return res.status(403).json({ error: "You do not have access to this employee's branch." });
     }
 
+    // Branch isolation: when neither runId nor userId is provided, scope to accessible employees.
+    // Root Admin (state 'all') → branchUserIds = null → no additional filter.
+    // Limited HR → branchUserIds = [ids…] or [] (empty = no data).
+    let branchUserIds = null;
+    if (!runId && !userId) {
+      const empIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (empIds !== null && empIds.length === 0) return res.json([]);
+      branchUserIds = empIds; // null for root admin (no-op), [ids] for limited HR
+    }
+
     const rows = await listAdjustments({
       organizationId: oId,
-      payrollRunId: runId ? parseInt(runId, 10) : null,
-      userId:       userId ? parseInt(userId, 10) : null,
-      month:        month  ? parseInt(month,  10) : null,
-      year:         year   ? parseInt(year,   10) : null,
+      payrollRunId: runId   ? parseInt(runId,   10) : null,
+      userId:       userId  ? parseInt(userId,  10) : null,
+      userIds:      branchUserIds,
+      month:        month   ? parseInt(month,   10) : null,
+      year:         year    ? parseInt(year,    10) : null,
     });
     res.json(rows);
   } catch (err) { res.status(err.status || 500).json({ error: err.message }); }

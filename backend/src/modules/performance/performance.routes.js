@@ -193,12 +193,17 @@ router.get('/reviews', auth, withBranchContext, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/reviews', auth, hasPermission('performance', 'create'), async (req, res) => {
+router.post('/reviews', auth, hasPermission('performance', 'create'), withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = req.user.organization_id;
     const { user_id, review_cycle, review_type } = req.body;
     if (!user_id || !review_cycle) return res.status(400).json({ error: 'user_id and review_cycle required' });
+    // Branch isolation: admin must have access to the target employee's branch.
+    if (req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, user_id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
     const { data, error } = await db.from('performance_reviews')
       .insert({ user_id, review_cycle, review_type: review_type || 'annual', reviewer_id: req.user.id, status: 'pending', organization_id: oId })
       .select().single();

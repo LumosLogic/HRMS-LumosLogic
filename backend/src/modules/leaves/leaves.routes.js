@@ -1303,13 +1303,15 @@ router.put('/:id/reject', auth, withBranchContext, async (req, res) => {
     const { data: leave } = await db.from('leaves')
       .select('*').eq('id', req.params.id).eq('organization_id', oId).single();
     if (!leave) return res.status(404).json({ error: 'Leave not found' });
-    if (leave.status === 'rejected') return res.json(leave);
 
     // Branch isolation: admin must have access to the leave owner's branch.
+    // Check before the idempotency shortcut so rejected leaves are not leaked cross-branch.
     if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
       if (!await canAdminAccessUser(req.branchContext, leave.user_id, oId))
         return res.status(403).json({ error: "You do not have access to this employee's branch." });
     }
+
+    if (leave.status === 'rejected') return res.json(leave);
 
     const { remarks } = req.body || {};
 
