@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Activity, RefreshCw, Layers, LogIn, UserPlus, UserMinus,
   FileText, Calendar, DollarSign, ClipboardList, Trash2,
   CheckCircle2, XCircle, Edit3, PlusCircle, AlertCircle,
-  ArrowLeft, Users, Building2, Crown,
+  ArrowLeft, Users, Building2, ChevronLeft, ChevronRight,
 } from 'lucide-react';
 import { paGet } from '@/lib/platformApi';
 
@@ -113,12 +113,72 @@ function OrgCard({ org, onSelect }) {
   );
 }
 
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+
+function Pagination({ page, totalPages, onPage }) {
+  if (totalPages <= 1) return null;
+
+  const pages = [];
+  const delta = 2;
+  for (let i = 1; i <= totalPages; i++) {
+    if (i === 1 || i === totalPages || (i >= page - delta && i <= page + delta)) {
+      pages.push(i);
+    } else if (pages[pages.length - 1] !== '...') {
+      pages.push('...');
+    }
+  }
+
+  return (
+    <div className="flex items-center justify-center gap-1 pt-1">
+      <button
+        onClick={() => onPage(page - 1)} disabled={page === 1}
+        className="w-8 h-8 flex items-center justify-center rounded-lg border border-[#e7eefe] bg-white text-[#464555] hover:bg-[#f0f3ff] hover:text-[#3525cd] disabled:opacity-30 disabled:cursor-not-allowed transition-all">
+        <ChevronLeft size={14} />
+      </button>
+      {pages.map((p, i) =>
+        p === '...' ? (
+          <span key={`ellipsis-${i}`} className="w-8 h-8 flex items-center justify-center text-xs text-[#c7c4d8]">…</span>
+        ) : (
+          <button key={p} onClick={() => onPage(p)}
+            className={`w-8 h-8 flex items-center justify-center rounded-lg text-xs font-bold border transition-all ${
+              p === page
+                ? 'bg-[#3525cd] text-white border-[#3525cd]'
+                : 'bg-white text-[#464555] border-[#e7eefe] hover:bg-[#f0f3ff] hover:text-[#3525cd]'
+            }`}>
+            {p}
+          </button>
+        )
+      )}
+      <button
+        onClick={() => onPage(page + 1)} disabled={page === totalPages}
+        className="w-8 h-8 flex items-center justify-center rounded-lg border border-[#e7eefe] bg-white text-[#464555] hover:bg-[#f0f3ff] hover:text-[#3525cd] disabled:opacity-30 disabled:cursor-not-allowed transition-all">
+        <ChevronRight size={14} />
+      </button>
+    </div>
+  );
+}
+
 function OrgLogs({ org, onBack }) {
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(25);
+
   const { data: events = [], isLoading, refetch, isFetching } = useQuery({
     queryKey: ['org-specific-logs', org.id],
-    queryFn: () => paGet('/activity/org-logs', { orgId: org.id, limit: 200 }),
+    queryFn: () => paGet('/activity/org-logs', { orgId: org.id, limit: 500 }),
     refetchInterval: 30000,
   });
+
+  const totalPages = Math.max(1, Math.ceil(events.length / pageSize));
+  const safePage = Math.min(page, totalPages);
+  const paginated = useMemo(
+    () => events.slice((safePage - 1) * pageSize, safePage * pageSize),
+    [events, safePage, pageSize]
+  );
+
+  function handlePageSize(val) {
+    setPageSize(Number(val));
+    setPage(1);
+  }
 
   return (
     <div className="space-y-5">
@@ -128,13 +188,11 @@ function OrgLogs({ org, onBack }) {
             className="flex items-center gap-1.5 text-xs font-bold text-[#464555] px-3 py-2 rounded-xl border border-[#c7c4d8] bg-white hover:bg-[#f0f3ff] hover:text-[#3525cd] transition-all">
             <ArrowLeft size={13} /> Back
           </button>
-          <div>
-            <div className="flex items-center gap-2">
-              <OrgInitials name={org.name} />
-              <div>
-                <h1 className="text-xl font-black text-[#151c27] tracking-tight">{org.name}</h1>
-                <p className="text-xs text-[#777587]">All system activity logs</p>
-              </div>
+          <div className="flex items-center gap-2">
+            <OrgInitials name={org.name} />
+            <div>
+              <h1 className="text-xl font-black text-[#151c27] tracking-tight">{org.name}</h1>
+              <p className="text-xs text-[#777587]">All system activity logs</p>
             </div>
           </div>
         </div>
@@ -163,13 +221,39 @@ function OrgLogs({ org, onBack }) {
 
       {events.length > 0 && (
         <div className="bg-white rounded-2xl border border-[#e7eefe] overflow-hidden">
+          {/* Table header: total count + page-size selector */}
           <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#f0f3ff] bg-[#f9f9ff]">
-            <span className="text-xs font-bold text-[#464555]">{events.length} events</span>
+            <span className="text-xs font-bold text-[#464555]">
+              {events.length} total events
+              {totalPages > 1 && (
+                <span className="text-[#777587] font-normal ml-1">
+                  — page {safePage} of {totalPages}
+                </span>
+              )}
+            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-[#777587]">Show</span>
+              <div className="flex items-center gap-1">
+                {PAGE_SIZE_OPTIONS.map(n => (
+                  <button key={n} onClick={() => handlePageSize(n)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-all ${
+                      pageSize === n
+                        ? 'bg-[#3525cd] text-white border-[#3525cd]'
+                        : 'bg-white text-[#464555] border-[#e7eefe] hover:bg-[#f0f3ff] hover:text-[#3525cd]'
+                    }`}>
+                    {n}
+                  </button>
+                ))}
+              </div>
+              <span className="text-xs text-[#777587]">per page</span>
+            </div>
           </div>
+
+          {/* Log rows */}
           <div className="relative">
             <div className="absolute left-[2.75rem] top-0 bottom-0 w-px bg-[#f0f3ff]" />
             <div className="divide-y divide-[#f0f3ff]">
-              {events.map((ev, i) => {
+              {paginated.map((ev, i) => {
                 const meta = getEventMeta(ev.event_type);
                 return (
                   <div key={ev.id ?? i} className="flex gap-4 px-5 py-4 hover:bg-[#f9f9ff] transition-colors">
@@ -197,6 +281,16 @@ function OrgLogs({ org, onBack }) {
               })}
             </div>
           </div>
+
+          {/* Pagination footer */}
+          {totalPages > 1 && (
+            <div className="px-5 py-4 border-t border-[#f0f3ff] bg-[#f9f9ff] flex items-center justify-between flex-wrap gap-3">
+              <span className="text-xs text-[#777587]">
+                Showing {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, events.length)} of {events.length}
+              </span>
+              <Pagination page={safePage} totalPages={totalPages} onPage={setPage} />
+            </div>
+          )}
         </div>
       )}
     </div>
