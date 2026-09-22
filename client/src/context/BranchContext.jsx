@@ -57,11 +57,13 @@ export function BranchProvider({ children }) {
         setIsRootAdmin(!!data.isRootAdmin);
 
         // Validate the stored selection is still accessible; clear it if not.
-        // When no branch is stored, BranchSelect.jsx handles the 0/1/2+ cases.
+        // Use Number() coercion on both sides: PostgreSQL BIGINT/BIGSERIAL IDs
+        // are returned as strings by node-postgres, so strict === would always
+        // fail against the stored numeric ID and clear the branch on every refresh.
         const stored = localStorage.getItem(STORAGE_KEY);
         if (stored) {
           const storedId = Number(stored);
-          const stillAccessible = branches.some(b => b.id === storedId);
+          const stillAccessible = branches.some(b => Number(b.id) === storedId);
           if (!stillAccessible) {
             localStorage.removeItem(STORAGE_KEY);
             setSelectedBranchIdState(null);
@@ -80,16 +82,19 @@ export function BranchProvider({ children }) {
   }, [token, user?.id, user?.role, reloadTick]);
 
   const setSelectedBranchId = useCallback((branchId) => {
-    setSelectedBranchIdState(branchId);
-    if (branchId == null) {
+    // Always store as Number so === comparisons against b.id (also Number) are safe.
+    const numId = branchId != null ? Number(branchId) : null;
+    setSelectedBranchIdState(numId);
+    if (numId == null) {
       localStorage.removeItem(STORAGE_KEY);
     } else {
-      localStorage.setItem(STORAGE_KEY, String(branchId));
+      localStorage.setItem(STORAGE_KEY, String(numId));
     }
   }, []);
 
   // Resolved objects
-  const selectedBranch = accessibleBranches.find(b => b.id === selectedBranchId) || null;
+  // Coerce b.id to Number: PostgreSQL BIGINT returns as string via node-postgres.
+  const selectedBranch = accessibleBranches.find(b => Number(b.id) === selectedBranchId) || null;
 
   // Show the selector only when there are 2+ branches to switch between.
   // "All Branches" is not a valid working context so we never include it as an option.
