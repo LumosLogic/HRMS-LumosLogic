@@ -1,8 +1,9 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useContext } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { Building2, ArrowRight, MapPin, Plus, Settings } from 'lucide-react';
 import { useBranch } from '@/context/BranchContext';
 import { useAuth } from '@/context/AuthContext';
+import { useFeature, FeatureFlagsLoadedContext } from '@/context/FeatureFlagContext';
 import { apiPost } from '@/lib/api';
 
 function Spinner() {
@@ -21,6 +22,8 @@ function Spinner() {
 export default function BranchSelect() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const branchesEnabled = useFeature('branches');
+  const flagsLoaded     = useContext(FeatureFlagsLoadedContext);
   const {
     accessibleBranches,
     selectedBranchId,
@@ -35,6 +38,13 @@ export default function BranchSelect() {
   const [createError,   setCreateError]   = useState('');
 
   const orgName = user?.organization_name || 'Your Organization';
+
+  // Branches feature is OFF for this org → skip branch selection entirely
+  useEffect(() => {
+    if (flagsLoaded && !branchesEnabled) {
+      navigate('/root/dashboard', { replace: true });
+    }
+  }, [flagsLoaded, branchesEnabled, navigate]);
 
   // Already have a stored branch selection from a previous session → skip to dashboard
   useEffect(() => {

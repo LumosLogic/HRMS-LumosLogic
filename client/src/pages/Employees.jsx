@@ -2327,7 +2327,7 @@ export default function Employees() {
   const qc       = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
-  const { selectedBranchId } = useBranch();
+  const { selectedBranchId, isBranchContextReady } = useBranch();
   const { id: routeId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const employeesBase = location.pathname.startsWith('/root/') ? '/root/employees' : '/employees';
@@ -2410,6 +2410,11 @@ export default function Employees() {
   const { data: allEmployees = [], isLoading } = useQuery({
     queryKey: ['employees', 'all', selectedBranchId],
     queryFn:  () => apiGet('/employees', { include_inactive: 'true' }),
+    // Do not fire until branch context is fully initialized.
+    // Prevents the window between page load and branch restoration where
+    // selectedBranchId may not yet reflect the correct branch, causing
+    // wrong data to be fetched and cached.
+    enabled:  isBranchContextReady,
   });
 
   useEffect(() => {

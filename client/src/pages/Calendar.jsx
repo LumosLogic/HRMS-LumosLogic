@@ -630,7 +630,11 @@ function DayModal({ dateStr, records, employees, isAdmin, user, onClose, onEditA
                     </div>
                     {isAdmin && (
                       <div className="flex gap-1.5 shrink-0">
-                        {rec && <button className="btn btn-outline btn-sm text-xs py-1 px-2" onClick={() => onEditAtt(rec)}>Edit</button>}
+                        {/* Only allow Edit for real DB records — synthetic (leave) records
+                            have no attendance id; attempting PUT /attendance/undefined fails silently. */}
+                        {rec && !rec._synthetic && (
+                          <button className="btn btn-outline btn-sm text-xs py-1 px-2" onClick={() => onEditAtt(rec)}>Edit</button>
+                        )}
                         {!rec && dateStr <= todayStr() && (
                           <button className="btn btn-danger btn-sm text-xs py-1 px-2" onClick={() => setConfirmAbsent(emp)}>Absent</button>
                         )}

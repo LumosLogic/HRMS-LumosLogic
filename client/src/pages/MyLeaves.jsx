@@ -95,7 +95,8 @@ function LeaveApplyPanel({ open, onClose, onSubmit, loading: submitting, policie
   const wfhCheckTimer = useRef(null);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const today = new Date().toISOString().split('T')[0];
+  // Use IST locale so "today" matches the user's calendar date, not UTC
+  const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
 
   function handleStartDate(val) {
     set('start_date', val);

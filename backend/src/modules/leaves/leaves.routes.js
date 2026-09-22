@@ -3,7 +3,7 @@ const router  = express.Router();
 const { db, pool } = require('../../config/db');
 const { auth, isAdminRole } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
-const { flat, flatOne, orgId, getSettings, isWorkingDay, getRecipients, localDateStr, getOrgContext } = require('../../utils/helpers');
+const { flat, flatOne, orgId, getSettings, isWorkingDay, getRecipients, localDateStr, getOrgContext, toMinutes } = require('../../utils/helpers');
 const { sendMail, leaveAppliedHtml, leaveStatusHtml, leaveDeptApprovalHtml, leaveForwardedToRootHtml } = require('../../services/emailService');
 const engine = require('../../services/leaveWorkflowEngine');
 const { withBranchContext } = require('../../middleware/branchContext');
@@ -856,7 +856,12 @@ router.post('/', auth, async (req, res) => {
       const settings = await getSettings(orgId(req));
       const checkDates = buildWorkingDates(start_date, end_date, settings);
       if (checkDates.length === 0) {
-        return res.status(400).json({ error: 'The selected date range contains no working days.' });
+        const isSingle = start_date === end_date;
+        return res.status(400).json({
+          error: isSingle
+            ? 'The selected date is a weekend or public holiday. Please choose a working day.'
+            : 'The selected date range contains no working days (all dates fall on weekends or public holidays).',
+        });
       }
     }
 
@@ -1478,6 +1483,190 @@ router.put('/:id/revert', auth, withBranchContext, async (req, res) => {
   const { data } = await db.from('leaves')
     .select('*, users!leaves_user_id_fkey(name, email)').eq('id', req.params.id).single();
   res.json(flatOne(data));
+});
+
+// ─── ROUTE: GET /override-preview ────────────────────────────────────────────
+// Read-only: returns the exact days that admin-override-attendance will restore,
+// using the same buildWorkingDates + fetchHolidaySet logic as the actual override.
+// Used by the frontend to show an accurate warning before the user confirms.
+// Query params: userId=<id>&date=YYYY-MM-DD
+router.get('/override-preview', auth, async (req, res) => {
+  try {
+    if (req.user.role !== 'root_admin')
+      return res.status(403).json({ error: 'Only Root Admin can preview leave overrides.' });
+
+    const oId = orgId(req);
+    const { userId, date } = req.query;
+
+    if (!userId || !date || !/^\d{4}-\d{2}-\d{2}$/.test(date))
+      return res.status(400).json({ error: 'userId and date (YYYY-MM-DD) required' });
+
+    const uid = parseInt(userId, 10);
+    if (!Number.isFinite(uid) || uid <= 0)
+      return res.status(400).json({ error: 'Invalid userId' });
+
+    // Verify employee belongs to this org
+    const { data: emp } = await db.from('users')
+      .select('id').eq('id', uid).eq('organization_id', oId).maybeSingle();
+    if (!emp) return res.status(404).json({ error: 'Employee not found' });
+
+    // Find approved non-WFH leaves covering this date
+    const { data: approvedLeaves } = await db.from('leaves')
+      .select('id, leave_type, leave_time, start_date, end_date')
+      .eq('user_id', uid).eq('organization_id', oId).eq('status', 'approved')
+      .lte('start_date', date).gte('end_date', date)
+      .neq('leave_type', 'wfh');
+
+    if (!approvedLeaves?.length)
+      return res.status(404).json({ error: 'No approved leave found for this employee on this date.' });
+
+    // Calculate days using the same logic as admin-override-attendance
+    const settings = await getSettings(oId);
+    let totalDays = 0;
+    for (const leave of approvedLeaves) {
+      if (leave.leave_time === 'half') {
+        totalDays += 0.5;
+      } else {
+        const holidays = await fetchHolidaySet(oId, leave.start_date, leave.end_date);
+        totalDays += buildWorkingDates(leave.start_date, leave.end_date, settings, holidays).length;
+      }
+    }
+
+    // Use the first leave for the date-range display (covers the selected date)
+    const primary = approvedLeaves[0];
+    res.json({
+      days_to_restore: Math.round(totalDays * 2) / 2,
+      is_multi_day:    primary.start_date !== primary.end_date,
+      start_date:      primary.start_date,
+      end_date:        primary.end_date,
+      leave_count:     approvedLeaves.length,
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── ROUTE: POST /admin-override-attendance ──────────────────────────────────
+// Root Admin only: cancel an approved leave for a specific date and atomically
+// create/update the attendance record as corrected. Balance is auto-restored
+// because leave balance is computed on-the-fly from status='approved' leaves only.
+//
+// Body: { userId, date, check_in?, check_out?, status?, is_late?, is_early_exit?, notes? }
+// Transaction: both the leave cancellation and attendance upsert succeed or both roll back.
+router.post('/admin-override-attendance', auth, withBranchContext, async (req, res) => {
+  try {
+    if (req.user.role !== 'root_admin')
+      return res.status(403).json({ error: 'Only Root Admin can override approved leave attendance.' });
+
+    const oId = orgId(req);
+    const { userId, date, check_in, check_out, status, is_late, is_early_exit, notes } = req.body;
+
+    if (!userId || !date)
+      return res.status(400).json({ error: 'userId and date are required' });
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date))
+      return res.status(400).json({ error: 'date must be YYYY-MM-DD' });
+
+    const uid = parseInt(userId, 10);
+    if (!Number.isFinite(uid) || uid <= 0)
+      return res.status(400).json({ error: 'Invalid userId' });
+
+    // Verify employee belongs to this org
+    const { data: emp } = await db.from('users')
+      .select('id, name').eq('id', uid).eq('organization_id', oId).maybeSingle();
+    if (!emp) return res.status(404).json({ error: 'Employee not found in this organisation' });
+
+    // Find all approved non-WFH leaves covering this date
+    const { data: approvedLeaves } = await db.from('leaves')
+      .select('id, leave_type, leave_time, start_date, end_date')
+      .eq('user_id', uid).eq('organization_id', oId).eq('status', 'approved')
+      .lte('start_date', date).gte('end_date', date)
+      .neq('leave_type', 'wfh');
+
+    if (!approvedLeaves?.length)
+      return res.status(400).json({ error: 'No approved leave found for this employee on this date.' });
+
+    // Compute days to be restored per leave (for the response — balance restores automatically)
+    const settings     = await getSettings(oId);
+    let totalDaysRestored = 0;
+    for (const leave of approvedLeaves) {
+      if (leave.leave_time === 'half') {
+        totalDaysRestored += 0.5;
+      } else {
+        const holidays = await fetchHolidaySet(oId, leave.start_date, leave.end_date);
+        totalDaysRestored += buildWorkingDates(leave.start_date, leave.end_date, settings, holidays).length;
+      }
+    }
+
+    const leaveIds = approvedLeaves.map(l => l.id);
+
+    // Compute gross/work hours from check_in / check_out
+    const gross_hours = check_in && check_out
+      ? Math.max(0, (toMinutes(check_out) - toMinutes(check_in)) / 60) : 0;
+
+    const correctionNote = [
+      `Leave overridden by ${req.user.name || 'Root Admin'} — marked as ${status || 'present'}`,
+      notes?.trim() || null,
+    ].filter(Boolean).join('. ');
+
+    // ── Atomic transaction ─────────────────────────────────────────────────────
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+
+      // 1. Cancel all approved leaves covering this date
+      await client.query(
+        `UPDATE leaves SET status = 'cancelled'
+         WHERE id = ANY($1::bigint[]) AND organization_id = $2`,
+        [leaveIds, oId]
+      );
+
+      // 2. Upsert attendance — create if missing, update if exists
+      await client.query(
+        `INSERT INTO attendance
+           (user_id, date, status, check_in, check_out,
+            gross_hours, work_hours, total_break_minutes,
+            is_late, is_early_exit, notes, organization_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,0,$8,$9,$10,$11)
+         ON CONFLICT (user_id, date, organization_id) DO UPDATE SET
+           status              = EXCLUDED.status,
+           check_in            = EXCLUDED.check_in,
+           check_out           = EXCLUDED.check_out,
+           gross_hours         = EXCLUDED.gross_hours,
+           work_hours          = EXCLUDED.work_hours,
+           total_break_minutes = 0,
+           is_late             = EXCLUDED.is_late,
+           is_early_exit       = EXCLUDED.is_early_exit,
+           notes               = EXCLUDED.notes`,
+        [uid, date, status || 'present',
+         check_in || null, check_out || null,
+         Math.round(gross_hours * 100) / 100,
+         Math.round(gross_hours * 100) / 100,
+         !!is_late, !!is_early_exit,
+         correctionNote, oId]
+      );
+
+      await client.query('COMMIT');
+    } catch (txErr) {
+      await client.query('ROLLBACK');
+      return res.status(500).json({ error: 'Override failed — rolled back. ' + txErr.message });
+    } finally { client.release(); }
+
+    // Audit log each cancelled leave (outside transaction — fire-and-forget)
+    for (const leave of approvedLeaves) {
+      logApprovalAction({
+        leaveId: leave.id, oId, actorId: req.user.id, actorName: req.user.name,
+        action: 'leave_overridden_by_attendance',
+        fromStatus: 'approved', toStatus: 'cancelled',
+        notes: correctionNote,
+      });
+    }
+
+    res.json({
+      success:            true,
+      leaves_cancelled:   leaveIds.length,
+      days_restored:      Math.round(totalDaysRestored * 2) / 2,
+      attendance_date:    date,
+      attendance_status:  status || 'present',
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ─── ROUTE: DELETE /:id ───────────────────────────────────────────────────────

@@ -5,7 +5,7 @@ const { pool } = require('../../config/db-pg-adapter');
 const { auth, adminOnly } = require('../../middleware/auth');
 const { invalidateBiometricIpCache } = require('../../middleware/biometricIpGuard');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { getFilterState } = require('../../utils/branchFilter');
+const { getFilterState, canAdminAccessUser } = require('../../utils/branchFilter');
 const { scheduleSyncForSn } = require('./biometricHeartbeat.handler');
 const { processAttlogLine } = require('./biometricPush.handler');
 const biometricEmitter = require('../../utils/biometricEmitter');
@@ -1051,6 +1051,54 @@ router.get('/my-punches', auth, async (req, res) => {
          AND punch_time >= $3::date
          AND punch_time < ($3::date + INTERVAL '1 day')
        ORDER BY punch_time DESC`,
+      [orgId, pins, date]
+    );
+
+    res.json(logsRes.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── GET /api/biometric/punches-for-date ─────────────────────────────────────
+// Admin-facing: raw punch logs for a specific employee on a specific date.
+// Query params: userId=<id>&date=YYYY-MM-DD
+// Scoped to org + branch access. Does NOT modify raw logs (read-only).
+router.get('/punches-for-date', auth, adminOnly, withBranchContext, async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+    const { userId, date } = req.query;
+
+    if (!userId || !date || !/^\d{4}-\d{2}-\d{2}$/.test(date))
+      return res.status(400).json({ error: 'userId and date (YYYY-MM-DD) required' });
+
+    const uid = parseInt(userId, 10);
+    if (!Number.isFinite(uid) || uid <= 0) return res.status(400).json({ error: 'Invalid userId' });
+
+    // Branch isolation: root_admin has org-wide access; limited admins are scoped to their branches
+    if (req.user.role !== 'root_admin') {
+      const ok = await canAdminAccessUser(req.branchContext, uid, orgId);
+      if (!ok) return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
+
+    // Resolve employee's biometric PIN(s) via map table OR device_enrollment_id column
+    const pinRes = await pool.query(
+      `SELECT employee_pin FROM biometric_employee_map WHERE user_id = $1 AND org_id = $2
+       UNION
+       SELECT device_enrollment_id AS employee_pin FROM users
+         WHERE id = $1 AND organization_id = $2 AND device_enrollment_id IS NOT NULL`,
+      [uid, orgId]
+    );
+    if (!pinRes.rows.length) return res.json([]);
+
+    const pins = pinRes.rows.map(r => r.employee_pin).filter(Boolean);
+
+    const logsRes = await pool.query(
+      `SELECT id, punch_time, punch_type, device_serial, employee_pin
+         FROM biometric_raw_logs
+        WHERE org_id = $1
+          AND employee_pin = ANY($2)
+          AND punch_time >= $3::date
+          AND punch_time <  ($3::date + INTERVAL '1 day')
+        ORDER BY punch_time ASC`,
       [orgId, pins, date]
     );
 

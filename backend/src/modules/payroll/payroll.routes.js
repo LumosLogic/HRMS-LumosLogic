@@ -1284,19 +1284,21 @@ router.get('/runs', auth, hasPermission('payroll', 'view'), withBranchContext, a
     if (branchState.type === 'none') return res.json([]);
 
     // Build branch filter clause.
-    // 'all'      → no filter (see every run in the org: branch-specific + legacy NULL)
-    // 'specific' → runs for this branch + historical org-wide (NULL) runs
-    // 'multi'    → runs for accessible branches + historical org-wide (NULL) runs
+    // 'all'      → no filter (root admin sees every run: branch-specific + legacy NULL)
+    // 'specific' → only runs explicitly for this branch (branch_id = X)
+    //              NULL runs are org-wide historical runs — only root-admin (all) should see them
+    //              to prevent cross-branch data leaking through legacy runs
+    // 'multi'    → only runs for accessible branches; same NULL exclusion applies
     const params = [oId];
     let branchWhere = '';
     if (branchState.type === 'specific') {
       params.push(branchState.branchId);
-      branchWhere = `AND (pr.branch_id = $${params.length} OR pr.branch_id IS NULL)`;
+      branchWhere = `AND pr.branch_id = $${params.length}`;
     } else if (branchState.type === 'multi') {
       params.push(branchState.branchIds);
-      branchWhere = `AND (pr.branch_id = ANY($${params.length}::bigint[]) OR pr.branch_id IS NULL)`;
+      branchWhere = `AND pr.branch_id = ANY($${params.length}::bigint[])`;
     }
-    // 'all' → branchWhere stays '' (no additional filter)
+    // 'all' → branchWhere stays '' (no additional filter — root admin sees everything)
 
     const { rows } = await pool.query(
       `SELECT pr.*,

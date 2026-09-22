@@ -2,7 +2,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { apiGet } from '@/lib/api';
 import { useAuth } from './AuthContext';
-import { useFeature } from './FeatureFlagContext';
+import { useFeature, FeatureFlagsLoadedContext } from './FeatureFlagContext';
 
 export const BranchContext = createContext(null);
 
@@ -11,6 +11,7 @@ const STORAGE_KEY = 'lt_selected_branch'; // stores branch id as string, or abse
 export function BranchProvider({ children }) {
   const { user, token } = useAuth();
   const branchesEnabled = useFeature('branches');
+  const flagsLoaded     = useContext(FeatureFlagsLoadedContext);
 
   const [accessibleBranches, setAccessibleBranches] = useState([]);
   const [hasAllBranches,     setHasAllBranches]     = useState(false);
@@ -41,8 +42,10 @@ export function BranchProvider({ children }) {
       return;
     }
 
-    // When branches feature is OFF: clear all branch state and do not fetch
-    if (!branchesEnabled) {
+    // When branches feature is OFF (and we are certain flags are loaded): clear branch state.
+    // IMPORTANT: useFeature returns false while flags are still loading, so we MUST wait
+    // for flagsLoaded before acting — otherwise every refresh clears localStorage prematurely.
+    if (flagsLoaded && !branchesEnabled) {
       setAccessibleBranches([]);
       setHasAllBranches(false);
       setIsRootAdmin(false);
@@ -51,6 +54,9 @@ export function BranchProvider({ children }) {
       localStorage.removeItem(STORAGE_KEY);
       return;
     }
+
+    // Flags not loaded yet — wait before fetching branches or clearing state
+    if (!flagsLoaded) return;
 
     // Employees don't need a branch selector — their branch is fixed via users.branch_id
     if (user.role === 'employee') {
@@ -93,7 +99,7 @@ export function BranchProvider({ children }) {
         setIsLoading(false);
         setBranchesLoaded(true);
       });
-  }, [token, user?.id, user?.role, reloadTick, branchesEnabled]);
+  }, [token, user?.id, user?.role, reloadTick, branchesEnabled, flagsLoaded]);
 
   const setSelectedBranchId = useCallback((branchId) => {
     // Always store as Number so === comparisons against b.id (also Number) are safe.
@@ -114,6 +120,17 @@ export function BranchProvider({ children }) {
   // "All Branches" is not a valid working context so we never include it as an option.
   const showBranchSelector = accessibleBranches.length >= 2;
 
+  // isBranchContextReady: true when selectedBranchId is fully settled and safe to use
+  // as an API filter. Use as `enabled` guard in branch-dependent useQuery calls.
+  //
+  //   branches OFF: ready once feature flags confirm it (flagsLoaded)
+  //   branches ON:  ready once /branches/my-access has been fetched and selectedBranchId
+  //                 has been validated against the accessible list (branchesLoaded)
+  //
+  // This prevents branch-dependent queries from firing during the brief window between
+  // page load and branch context initialization, which would produce stale/wrong data.
+  const isBranchContextReady = flagsLoaded && (!branchesEnabled || branchesLoaded);
+
   return (
     <BranchContext.Provider value={{
       accessibleBranches,
@@ -124,6 +141,7 @@ export function BranchProvider({ children }) {
       isRootAdmin,
       isLoading,
       branchesLoaded,
+      isBranchContextReady,
       showBranchSelector,
       reloadBranches,
     }}>

@@ -11,6 +11,15 @@ import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { Avatar } from '@/components/ui/Avatar';
 import { fmtDate } from '@/lib/utils';
 
+function fmtPunchTs(ts) {
+  if (!ts) return '--';
+  try {
+    return new Date(ts).toLocaleTimeString('en-US', {
+      timeZone: 'Asia/Kolkata', hour: 'numeric', minute: '2-digit', hour12: true,
+    });
+  } catch { return '--'; }
+}
+
 function fmtRecordDate(dateStr) {
   if (!dateStr) return '--';
   try {
@@ -168,11 +177,31 @@ function ApplyModal({ open, onClose, initialDate }) {
   // EHN_REGU_002: attendance record for selected date
   const [attRecord,    setAttRecord]    = useState(null);
   const [attLoading,   setAttLoading]   = useState(false);
+  // Biometric raw punch log for selected date
+  const [punches,      setPunches]      = useState([]);
+  const [punchLoading, setPunchLoading] = useState(false);
   // EHN_REGU_001: pending dates set
   const [pendingDates, setPendingDates] = useState(new Set());
 
   useEffect(() => {
-    if (open && initialDate) setForm(f => ({ ...f, date: initialDate }));
+    if (open && initialDate) {
+      setForm(f => ({ ...f, date: initialDate }));
+      // Fetch attendance + punches for the pre-filled date
+      setAttLoading(true);
+      apiGet('/attendance/my-record', { date: initialDate })
+        .then(d => setAttRecord(d))
+        .catch(() => setAttRecord(null))
+        .finally(() => setAttLoading(false));
+      setPunchLoading(true);
+      apiGet('/biometric/my-punches', { date: initialDate })
+        .then(d => setPunches(Array.isArray(d) ? d : []))
+        .catch(() => setPunches([]))
+        .finally(() => setPunchLoading(false));
+    }
+    if (!open) {
+      setAttRecord(null);
+      setPunches([]);
+    }
   }, [open, initialDate]);
 
   // Fetch pending dates for this employee when modal opens
@@ -234,10 +263,20 @@ function ApplyModal({ open, onClose, initialDate }) {
               const val = e.target.value;
               set('date', val);
               setAttRecord(null);
-              // EHN_REGU_002: fetch attendance for this date
+              setPunches([]);
               if (val) {
+                // Fetch processed attendance record
                 setAttLoading(true);
-                apiGet('/attendance/my-record', { date: val }).then(d => { setAttRecord(d); }).catch(() => setAttRecord(null)).finally(() => setAttLoading(false));
+                apiGet('/attendance/my-record', { date: val })
+                  .then(d => setAttRecord(d))
+                  .catch(() => setAttRecord(null))
+                  .finally(() => setAttLoading(false));
+                // Fetch raw biometric punch log
+                setPunchLoading(true);
+                apiGet('/biometric/my-punches', { date: val })
+                  .then(d => setPunches(Array.isArray(d) ? d : []))
+                  .catch(() => setPunches([]))
+                  .finally(() => setPunchLoading(false));
               }
             }}
             max={new Date().toISOString().split('T')[0]} />
@@ -249,18 +288,53 @@ function ApplyModal({ open, onClose, initialDate }) {
             </p>
           )}
         </div>
-        {/* EHN_REGU_002: Show attendance record for selected date */}
-        {attLoading && <p className="text-xs text-[#777587]">Loading attendance…</p>}
-        {attRecord && !attLoading && (
-          <div className="rounded-xl bg-[#f0f3ff] border border-[#c7c4d8] p-3 text-xs space-y-1.5">
-            <p className="font-bold text-[#3525cd] text-[0.65rem] uppercase tracking-wide">System Recorded Attendance</p>
-            <div className="grid grid-cols-2 gap-2">
-              {attRecord.check_in  && <div><span className="text-[#777587]">Check In</span><p className="font-semibold text-[#151c27]">{fmtTime12(attRecord.check_in)}</p></div>}
-              {attRecord.check_out && <div><span className="text-[#777587]">Check Out</span><p className="font-semibold text-[#151c27]">{fmtTime12(attRecord.check_out)}</p></div>}
-              {attRecord.work_hours && <div><span className="text-[#777587]">Working Hours</span><p className="font-semibold text-[#151c27]">{Number(attRecord.work_hours).toFixed(1)}h</p></div>}
-              {attRecord.status    && <div><span className="text-[#777587]">Status</span><p className="font-semibold text-[#151c27] capitalize">{attRecord.status.replace(/_/g,' ')}</p></div>}
-            </div>
-          </div>
+        {/* Attendance + punch details for selected date */}
+        {(attLoading || punchLoading) && (
+          <p className="text-xs text-[#777587]">Loading attendance…</p>
+        )}
+        {!attLoading && !punchLoading && form.date && (
+          <>
+            {/* Raw biometric punches — shown when available */}
+            {punches.length > 0 && (
+              <div className="rounded-xl bg-[#f0f3ff] border border-[#c7c4d8] p-3 text-xs space-y-2">
+                <p className="font-bold text-[#3525cd] text-[0.65rem] uppercase tracking-wide">
+                  Biometric Punch Log ({punches.length} punch{punches.length !== 1 ? 'es' : ''})
+                </p>
+                <div className="space-y-1">
+                  {punches.map((p, i) => (
+                    <div key={p.id ?? i} className="flex items-center gap-2 text-[#464555]">
+                      <span className="w-4 h-4 rounded-full bg-[#3525cd]/10 text-[#3525cd] flex items-center justify-center text-[0.6rem] font-bold flex-shrink-0">{i + 1}</span>
+                      <span className="font-semibold">{fmtPunchTs(p.punch_time)}</span>
+                      {p.punch_type != null && (
+                        <span className={`text-[0.6rem] font-bold px-1.5 py-0.5 rounded-full ${p.punch_type === 0 || p.punch_type === '0' ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'}`}>
+                          {p.punch_type === 0 || p.punch_type === '0' ? 'In' : 'Out'}
+                        </span>
+                      )}
+                      {p.device_serial && <span className="text-[#777587] text-[0.6rem]">· {p.device_serial}</span>}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Processed attendance record */}
+            {attRecord && (attRecord.check_in || attRecord.check_out || attRecord.status) && (
+              <div className="rounded-xl bg-[#f9f9ff] border border-[#e7eefe] p-3 text-xs space-y-1.5">
+                <p className="font-bold text-[#464555] text-[0.65rem] uppercase tracking-wide">Processed Attendance</p>
+                <div className="grid grid-cols-2 gap-2">
+                  {attRecord.check_in  && <div><span className="text-[#777587]">Check In</span><p className="font-semibold text-[#151c27]">{fmtTime12(attRecord.check_in)}</p></div>}
+                  {attRecord.check_out && <div><span className="text-[#777587]">Check Out</span><p className="font-semibold text-[#151c27]">{fmtTime12(attRecord.check_out)}</p></div>}
+                  {attRecord.work_hours != null && <div><span className="text-[#777587]">Working Hours</span><p className="font-semibold text-[#151c27]">{Number(attRecord.work_hours).toFixed(1)}h</p></div>}
+                  {attRecord.status    && <div><span className="text-[#777587]">Status</span><p className="font-semibold text-[#151c27] capitalize">{attRecord.status.replace(/_/g,' ')}</p></div>}
+                </div>
+              </div>
+            )}
+
+            {/* No data at all for this date */}
+            {!attRecord && punches.length === 0 && (
+              <p className="text-xs text-[#777587] italic">No attendance or punch record found for this date.</p>
+            )}
+          </>
         )}
         <div className="grid grid-cols-2 gap-4">
           <div>
