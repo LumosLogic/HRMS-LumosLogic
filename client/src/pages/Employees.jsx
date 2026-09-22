@@ -2372,7 +2372,6 @@ export default function Employees() {
   // Search / filter / sort / view / selection state
   const [search,        setSearch]       = useState('');
   const [deptFilter,    setDeptFilter]   = useState('');
-  const [branchFilter,  setBranchFilter] = useState('');
   // BUG_059: statusFilter is now a Set of selected statuses (default: active + probation)
   const [statusFilter,  setStatusFilter] = useState(DEFAULT_STATUS_FILTER);
   const [typeFilter,    setTypeFilter]   = useState('');
@@ -2451,7 +2450,7 @@ export default function Employees() {
   // BUG_059: use statusFilterKey (string) not statusFilter (Set) for stable comparison
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { setPage(1); setSelected(new Set()); },
-    [search, deptFilter, branchFilter, statusFilterKey, typeFilter, sortBy, sortDir, pageSize, roleFilter, joinedYmParam, filterParam]);
+    [search, deptFilter, statusFilterKey, typeFilter, sortBy, sortDir, pageSize, roleFilter, joinedYmParam, filterParam]);
 
   const { data: _dData = [] } = useQuery({
     queryKey: ['departments'],
@@ -2524,7 +2523,6 @@ export default function Employees() {
     }
     if (deptFilter)   rows = rows.filter(e =>
       e.department === deptFilter || e.departments?.some(d => d.name === deptFilter));
-    if (branchFilter) rows = rows.filter(e => String(e.branch_id) === String(branchFilter));
     // BUG_059: statusFilter is a Set; filter rows whose status is in the selected set.
     // If the set matches the default (active+probation) we still apply it so inactive
     // employees are hidden unless explicitly selected.
@@ -2563,13 +2561,13 @@ export default function Employees() {
   // BUG_059: stable string key for statusFilter (Set → sorted CSV) so useMemo and
   // useEffect dependency arrays compare by value, not by object reference.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [employees, search, deptFilter, branchFilter, statusFilterKey, typeFilter, sortBy, sortDir, joinedYmParam, filterParam]);
+  }, [employees, search, deptFilter, statusFilterKey, typeFilter, sortBy, sortDir, joinedYmParam, filterParam]);
 
   // ── Pagination ────────────────────────────────────────────────────────────
   const totalPages = Math.ceil(filtered.length / pageSize);
   const pageRows   = filtered.slice((page - 1) * pageSize, page * pageSize);
   // BUG_059: anyFilter — status is "filtered" only when selection differs from the default (active+probation)
-  const anyFilter  = search || deptFilter || branchFilter || statusFilterKey !== defaultStatusKey || typeFilter || joinedYmParam || filterParam;
+  const anyFilter  = search || deptFilter || statusFilterKey !== defaultStatusKey || typeFilter || joinedYmParam || filterParam;
 
   // ── Bulk selection helpers ────────────────────────────────────────────────
   const allPageSelected = pageRows.length > 0 && pageRows.every(e => selected.has(e.id));
@@ -2727,14 +2725,6 @@ export default function Employees() {
           </select>
         )}
 
-        {/* Branch */}
-        {branchList.length > 0 && (
-          <select value={branchFilter} onChange={e => setBranchFilter(e.target.value)}
-            className="form-control w-auto text-xs py-1.5">
-            <option value="">All Branches</option>
-            {branchList.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-          </select>
-        )}
 
         {/* Employee Status — multi-select dropdown (BUG_059)
             Active + Probation are selected by default; Inactive/Resigned/Terminated

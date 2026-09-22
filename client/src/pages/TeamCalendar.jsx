@@ -8,6 +8,7 @@ import { apiGet } from '@/lib/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
 import { useAuth } from '@/context/AuthContext';
+import { useBranch } from '@/context/BranchContext';
 import { MONTHS } from '@/lib/utils';
 
 const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
@@ -260,6 +261,7 @@ function LeaveDetailModal({ leave, onClose }) {
 // ── Main Component ───────────────────────────────────────────────────────────
 export default function TeamCalendar() {
   const { user } = useAuth();
+  const { selectedBranchId } = useBranch();
   const now      = new Date();
 
   const [year,           setYear]          = useState(now.getFullYear());
@@ -286,7 +288,7 @@ export default function TeamCalendar() {
 
   // ── Data fetching ──────────────────────────────────────────────────────────
   const { data: teamLeaves = [], isLoading } = useQuery({
-    queryKey: ['team-leaves', year, month],
+    queryKey: ['team-leaves', year, month, selectedBranchId],
     queryFn:  () => apiGet('/team-leaves', { startDate: monthStart, endDate: monthEnd }),
     staleTime: 60000,
   });
@@ -298,7 +300,7 @@ export default function TeamCalendar() {
   });
 
   const { data: employees = [] } = useQuery({
-    queryKey: ['employees-calendar'],
+    queryKey: ['employees-calendar', selectedBranchId],
     queryFn:  () => apiGet('/employees'),
     staleTime: 300000,
   });
