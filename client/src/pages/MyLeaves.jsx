@@ -177,8 +177,8 @@ function LeaveApplyPanel({ open, onClose, onSubmit, loading: submitting, policie
   const wfhIsPastDate = isWFH  && !!form.wfh_date   && form.wfh_date  < today;
 
   const canSubmit = isWFH
-    ? !!form.wfh_date && !submitting && !wfhHasConflict && !wfhIsPastDate && !!form.reason.trim()
-    : !!form.start_date && !!form.end_date && !submitting && !isPastDate && !!form.reason.trim();
+    ? !!form.wfh_date && !submitting && !wfhHasConflict && !!form.reason.trim()
+    : !!form.start_date && !!form.end_date && !submitting && !!form.reason.trim();
 
   function handleSubmit() {
     if (isWFH) {
@@ -280,11 +280,11 @@ function LeaveApplyPanel({ open, onClose, onSubmit, loading: submitting, policie
 
               <div>
                 <label className="form-label">From Date</label>
-                <input type="date" className="form-control" min={today} value={form.start_date} onChange={e => handleStartDate(e.target.value)} />
+                <input type="date" className="form-control" value={form.start_date} onChange={e => handleStartDate(e.target.value)} />
               </div>
               <div>
                 <label className="form-label">To Date</label>
-                <input type="date" className="form-control" value={form.end_date} min={form.start_date || today} onChange={e => set('end_date', e.target.value)} />
+                <input type="date" className="form-control" value={form.end_date} min={form.start_date || ''} onChange={e => set('end_date', e.target.value)} />
               </div>
 
               {/* Days count + balance info */}
@@ -312,12 +312,13 @@ function LeaveApplyPanel({ open, onClose, onSubmit, loading: submitting, policie
               {/* Conflict checks */}
               {form.start_date && form.end_date && (
                 <>
-                  {isPastDate ? (
-                    <div className="rounded-xl border border-rose-200 bg-rose-50 p-3 flex items-start gap-2">
-                      <AlertTriangle size={13} className="text-rose-600 flex-shrink-0 mt-0.5" />
-                      <p className="text-[0.72rem] text-rose-700 font-semibold">You cannot apply leave for a past date. Please select today or a future date.</p>
+                  {/* Past-date advisory — does not block submission */}
+                  {isPastDate && (
+                    <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 flex items-start gap-2">
+                      <AlertTriangle size={13} className="text-amber-600 flex-shrink-0 mt-0.5" />
+                      <p className="text-[0.72rem] text-amber-700 font-semibold">You are applying for a past date. HR will review and approve based on your reason.</p>
                     </div>
-                  ) : (
+                  )}
                   <>
                   {checking && (
                     <div className="flex items-center gap-2 text-xs text-[#777587] bg-[#f0f3ff] rounded-xl px-4 py-3">
@@ -361,7 +362,6 @@ function LeaveApplyPanel({ open, onClose, onSubmit, loading: submitting, policie
                     </div>
                   )}
                   </>
-                  )}
                 </>
               )}
 
