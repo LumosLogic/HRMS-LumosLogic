@@ -56,44 +56,47 @@ router.get('/', auth, hasPermission('employees', 'view'), withBranchContext, asy
     // State D: no accessible branches → empty list
     if (branchState.type === 'none') return res.json([]);
 
-    let query = db.from('users')
-      .select(cols)
-      .eq('organization_id', orgId(req))
-      .in('role', roleFilter)
-      .order('name');
+    // Build parameterised WHERE clauses for the single-query path
+    const params = [orgId(req), roleFilter];
 
-    // Apply branch scoping to users.branch_id
+    let branchClause = '';
     if (branchState.type === 'specific') {
-      query = query.eq('branch_id', branchState.branchId);
+      params.push(branchState.branchId);
+      branchClause = `AND u.branch_id = $${params.length}`;
     } else if (branchState.type === 'multi') {
-      query = query.in('branch_id', branchState.branchIds);
-    }
-    // type === 'all': no branch filter — org-wide
-
-    // BUG_059: exclude inactive/resigned/terminated unless the caller explicitly
-    // opts in with ?include_inactive=true (only the employee management page does this).
-    // adapter's not_in case wraps with (IS NULL OR NOT IN) so NULL-status employees
-    // (treated as active) are always included.
-    if (req.query.include_inactive !== 'true') {
-      query = query.not('employee_status', 'in', INACTIVE_STATUSES);
+      params.push(branchState.branchIds);
+      branchClause = `AND u.branch_id = ANY($${params.length}::bigint[])`;
     }
 
-    const { data: users } = await query;
+    // BUG_059: exclude inactive/resigned/terminated unless caller opts in
+    const inactiveClause = req.query.include_inactive !== 'true'
+      ? `AND (u.employee_status IS NULL OR u.employee_status NOT IN ('inactive','resigned','terminated'))`
+      : '';
 
-    // Attach multi-department assignments
-    const ids = (users || []).map(u => u.id);
-    let deptMap = {};
-    if (ids.length > 0) {
-      const { data: ud } = await db.from('user_departments')
-        .select('user_id, department_id, role_in_dept, departments(id, name)')
-        .in('user_id', ids);
-      (ud || []).forEach(r => {
-        if (!deptMap[r.user_id]) deptMap[r.user_id] = [];
-        deptMap[r.user_id].push({ id: r.department_id, name: r.departments?.name || '', role: r.role_in_dept });
-      });
-    }
+    // Prefix every column with the table alias to avoid ambiguity in the JOIN
+    const colsList = cols.split(', ').map(c => `u."${c.trim()}"`).join(', ');
 
-    res.json((users || []).map(u => ({ ...u, departments: deptMap[u.id] || [] })));
+    // Single query: employees + departments aggregated — eliminates the second round-trip
+    const { rows } = await pool.query(`
+      SELECT ${colsList},
+        COALESCE(
+          json_agg(
+            json_build_object('id', d.id, 'name', d.name, 'role', ud.role_in_dept)
+          ) FILTER (WHERE d.id IS NOT NULL),
+          '[]'::json
+        ) AS departments
+      FROM users u
+      LEFT JOIN user_departments ud ON ud.user_id = u.id
+      LEFT JOIN departments d ON d.id = ud.department_id
+      WHERE u.organization_id = $1
+        AND u.role = ANY($2::text[])
+        ${branchClause}
+        ${inactiveClause}
+      GROUP BY u.id
+      ORDER BY u.name
+    `, params);
+
+    res.json(rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

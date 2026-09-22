@@ -244,14 +244,13 @@ router.get('/', auth, async (req, res) => {
       `SELECT b.*,
               COALESCE(COUNT(DISTINCT hba.user_id), 0)::int AS hr_admin_count,
               COALESCE(
-                ARRAY_AGG(u.name ORDER BY u.name) FILTER (WHERE u.id IS NOT NULL),
+                ARRAY_AGG(DISTINCT u.name ORDER BY u.name) FILTER (WHERE u.id IS NOT NULL),
                 '{}'
               ) AS hr_admin_names
        FROM branches b
        LEFT JOIN hr_branch_access hba
-              ON hba.branch_id = b.id
-             AND hba.all_branches = FALSE
-             AND hba.org_id      = b.org_id
+              ON (hba.branch_id = b.id OR hba.all_branches = TRUE)
+             AND hba.org_id = b.org_id
        LEFT JOIN users u ON u.id = hba.user_id AND u.organization_id = b.org_id
        WHERE b.org_id = $1
        GROUP BY b.id

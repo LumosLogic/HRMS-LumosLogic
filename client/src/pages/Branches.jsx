@@ -124,6 +124,7 @@ function HRAccessModal({ open, onClose, branch }) {
     mutationFn: ({ userId }) => apiPost('/branches/user-access', { userId, branchId: branch.id }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['branch-hr-access-users', branch?.id] });
+      qc.invalidateQueries({ queryKey: ['branches'] });
       toast('Access granted', 'success');
     },
     onError: e => toast(e.message, 'error'),
@@ -134,6 +135,7 @@ function HRAccessModal({ open, onClose, branch }) {
     mutationFn: ({ userId }) => apiDelete(`/branches/user-access/${userId}/branch/${branch.id}`),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['branch-hr-access-users', branch?.id] });
+      qc.invalidateQueries({ queryKey: ['branches'] });
       toast('Access revoked', 'warning');
     },
     onError: e => toast(e.message, 'error'),
