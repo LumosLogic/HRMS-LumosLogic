@@ -1,17 +1,19 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Download, BarChart3, Users, FileText, CalendarDays, TrendingUp,
   Search, Filter, X, ChevronUp, ChevronDown, Printer,
   CheckCircle2, Clock, AlertCircle, UserCheck, Umbrella,
-  Building2, ArrowUpDown, ChevronRight, Fingerprint,
+  Building2, ArrowUpDown, ChevronRight, Fingerprint, Pencil,
 } from 'lucide-react';
 import { apiGet } from '@/lib/api';
 import { MONTHS } from '@/lib/utils';
 import { useBranch } from '@/context/BranchContext';
+import { useAuth } from '@/context/AuthContext';
 import { Modal } from '@/components/ui/Modal';
 import { Avatar } from '@/components/ui/Avatar';
+import { AttCorrectionModal } from '@/components/AttendanceDayModal';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function cn(...classes) { return classes.filter(Boolean).join(' '); }
@@ -282,6 +284,8 @@ function Pagination({ page, totalPages, totalCount, onPageChange, label = 'recor
 export default function Reports() {
   const now = new Date();
   const { selectedBranchId } = useBranch();
+  const { isAdmin } = useAuth();
+  const qc = useQueryClient();
   const [searchParams] = useSearchParams();
   const preselectedUserId = searchParams.get('userId') || '';
 
@@ -302,6 +306,8 @@ export default function Reports() {
   // Biometric punch log expansion (Relitrade / first_in_last_out orgs only)
   // Use attendance record id as key — user_id can be null causing all rows to expand
   const [expandedRowId,   setExpandedRowId]   = useState(null);
+  // Attendance correction modal — { emp: { id, name }, record: { id, check_in, … }, dateStr }
+  const [editTarget,      setEditTarget]      = useState(null);
   // EHN_RA_002: Saved filter views (localStorage)
   const SAVED_VIEWS_KEY = 'reports_saved_views';
   const [savedViews, setSavedViews] = useState(() => {
@@ -859,20 +865,21 @@ export default function Reports() {
                   </th>
                   <SortTh col="gross_hours" sort={sort} onSort={toggleSort}>{isFiloOrg ? 'Total Hrs' : 'Gross Hrs'}</SortTh>
                   <SortTh col="work_hours"  sort={sort} onSort={toggleSort}>Working Hrs</SortTh>
+                  {isAdmin && <th className="px-4 py-3 text-left text-xs font-black text-[#464555] whitespace-nowrap uppercase tracking-wider">Action</th>}
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f0f3ff]">
                 {attLoading ? (
                   Array.from({ length: 5 }).map((_, i) => (
                     <tr key={i} className="animate-pulse">
-                      {Array.from({ length: 9 }).map((_, j) => (
+                      {Array.from({ length: isAdmin ? 10 : 9 }).map((_, j) => (
                         <td key={j} className="px-4 py-3"><div className="h-4 bg-[#f0f3ff] rounded w-full" /></td>
                       ))}
                     </tr>
                   ))
                 ) : displayRows.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="py-14 text-center">
+                    <td colSpan={isAdmin ? 10 : 9} className="py-14 text-center">
                       <CalendarDays size={32} className="text-[#c7c4d8] mx-auto mb-2" />
                       <p className="text-sm font-semibold text-[#464555]">No attendance records found</p>
                       <p className="text-xs text-[#9ca3af] mt-1">{anyFilter ? 'Try adjusting your filters.' : `No data for ${periodLabel}.`}</p>
@@ -982,6 +989,22 @@ export default function Reports() {
                           <span className="text-emerald-700 font-semibold">{fmtHrs(r.estimated_hours)} <span className="text-[0.6rem] font-normal text-emerald-500">est.</span></span>
                         ) : '—'}
                       </td>
+                      {/* Action — Edit attendance (admin only, real DB records only) */}
+                      {isAdmin && (
+                        <td className="px-4 py-3" onClick={e => e.stopPropagation()}>
+                          {r.id && !['holiday', 'off_day'].includes(r.status) && (
+                            <button
+                              className="flex items-center gap-1 text-[0.68rem] font-bold text-[#3525cd] px-2 py-1 rounded-lg border border-[#c7c4d8] hover:bg-[#f0f3ff] hover:border-[#3525cd] transition-all whitespace-nowrap"
+                              onClick={() => setEditTarget({
+                                emp:    { id: r.user_id, name: r.name },
+                                record: { id: r.id, check_in: r.check_in, check_out: r.check_out, status: r.status, is_late: r.is_late, is_early_exit: r.is_early_exit, notes: r.notes },
+                                dateStr: r.date,
+                              })}>
+                              <Pencil size={10} /> Edit
+                            </button>
+                          )}
+                        </td>
+                      )}
                     </tr>
                     {/* Punch log expansion row — only for biometric (isFiloOrg) orgs */}
                     {isFiloOrg && isExpanded && (
@@ -990,7 +1013,7 @@ export default function Reports() {
                         user_id={r.user_id || r.users?.id || null}
                         date={r.date}
                         name={r.name}
-                        colSpan={9}
+                        colSpan={isAdmin ? 10 : 9}
                       />
                     )}
                     </React.Fragment>
@@ -1167,6 +1190,25 @@ export default function Reports() {
       {/* ── EXPORT MODAL ─────────────────────────────────────────────────────── */}
       {dlOpen && (
         <DownloadModal open={dlOpen} onClose={() => setDlOpen(false)} active={active} onDownload={handleDownload} />
+      )}
+
+      {/* ── ATTENDANCE CORRECTION MODAL ──────────────────────────────────────── */}
+      {editTarget && (
+        <AttCorrectionModal
+          emp={editTarget.emp}
+          dateStr={editTarget.dateStr}
+          existingRecord={editTarget.record}
+          isSynthetic={false}
+          onClose={() => setEditTarget(null)}
+          onRefresh={() => {
+            // Invalidate the active attendance report query so the table refreshes
+            qc.invalidateQueries({ queryKey: ['report-attendance'] });
+            // Also refresh dashboard/calendar caches in case they're open
+            qc.invalidateQueries({ queryKey: ['root-dashboard'] });
+            qc.invalidateQueries({ queryKey: ['dashboard'] });
+            qc.invalidateQueries({ queryKey: ['calendar'] });
+          }}
+        />
       )}
 
     </div>

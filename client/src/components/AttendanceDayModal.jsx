@@ -35,7 +35,7 @@ function fmtPunchTs(ts) {
 //   C. Override approved leave: two-step confirmation that atomically cancels the
 //      leave AND creates/updates attendance (POST /leaves/admin-override-attendance).
 //      Biometric punches shown as read-only reference. Does NOT modify raw_logs.
-function AttCorrectionModal({ emp, dateStr, existingRecord, isSynthetic, onClose, onRefresh }) {
+export function AttCorrectionModal({ emp, dateStr, existingRecord, isSynthetic, onClose, onRefresh }) {
   const { user: adminUser } = useAuth();
   const toast = useToast();
   const isCreate = !existingRecord?.id;
