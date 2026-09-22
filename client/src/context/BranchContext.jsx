@@ -66,6 +66,16 @@ export function BranchProvider({ children }) {
             setSelectedBranchIdState(null);
           }
         }
+
+        // Auto-recover: if no branch is selected but branches exist, select the
+        // first one. Prevents "All Branches" context after a manual null-set,
+        // branch removal, or a fresh session with no stored selection.
+        const nowStored = localStorage.getItem(STORAGE_KEY);
+        if (!nowStored && branches.length > 0) {
+          const autoId = branches[0].id;
+          localStorage.setItem(STORAGE_KEY, String(autoId));
+          setSelectedBranchIdState(autoId);
+        }
       })
       .catch(() => {
         setAccessibleBranches([]);
@@ -90,12 +100,9 @@ export function BranchProvider({ children }) {
   // Resolved objects
   const selectedBranch = accessibleBranches.find(b => b.id === selectedBranchId) || null;
 
-  // Show the selector only when there's more than one option to pick from:
-  //   - hasAllBranches + at least 1 branch → can choose "All Branches" or a specific one
-  //   - !hasAllBranches + at least 2 branches → can choose between specific ones
-  const showBranchSelector =
-    (hasAllBranches && accessibleBranches.length >= 1) ||
-    (!hasAllBranches && accessibleBranches.length > 1);
+  // Show the selector only when there are 2+ branches to switch between.
+  // "All Branches" is not a valid working context so we never include it as an option.
+  const showBranchSelector = accessibleBranches.length >= 2;
 
   return (
     <BranchContext.Provider value={{
