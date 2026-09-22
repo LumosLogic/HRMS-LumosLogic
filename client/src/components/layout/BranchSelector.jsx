@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Building2, ChevronDown, Check } from 'lucide-react';
+import { useQueryClient } from '@tanstack/react-query';
 import { useBranch } from '@/context/BranchContext';
 import { cn } from '@/lib/utils';
 
@@ -8,6 +9,7 @@ import { cn } from '@/lib/utils';
  * Hidden automatically for single-branch orgs and employees.
  */
 export function BranchSelector() {
+  const qc = useQueryClient();
   const {
     accessibleBranches,
     selectedBranchId,
@@ -18,8 +20,10 @@ export function BranchSelector() {
   } = useBranch();
 
   const [open, setOpen] = useState(false);
-  const ref = useRef(null);
+  const ref            = useRef(null);
+  const isFirstRender  = useRef(true);
 
+  // Close dropdown when clicking outside
   useEffect(() => {
     function handleClickOutside(e) {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false);
@@ -27,6 +31,19 @@ export function BranchSelector() {
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
+
+  // Invalidate ALL active React Query caches when the branch changes so every
+  // mounted page immediately re-fetches with the new X-Branch-Id context.
+  // Skip the very first render (initial mount — no branch change happened).
+  useEffect(() => {
+    if (isFirstRender.current) {
+      isFirstRender.current = false;
+      return;
+    }
+    if (selectedBranchId != null) {
+      qc.invalidateQueries();
+    }
+  }, [selectedBranchId, qc]);
 
   if (!showBranchSelector) return null;
 
@@ -56,32 +73,34 @@ export function BranchSelector() {
 
       {open && (
         <div className="absolute left-3 right-3 top-full mt-1 bg-white border border-[#c7c4d8] rounded-xl shadow-lg z-50 py-1 max-h-56 overflow-y-auto">
-          {/* Branch options — no "All Branches"; one branch is always the active context */}
-          {accessibleBranches.map(branch => (
-            <button
-              key={branch.id}
-              onClick={() => { setSelectedBranchId(branch.id); setOpen(false); }}
-              className={cn(
-                'w-full flex items-center gap-2.5 px-3 py-2.5 text-xs font-semibold text-left transition-colors',
-                selectedBranchId === branch.id
-                  ? 'text-[#3525cd] bg-[#3525cd]/5'
-                  : 'text-[#464555] hover:bg-[#f0f3ff]'
-              )}
-            >
-              <Building2 size={13} className="flex-shrink-0 opacity-60" />
-              <div className="flex-1 min-w-0">
-                <p className="truncate">{branch.name}</p>
-                {branch.location && (
-                  <p className="text-[0.65rem] text-[#777587] truncate">{branch.location}</p>
+          {/* No "All Branches" option — a specific branch is always the working context */}
+          {accessibleBranches.map(branch => {
+            // Coerce both sides: BIGINT from PostgreSQL comes as string via node-postgres
+            const isActive = Number(branch.id) === selectedBranchId;
+            return (
+              <button
+                key={branch.id}
+                onClick={() => { setSelectedBranchId(branch.id); setOpen(false); }}
+                className={cn(
+                  'w-full flex items-center gap-2.5 px-3 py-2.5 text-xs font-semibold text-left transition-colors',
+                  isActive
+                    ? 'text-[#3525cd] bg-[#3525cd]/5'
+                    : 'text-[#464555] hover:bg-[#f0f3ff]'
                 )}
-              </div>
-              {selectedBranchId === branch.id && (
-                <Check size={12} className="text-[#3525cd] flex-shrink-0" />
-              )}
-            </button>
-          ))}
+              >
+                <Building2 size={13} className="flex-shrink-0 opacity-60" />
+                <div className="flex-1 min-w-0">
+                  <p className="truncate">{branch.name}</p>
+                  {branch.location && (
+                    <p className="text-[0.65rem] text-[#777587] truncate">{branch.location}</p>
+                  )}
+                </div>
+                {isActive && <Check size={12} className="text-[#3525cd] flex-shrink-0" />}
+              </button>
+            );
+          })}
 
-          {accessibleBranches.length === 0 && !hasAllBranches && (
+          {accessibleBranches.length === 0 && (
             <p className="px-3 py-2 text-xs text-[#777587] italic">No branches assigned</p>
           )}
         </div>
