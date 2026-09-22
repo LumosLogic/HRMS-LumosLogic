@@ -691,47 +691,36 @@ BEGIN
 
   -- 103 — Kureshi Inayat
   INSERT INTO employee_family_members (employee_id, organization_id, relationship, name, date_of_birth, occupation, dependent)
-  SELECT v_uid_103, v_org_id, 'father', 'Mazid Ibrahim Kureshi',   NULL,         'Retired',     FALSE
-  WHERE v_uid_103 IS NOT NULL
+  SELECT v_uid_103, v_org_id, 'father', 'Mazid Ibrahim Kureshi',    NULL::date, 'Retired',  FALSE WHERE v_uid_103 IS NOT NULL
   UNION ALL
-  SELECT v_uid_103, v_org_id, 'mother', 'Rukaiya Mazid Kureshi',   NULL,         'Deceased',    FALSE
-  WHERE v_uid_103 IS NOT NULL
+  SELECT v_uid_103, v_org_id, 'mother', 'Rukaiya Mazid Kureshi',    NULL::date, 'Deceased', FALSE WHERE v_uid_103 IS NOT NULL
   UNION ALL
-  SELECT v_uid_103, v_org_id, 'spouse', 'Samimbanu Inayat Kureshi',NULL,         NULL,          FALSE
-  WHERE v_uid_103 IS NOT NULL
+  SELECT v_uid_103, v_org_id, 'spouse', 'Samimbanu Inayat Kureshi', NULL::date, NULL,       FALSE WHERE v_uid_103 IS NOT NULL
   UNION ALL
-  SELECT v_uid_103, v_org_id, 'child',  'Naurin Inayat Kureshi',   NULL,         NULL,          TRUE
-  WHERE v_uid_103 IS NOT NULL
+  SELECT v_uid_103, v_org_id, 'child',  'Naurin Inayat Kureshi',    NULL::date, NULL,       TRUE  WHERE v_uid_103 IS NOT NULL
   UNION ALL
-  SELECT v_uid_103, v_org_id, 'child',  'Aabir Inayat Kureshi',    NULL,         NULL,          TRUE
-  WHERE v_uid_103 IS NOT NULL
+  SELECT v_uid_103, v_org_id, 'child',  'Aabir Inayat Kureshi',     NULL::date, NULL,       TRUE  WHERE v_uid_103 IS NOT NULL
   ON CONFLICT DO NOTHING;
 
   -- 113 — Abir Kureshi
   INSERT INTO employee_family_members (employee_id, organization_id, relationship, name, date_of_birth, occupation, dependent)
-  SELECT v_uid_113, v_org_id, 'father', 'Inayat M. Kureshi',          '1974-07-06', NULL, FALSE
-  WHERE v_uid_113 IS NOT NULL
+  SELECT v_uid_113, v_org_id, 'father', 'Inayat M. Kureshi',           '1974-07-06'::date, NULL, FALSE WHERE v_uid_113 IS NOT NULL
   UNION ALL
-  SELECT v_uid_113, v_org_id, 'mother', 'Sameembanu Inayatbhai Kureshi','1976-01-01', NULL, FALSE
-  WHERE v_uid_113 IS NOT NULL
+  SELECT v_uid_113, v_org_id, 'mother', 'Sameembanu Inayatbhai Kureshi','1976-01-01'::date, NULL, FALSE WHERE v_uid_113 IS NOT NULL
   ON CONFLICT DO NOTHING;
 
   -- 105 — Hardik Mehta
   INSERT INTO employee_family_members (employee_id, organization_id, relationship, name, date_of_birth, occupation, dependent)
-  SELECT v_uid_105, v_org_id, 'father', 'Hasmukhlal Mehta',  '1966-06-01', 'Business',   FALSE
-  WHERE v_uid_105 IS NOT NULL
+  SELECT v_uid_105, v_org_id, 'father', 'Hasmukhlal Mehta', '1966-06-01'::date, 'Business',  FALSE WHERE v_uid_105 IS NOT NULL
   UNION ALL
-  SELECT v_uid_105, v_org_id, 'mother', 'Kanchanben Mehta',  '1971-09-29', 'Housewife',  FALSE
-  WHERE v_uid_105 IS NOT NULL
+  SELECT v_uid_105, v_org_id, 'mother', 'Kanchanben Mehta', '1971-09-29'::date, 'Housewife', FALSE WHERE v_uid_105 IS NOT NULL
   ON CONFLICT DO NOTHING;
 
   -- 112 — Nishtha Sanghvi
   INSERT INTO employee_family_members (employee_id, organization_id, relationship, name, date_of_birth, occupation, dependent)
-  SELECT v_uid_112, v_org_id, 'father', 'Sanghvi Hiren Dhirajlal', '1986-09-01', 'Business',  FALSE
-  WHERE v_uid_112 IS NOT NULL
+  SELECT v_uid_112, v_org_id, 'father', 'Sanghvi Hiren Dhirajlal', '1986-09-01'::date, 'Business',  FALSE WHERE v_uid_112 IS NOT NULL
   UNION ALL
-  SELECT v_uid_112, v_org_id, 'mother', 'Falguni Hiren Sanghvi',   '1989-08-13', 'Housewife', FALSE
-  WHERE v_uid_112 IS NOT NULL
+  SELECT v_uid_112, v_org_id, 'mother', 'Falguni Hiren Sanghvi',   '1989-08-13'::date, 'Housewife', FALSE WHERE v_uid_112 IS NOT NULL
   ON CONFLICT DO NOTHING;
 
   -- 115 — Kanchan Gosariya
