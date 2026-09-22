@@ -206,7 +206,17 @@ router.get('/dashboard', auth, rootAdminOnly, withBranchContext, async (req, res
       { count: pendingExp },
       { count: totalDepartments },
     ] = await Promise.all([
-      db.from('users').select('*', { count: 'exact', head: true }).eq('role', 'admin').eq('organization_id', oid),
+      // Count HR admins assigned to the selected branch (or all org HR admins if no branch)
+      branchState.type === 'specific'
+        ? pool.query(
+            `SELECT COUNT(DISTINCT u.id)::int AS count
+             FROM users u
+             JOIN hr_branch_access hba ON hba.user_id = u.id AND hba.org_id = $1
+               AND (hba.branch_id = $2 OR hba.all_branches = TRUE)
+             WHERE u.role = 'admin' AND u.organization_id = $1`,
+            [oid, branchState.branchId]
+          ).then(r => ({ count: r.rows[0]?.count || 0 }))
+        : db.from('users').select('*', { count: 'exact', head: true }).eq('role', 'admin').eq('organization_id', oid),
       // BUG_116: count ALL pending leaves — legacy (pending, pending_root) + new workflow (pending_approval)
       empIds.length === 0
         ? Promise.resolve({ count: 0 })
@@ -526,13 +536,40 @@ router.get('/yearly-leaves', auth, rootAdminOnly, withBranchContext, async (req,
 });
 
 // ─── Root Admin: List HR Admins ───────────────────────────────────────────────
-router.get('/hr', auth, rootAdminOnly, async (req, res) => {
+router.get('/hr', auth, rootAdminOnly, withBranchContext, async (req, res) => {
   try {
+    const oid = orgId(req);
+    const { selectedBranchId } = req.branchContext || {};
+
+    if (selectedBranchId) {
+      // Show only HR admins explicitly assigned to the selected branch (specific grant or all-branches grant)
+      const result = await pool.query(
+        `SELECT DISTINCT u.id, u.name, u.email, u.department, u.position, u.avatar_color, u.created_at
+         FROM users u
+         JOIN hr_branch_access hba ON hba.user_id = u.id
+           AND hba.org_id = $1
+           AND (hba.branch_id = $2 OR hba.all_branches = TRUE)
+         WHERE u.role = 'admin' AND u.organization_id = $1
+         ORDER BY u.name`,
+        [oid, selectedBranchId]
+      );
+      return res.json(result.rows);
+    }
+
+    // No branch selected — return all org HR admins (fallback)
     const { data } = await db.from('users')
       .select('id, name, email, department, position, avatar_color, status, created_at')
-      .eq('role', 'admin').eq('organization_id', orgId(req)).order('name');
+      .eq('role', 'admin').eq('organization_id', oid).order('name');
     res.json(data || []);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    if (err.message && err.message.includes('does not exist')) {
+      const { data } = await db.from('users')
+        .select('id, name, email, department, position, avatar_color, status, created_at')
+        .eq('role', 'admin').eq('organization_id', orgId(req)).order('name');
+      return res.json(data || []);
+    }
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── Root Admin: Create HR Admin ──────────────────────────────────────────────

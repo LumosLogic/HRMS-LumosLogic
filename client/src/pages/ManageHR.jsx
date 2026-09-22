@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Pencil, Trash2, ShieldCheck, Mail, Building2, Check, Inbox, Eye, EyeOff, RefreshCw, AlertCircle } from 'lucide-react';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { useBranch } from '@/context/BranchContext';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
 import { useToast } from '@/context/ToastContext';
@@ -99,13 +100,14 @@ function HRFormModal({ open, onClose, editing }) {
 export default function ManageHR() {
   const qc    = useQueryClient();
   const toast = useToast();
+  const { selectedBranchId } = useBranch();
 
   const [modalOpen,    setModalOpen]    = useState(false);
   const [editing,      setEditing]      = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
 
   const { data: hrList = [], isLoading } = useQuery({
-    queryKey: ['root-hr'],
+    queryKey: ['root-hr', selectedBranchId],
     queryFn:  () => apiGet('/root/hr'),
   });
 

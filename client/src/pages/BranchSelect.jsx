@@ -146,20 +146,48 @@ export default function BranchSelect() {
 
   // ── Multiple branches: show selection grid ──────────────────────────────────
   return (
-    <div className="min-h-screen bg-[#f9f9ff] flex flex-col items-center justify-center px-6 py-10">
+    <div className="min-h-screen bg-[#f9f9ff] flex flex-col items-center px-6 py-10">
       {/* Header */}
-      <div className="mb-10 text-center">
-        <div className="w-16 h-16 rounded-2xl bg-[#3525cd] flex items-center justify-center mx-auto mb-5 shadow-lg shadow-[#3525cd]/20">
-          <img src="/LogoWithoutName.svg" alt="HRMS" className="w-9 h-9" onError={e => { e.target.style.display = 'none'; }} />
+      <div className="w-full max-w-3xl mb-8">
+        {/* Top bar: org identity + management actions */}
+        <div className="flex items-center justify-between mb-8">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-[#3525cd] flex items-center justify-center shadow-md shadow-[#3525cd]/20 flex-shrink-0">
+              <Building2 size={18} className="text-white" />
+            </div>
+            <div>
+              <h2 className="text-sm font-black text-[#151c27] leading-tight">{orgName}</h2>
+              <p className="text-[0.65rem] text-[#777587]">Root Admin Console</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Link
+              to="/root/branches"
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold rounded-xl border border-[#c7c4d8] bg-white text-[#464555] hover:border-[#3525cd]/40 hover:text-[#3525cd] transition-colors"
+            >
+              <Settings size={13} /> Manage Branches
+            </Link>
+            <Link
+              to="/root/branches"
+              state={{ openCreate: true }}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-xl bg-[#3525cd] text-white hover:bg-[#4f46e5] transition-colors"
+            >
+              <Plus size={13} /> Add Branch
+            </Link>
+          </div>
         </div>
-        <h1 className="text-3xl font-black text-[#151c27] tracking-tight mb-1">Welcome to {orgName}</h1>
-        <p className="text-[#777587] text-sm">Select a branch to continue</p>
+
+        {/* Title */}
+        <div className="text-center mb-8">
+          <h1 className="text-2xl font-black text-[#151c27] tracking-tight mb-1">Select a Branch</h1>
+          <p className="text-[#777587] text-sm">Choose the branch workspace to enter. You can switch branches anytime from the sidebar.</p>
+        </div>
       </div>
 
       {/* Branch cards */}
       <div className={[
         'grid gap-4 w-full max-w-3xl',
-        accessibleBranches.length === 2 ? 'grid-cols-1 sm:grid-cols-2 max-w-xl' :
+        accessibleBranches.length === 2 ? 'grid-cols-1 sm:grid-cols-2' :
         accessibleBranches.length === 3 ? 'grid-cols-1 sm:grid-cols-3' :
         'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3',
       ].join(' ')}>
@@ -193,18 +221,6 @@ export default function BranchSelect() {
             </div>
           </button>
         ))}
-      </div>
-
-      <div className="mt-8 flex flex-col items-center gap-2">
-        <p className="text-xs text-[#777587]">
-          You can switch branches anytime from the sidebar.
-        </p>
-        <Link
-          to="/root/branches"
-          className="flex items-center gap-1.5 text-xs font-semibold text-[#3525cd] hover:underline"
-        >
-          <Settings size={12} /> Manage Branches
-        </Link>
       </div>
     </div>
   );
