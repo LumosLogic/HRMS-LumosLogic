@@ -237,15 +237,39 @@ router.delete('/user-access/:userId', auth, rootAdminOnly, async (req, res) => {
 
 // ─── Existing Branch CRUD (/:id must come after all specific named routes) ────
 
-// GET /api/branches — list all branches in org
+// GET /api/branches — list all branches in org with HR admin assignment counts
 router.get('/', auth, async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT * FROM branches WHERE org_id = $1 ORDER BY name`,
+      `SELECT b.*,
+              COALESCE(COUNT(DISTINCT hba.user_id), 0)::int AS hr_admin_count,
+              COALESCE(
+                ARRAY_AGG(u.name ORDER BY u.name) FILTER (WHERE u.id IS NOT NULL),
+                '{}'
+              ) AS hr_admin_names
+       FROM branches b
+       LEFT JOIN hr_branch_access hba
+              ON hba.branch_id = b.id
+             AND hba.all_branches = FALSE
+             AND hba.org_id      = b.org_id
+       LEFT JOIN users u ON u.id = hba.user_id AND u.organization_id = b.org_id
+       WHERE b.org_id = $1
+       GROUP BY b.id
+       ORDER BY b.name`,
       [req.user.organization_id]
     );
     res.json(result.rows);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    // Pre-migration fallback: hr_branch_access table may not exist yet
+    if (err.message && err.message.includes('does not exist')) {
+      const fallback = await pool.query(
+        `SELECT * FROM branches WHERE org_id = $1 ORDER BY name`,
+        [req.user.organization_id]
+      );
+      return res.json(fallback.rows);
+    }
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // POST /api/branches — BUG_064: allow admins by role as fallback if RBAC not yet seeded

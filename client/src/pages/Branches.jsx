@@ -306,8 +306,8 @@ export default function Branches() {
                   <th className="px-5 py-3.5 text-left text-xs font-black text-[#464555] uppercase tracking-wider">Code</th>
                   <th className="px-5 py-3.5 text-left text-xs font-black text-[#464555] uppercase tracking-wider">Name</th>
                   <th className="px-5 py-3.5 text-left text-xs font-black text-[#464555] uppercase tracking-wider">Location</th>
-                  <th className="px-5 py-3.5 text-left text-xs font-black text-[#464555] uppercase tracking-wider">Address</th>
                   <th className="px-5 py-3.5 text-left text-xs font-black text-[#464555] uppercase tracking-wider">Status</th>
+                  {isRootAdmin && <th className="px-5 py-3.5 text-left text-xs font-black text-[#464555] uppercase tracking-wider">HR Admins</th>}
                   {isAdmin && <th className="px-5 py-3.5 text-left text-xs font-black text-[#464555] uppercase tracking-wider">Actions</th>}
                 </tr>
               </thead>
@@ -337,9 +337,6 @@ export default function Branches() {
                         <span className="text-[#c7c4d8] text-xs">—</span>
                       )}
                     </td>
-                    <td className="px-5 py-3.5 text-xs text-[#777587] max-w-[200px] truncate">
-                      {b.address || '—'}
-                    </td>
                     <td className="px-5 py-3.5">
                       {b.is_active !== false ? (
                         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-50 text-green-700 border border-green-200">
@@ -351,6 +348,29 @@ export default function Branches() {
                         </span>
                       )}
                     </td>
+                    {isRootAdmin && (
+                      <td className="px-5 py-3.5">
+                        {(b.hr_admin_count ?? 0) === 0 ? (
+                          <span className="text-xs text-[#c7c4d8] italic">None</span>
+                        ) : (
+                          <button
+                            onClick={() => setAccessBranch(b)}
+                            className="group flex items-center gap-1.5 text-left"
+                            title="Click to manage HR access"
+                          >
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-[#f0f3ff] text-[#3525cd] border border-[#3525cd]/20 group-hover:bg-[#3525cd]/10 transition-colors">
+                              <UserCheck size={10} />
+                              {b.hr_admin_count}
+                            </span>
+                            {b.hr_admin_names && b.hr_admin_names.length > 0 && (
+                              <span className="text-xs text-[#777587] truncate max-w-[120px]" title={(b.hr_admin_names || []).join(', ')}>
+                                {b.hr_admin_names[0]}{b.hr_admin_names.length > 1 ? ` +${b.hr_admin_names.length - 1}` : ''}
+                              </span>
+                            )}
+                          </button>
+                        )}
+                      </td>
+                    )}
                     {isAdmin && (
                       <td className="px-5 py-3.5">
                         <div className="flex items-center gap-1">

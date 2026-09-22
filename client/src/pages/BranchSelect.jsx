@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { Building2, ArrowRight, MapPin, Plus } from 'lucide-react';
+import { useNavigate, Link } from 'react-router-dom';
+import { Building2, ArrowRight, MapPin, Plus, Settings } from 'lucide-react';
 import { useBranch } from '@/context/BranchContext';
 import { useAuth } from '@/context/AuthContext';
 import { apiPost } from '@/lib/api';
@@ -195,9 +195,17 @@ export default function BranchSelect() {
         ))}
       </div>
 
-      <p className="mt-8 text-xs text-[#777587]">
-        You can switch branches anytime from the sidebar.
-      </p>
+      <div className="mt-8 flex flex-col items-center gap-2">
+        <p className="text-xs text-[#777587]">
+          You can switch branches anytime from the sidebar.
+        </p>
+        <Link
+          to="/root/branches"
+          className="flex items-center gap-1.5 text-xs font-semibold text-[#3525cd] hover:underline"
+        >
+          <Settings size={12} /> Manage Branches
+        </Link>
+      </div>
     </div>
   );
 }
