@@ -55,6 +55,7 @@ const Onboarding       = lazy(() => import('@/pages/Onboarding'));
 const ExitManagement   = lazy(() => import('@/pages/ExitManagement'));
 const NotificationCenter = lazy(() => import('@/pages/NotificationCenter'));
 const Branches              = lazy(() => import('@/pages/Branches'));
+const BranchSelect          = lazy(() => import('@/pages/BranchSelect'));
 const BiometricDevices      = lazy(() => import('@/pages/BiometricDevices'));
 const BiometricPinMapping   = lazy(() => import('@/pages/BiometricPinMapping'));
 const BiometricLogs         = lazy(() => import('@/pages/BiometricLogs'));
@@ -270,6 +271,9 @@ function AppRoutes() {
         <Route path="/biometric/settings"        element={<FeatureRoute featureKey="biometric"><BiometricSettings /></FeatureRoute>} />
         <Route path="/biometric/historical-sync" element={<FeatureRoute featureKey="biometric"><BiometricHistoricalSync /></FeatureRoute>} />
       </Route>
+
+      {/* ── Root Admin branch selection — standalone, no sidebar ── */}
+      <Route path="/root/branch-select" element={<RootRoute><BranchSelect /></RootRoute>} />
 
       {/* ── Root Admin area (root_admin only) ── */}
       <Route element={<RootRoute><RootLayout /></RootRoute>}>

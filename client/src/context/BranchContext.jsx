@@ -14,6 +14,7 @@ export function BranchProvider({ children }) {
   const [hasAllBranches,     setHasAllBranches]     = useState(false);
   const [isRootAdmin,        setIsRootAdmin]         = useState(false);
   const [isLoading,          setIsLoading]           = useState(false);
+  const [branchesLoaded,     setBranchesLoaded]     = useState(false);
 
   // Restore selected branch from localStorage
   const [selectedBranchId, setSelectedBranchIdState] = useState(() => {
@@ -29,6 +30,7 @@ export function BranchProvider({ children }) {
       setHasAllBranches(false);
       setIsRootAdmin(false);
       setSelectedBranchIdState(null);
+      setBranchesLoaded(false);
       localStorage.removeItem(STORAGE_KEY);
       return;
     }
@@ -38,10 +40,12 @@ export function BranchProvider({ children }) {
       setAccessibleBranches([]);
       setHasAllBranches(false);
       setIsRootAdmin(false);
+      setBranchesLoaded(false);
       return;
     }
 
     setIsLoading(true);
+    setBranchesLoaded(false);
     apiGet('/branches/my-access')
       .then(data => {
         const branches = data.branches || [];
@@ -65,7 +69,10 @@ export function BranchProvider({ children }) {
         setHasAllBranches(false);
         setIsRootAdmin(false);
       })
-      .finally(() => setIsLoading(false));
+      .finally(() => {
+        setIsLoading(false);
+        setBranchesLoaded(true);
+      });
   }, [token, user?.id, user?.role]);
 
   const setSelectedBranchId = useCallback((branchId) => {
@@ -96,6 +103,7 @@ export function BranchProvider({ children }) {
       hasAllBranches,
       isRootAdmin,
       isLoading,
+      branchesLoaded,
       showBranchSelector,
     }}>
       {children}

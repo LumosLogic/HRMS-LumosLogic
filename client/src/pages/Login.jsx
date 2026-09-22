@@ -33,7 +33,7 @@ export default function Login() {
       const { token, user } = response;
       saveAuth(token, user);
       // Navigate directly to the correct portal — no redirect chain
-      if (user.role === 'root_admin') navigate('/root/dashboard');
+      if (user.role === 'root_admin') navigate('/root/branch-select');
       else if (user.role === 'employee') navigate('/portal/home');
       else navigate('/dashboard');
     } catch (err) {
@@ -50,7 +50,7 @@ export default function Login() {
     try {
       const { token, user } = await apiPost('/auth/totp/verify-login', { totp_session: totpSessionToken, token: totpCode });
       saveAuth(token, user);
-      if (user.role === 'root_admin') navigate('/root/dashboard');
+      if (user.role === 'root_admin') navigate('/root/branch-select');
       else if (user.role === 'employee') navigate('/portal/home');
       else navigate('/dashboard');
     } catch (err) {
