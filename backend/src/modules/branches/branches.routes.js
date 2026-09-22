@@ -296,10 +296,23 @@ router.put('/:id', auth, async (req, res) => {
   if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin access required.' });
   try {
     const { name, code, location, address, is_active } = req.body;
+
+    // Quick status toggle from the list page — only is_active is sent
+    if (name === undefined && is_active !== undefined) {
+      const result = await pool.query(
+        `UPDATE branches SET is_active=$1 WHERE id=$2 AND org_id=$3 RETURNING *`,
+        [is_active !== false, req.params.id, req.user.organization_id]
+      );
+      if (!result.rows.length) return res.status(404).json({ error: 'Branch not found' });
+      return res.json(result.rows[0]);
+    }
+
+    // Full update from edit form — name is required
+    if (!name || !name.trim()) return res.status(400).json({ error: 'Branch name is required' });
     const result = await pool.query(
       `UPDATE branches SET name=$1, code=$2, location=$3, address=$4, is_active=$5
        WHERE id=$6 AND org_id=$7 RETURNING *`,
-      [name, code || null, location || null, address || null,
+      [name.trim(), code || null, location || null, address || null,
        is_active !== false, req.params.id, req.user.organization_id]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Branch not found' });
