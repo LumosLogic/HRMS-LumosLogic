@@ -235,47 +235,69 @@ function PunchLogRow({ employee_pin, user_id, date, name, colSpan }) {
 }
 
 // ── Pagination bar ─────────────────────────────────────────────────────────────
-function Pagination({ page, totalPages, totalCount, onPageChange, label = 'records' }) {
-  if (totalPages <= 1) return null;
+const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
+
+function Pagination({ page, totalPages, totalCount, pageSize, onPageChange, onPageSize, label = 'records' }) {
   const delta = 2;
   const start = Math.max(1, page - delta);
   const end   = Math.min(totalPages, page + delta);
   const pages = Array.from({ length: end - start + 1 }, (_, i) => start + i);
   const btn   = 'w-7 h-7 rounded-lg text-xs font-bold border transition-colors';
   const idle  = 'border-[#c7c4d8] text-[#777587] hover:border-[#3525cd] hover:text-[#3525cd]';
+  const from  = Math.min((page - 1) * pageSize + 1, totalCount);
+  const to    = Math.min(page * pageSize, totalCount);
   return (
-    <div className="px-4 py-3 border-t border-[#f0f3ff] bg-[#f9f9ff] flex items-center justify-between gap-2 flex-wrap">
-      <span className="text-xs text-[#777587]">
-        Page {page} of {totalPages} · {totalCount} total {label}
-      </span>
-      <div className="flex items-center gap-1">
-        <button onClick={() => onPageChange(page - 1)} disabled={page === 1}
-          className={cn(btn, idle, 'flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed')}>
-          ‹
-        </button>
-        {start > 1 && (
-          <>
-            <button onClick={() => onPageChange(1)} className={cn(btn, idle)}>1</button>
-            {start > 2 && <span className="text-xs text-[#777587] px-0.5">…</span>}
-          </>
-        )}
-        {pages.map(p => (
-          <button key={p} onClick={() => onPageChange(p)}
-            className={cn(btn, p === page ? 'bg-[#3525cd] text-white border-[#3525cd]' : idle)}>
-            {p}
-          </button>
-        ))}
-        {end < totalPages && (
-          <>
-            {end < totalPages - 1 && <span className="text-xs text-[#777587] px-0.5">…</span>}
-            <button onClick={() => onPageChange(totalPages)} className={cn(btn, idle)}>{totalPages}</button>
-          </>
-        )}
-        <button onClick={() => onPageChange(page + 1)} disabled={page === totalPages}
-          className={cn(btn, idle, 'flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed')}>
-          ›
-        </button>
+    <div className="px-4 py-3 border-t border-[#f0f3ff] bg-[#f9f9ff] flex items-center justify-between gap-3 flex-wrap">
+      {/* Left: showing X–Y of Z + page size selector */}
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="text-xs text-[#777587]">
+          Showing <span className="font-bold text-[#464555]">{from}–{to}</span> of <span className="font-bold text-[#464555]">{totalCount}</span> {label}
+        </span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-[#777587]">Show</span>
+          {PAGE_SIZE_OPTIONS.map(n => (
+            <button key={n} onClick={() => onPageSize(n)}
+              className={cn('px-2 py-0.5 rounded-md text-xs font-bold border transition-all',
+                pageSize === n
+                  ? 'bg-[#3525cd] text-white border-[#3525cd]'
+                  : 'bg-white text-[#464555] border-[#c7c4d8] hover:border-[#3525cd] hover:text-[#3525cd]'
+              )}>
+              {n}
+            </button>
+          ))}
+        </div>
       </div>
+      {/* Right: page buttons — only shown when more than 1 page */}
+      {totalPages > 1 && (
+        <div className="flex items-center gap-1">
+          <button onClick={() => onPageChange(page - 1)} disabled={page === 1}
+            className={cn(btn, idle, 'flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed')}>
+            ‹
+          </button>
+          {start > 1 && (
+            <>
+              <button onClick={() => onPageChange(1)} className={cn(btn, idle)}>1</button>
+              {start > 2 && <span className="text-xs text-[#777587] px-0.5">…</span>}
+            </>
+          )}
+          {pages.map(p => (
+            <button key={p} onClick={() => onPageChange(p)}
+              className={cn(btn, p === page ? 'bg-[#3525cd] text-white border-[#3525cd]' : idle)}>
+              {p}
+            </button>
+          ))}
+          {end < totalPages && (
+            <>
+              {end < totalPages - 1 && <span className="text-xs text-[#777587] px-0.5">…</span>}
+              <button onClick={() => onPageChange(totalPages)} className={cn(btn, idle)}>{totalPages}</button>
+            </>
+          )}
+          <button onClick={() => onPageChange(page + 1)} disabled={page === totalPages}
+            className={cn(btn, idle, 'flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed')}>
+            ›
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -302,6 +324,7 @@ export default function Reports() {
   const [empTypeFilter,   setEmpTypeFilter]   = useState('');
   const [sort,            setSort]            = useState({ col: 'date', dir: 'desc' });
   const [page,            setPage]            = useState(1);
+  const [pageSize,        setPageSize]        = useState(25);
   const [dlOpen,          setDlOpen]          = useState(false);
   // Biometric punch log expansion (Relitrade / first_in_last_out orgs only)
   // Use attendance record id as key — user_id can be null causing all rows to expand
@@ -348,7 +371,7 @@ export default function Reports() {
   }
 
   // Reset page whenever filters or period changes
-  useEffect(() => { setPage(1); }, [selectedEmpId, deptFilter, statusFilter, leaveTypeFilter, attStatusFilter, empTypeFilter, active, viewMode, year, month]);
+  useEffect(() => { setPage(1); }, [selectedEmpId, deptFilter, statusFilter, leaveTypeFilter, attStatusFilter, empTypeFilter, active, viewMode, year, month, pageSize]);
 
   function prevMonth() {
     if (month === 1) { setMonth(12); setYear(y => y - 1); }
@@ -576,10 +599,9 @@ export default function Reports() {
 
   const activeRows  = active === 'attendance' ? filteredAtt : active === 'leaves' ? filteredLeave : filteredEmp;
   const isLoading   = active === 'attendance' ? attLoading : active === 'leaves' ? lvLoading : empLoading;
-  const PAGE_SIZE   = 50;
-  const totalPages  = Math.max(1, Math.ceil(activeRows.length / PAGE_SIZE));
+  const totalPages  = Math.max(1, Math.ceil(activeRows.length / pageSize));
   const safePage    = Math.min(page, totalPages);
-  const displayRows = activeRows.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE);
+  const displayRows = activeRows.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   // ── KPI cards per tab ─────────────────────────────────────────────────────────
   // BUG_124: helper to clear all other filters before setting a status filter
@@ -1059,7 +1081,7 @@ export default function Reports() {
               </>
             )}
           </div>
-          <Pagination page={safePage} totalPages={totalPages} totalCount={activeRows.length} onPageChange={setPage} />
+          <Pagination page={safePage} totalPages={totalPages} totalCount={activeRows.length} pageSize={pageSize} onPageChange={setPage} onPageSize={n => { setPageSize(n); setPage(1); }} />
         </div>
       )}
 
@@ -1120,7 +1142,7 @@ export default function Reports() {
               </tbody>
             </table>
           </div>
-          <Pagination page={safePage} totalPages={totalPages} totalCount={activeRows.length} onPageChange={setPage} />
+          <Pagination page={safePage} totalPages={totalPages} totalCount={activeRows.length} pageSize={pageSize} onPageChange={setPage} onPageSize={n => { setPageSize(n); setPage(1); }} />
         </div>
       )}
 
@@ -1187,7 +1209,7 @@ export default function Reports() {
               </tbody>
             </table>
           </div>
-          <Pagination page={safePage} totalPages={totalPages} totalCount={activeRows.length} onPageChange={setPage} label="employees" />
+          <Pagination page={safePage} totalPages={totalPages} totalCount={activeRows.length} pageSize={pageSize} onPageChange={setPage} onPageSize={n => { setPageSize(n); setPage(1); }} label="employees" />
         </div>
       )}
 
