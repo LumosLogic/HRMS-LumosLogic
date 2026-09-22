@@ -6,6 +6,8 @@ const { auth, adminOnly, rootAdminOnly, unblockUser } = require('../../middlewar
 const { flat, orgId, getOrgContext } = require('../../utils/helpers');
 const { sendMail, welcomeEmployeeHtml } = require('../../services/emailService');
 const { sendPushToUsers } = require('../../services/pushService');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { getFilterState } = require('../../utils/branchFilter');
 
 // ─── Root Admin: Send Email to All / One User ─────────────────────────────────
 router.post('/send-email', auth, adminOnly, async (req, res) => {
@@ -154,7 +156,7 @@ router.get('/organizations', auth, rootAdminOnly, async (req, res) => {
 });
 
 // ─── Root Admin: Comprehensive Dashboard ─────────────────────────────────────
-router.get('/dashboard', auth, rootAdminOnly, async (req, res) => {
+router.get('/dashboard', auth, rootAdminOnly, withBranchContext, async (req, res) => {
   try {
     const now   = new Date();
     const today = now.toISOString().split('T')[0];
@@ -166,8 +168,31 @@ router.get('/dashboard', auth, rootAdminOnly, async (req, res) => {
     const d30ahead = new Date(now); d30ahead.setDate(d30ahead.getDate() + 30);
     const toDate = d30ahead.toISOString().split('T')[0];
 
+    // ── Branch context — scope all employee-derived data to selected branch ──
+    const branchState = getFilterState(req.branchContext);
+    if (branchState.type === 'none') {
+      return res.json({
+        totalEmployees: 0, totalHR: 0, pendingLeaves: 0, presentToday: 0,
+        pendingRegCount: 0, pendingExpCount: 0, totalDepartments: 0,
+        recentLeaves: [], pendingLeavesData: [], attendanceBreakdown: {},
+        leavesByType: {}, attendanceTrend: [], departmentHealth: [],
+        headcountGrowth: [], liveActivity: [], actionCenter: [{ type: 'all_clear', label: 'No branch access configured', priority: 'Low' }],
+        upcomingEvents: [], recentJoiners: [], birthdays: [], anniversaries: [],
+      });
+    }
+
+    // Phase 1: fetch branch-scoped employees first so empIds can scope Phase 2
+    // BUG_117: fetch employee_status so resigned/terminated can be excluded from active count
+    let empQuery = db.from('users')
+      .select('id, name, department, position, avatar_color, created_at, role, date_of_birth, joining_date, employee_status')
+      .eq('organization_id', oid).in('role', ['employee', 'admin']).order('name');
+    if (branchState.type === 'specific') empQuery = empQuery.eq('branch_id', branchState.branchId);
+    else if (branchState.type === 'multi') empQuery = empQuery.in('branch_id', branchState.branchIds);
+    const { data: allEmployeesRaw } = await empQuery;
+    const empIds = (allEmployeesRaw || []).map(e => e.id);
+
+    // Phase 2: remaining queries, scoped to empIds for employee-linked tables
     const [
-      { data: allEmployeesRaw },
       { count: totalHR },
       { count: pendingLeavesCount },
       { data: recentLeavesRaw },
@@ -181,30 +206,49 @@ router.get('/dashboard', auth, rootAdminOnly, async (req, res) => {
       { count: pendingExp },
       { count: totalDepartments },
     ] = await Promise.all([
-      // BUG_117: fetch employee_status so resigned/terminated can be excluded from active count
-      db.from('users')
-        .select('id, name, department, position, avatar_color, created_at, role, date_of_birth, joining_date, employee_status')
-        .eq('organization_id', oid).in('role', ['employee', 'admin']).order('name'),
       db.from('users').select('*', { count: 'exact', head: true }).eq('role', 'admin').eq('organization_id', oid),
       // BUG_116: count ALL pending leaves — legacy (pending, pending_root) + new workflow (pending_approval)
-      db.from('leaves').select('*', { count: 'exact', head: true }).in('status', ['pending', 'pending_root', 'pending_approval']).eq('organization_id', oid),
-      db.from('leaves')
-        .select('id, user_id, leave_type, leave_time, status, start_date, end_date, reason, created_at, users!leaves_user_id_fkey(name, email, department, avatar_color)')
-        .eq('organization_id', oid).order('created_at', { ascending: false }).limit(10),
-      db.from('leaves')
-        .select('id, leave_type, leave_time, status, start_date, end_date, reason, created_at, users!leaves_user_id_fkey(name, email, department, avatar_color)')
-        .eq('organization_id', oid).in('status', ['pending', 'pending_root', 'pending_approval']).order('created_at', { ascending: false }).limit(15),
-      db.from('attendance').select('user_id, status, check_in').eq('date', today).eq('organization_id', oid),
-      db.from('leaves').select('leave_type, leave_time').eq('organization_id', oid).eq('status', 'approved')
-        .gte('start_date', `${year}-01-01`).lte('end_date', `${year}-12-31`),
-      db.from('attendance').select('date, user_id, status').eq('organization_id', oid)
-        .gte('date', fromDate).lte('date', today),
+      empIds.length === 0
+        ? Promise.resolve({ count: 0 })
+        : db.from('leaves').select('*', { count: 'exact', head: true })
+            .in('status', ['pending', 'pending_root', 'pending_approval'])
+            .eq('organization_id', oid).in('user_id', empIds),
+      empIds.length === 0
+        ? Promise.resolve({ data: [] })
+        : db.from('leaves')
+            .select('id, user_id, leave_type, leave_time, status, start_date, end_date, reason, created_at, users!leaves_user_id_fkey(name, email, department, avatar_color)')
+            .eq('organization_id', oid).in('user_id', empIds)
+            .order('created_at', { ascending: false }).limit(10),
+      empIds.length === 0
+        ? Promise.resolve({ data: [] })
+        : db.from('leaves')
+            .select('id, leave_type, leave_time, status, start_date, end_date, reason, created_at, users!leaves_user_id_fkey(name, email, department, avatar_color)')
+            .eq('organization_id', oid).in('user_id', empIds)
+            .in('status', ['pending', 'pending_root', 'pending_approval'])
+            .order('created_at', { ascending: false }).limit(15),
+      empIds.length === 0
+        ? Promise.resolve({ data: [] })
+        : db.from('attendance').select('user_id, status, check_in')
+            .eq('date', today).eq('organization_id', oid).in('user_id', empIds),
+      empIds.length === 0
+        ? Promise.resolve({ data: [] })
+        : db.from('leaves').select('leave_type, leave_time')
+            .eq('organization_id', oid).eq('status', 'approved')
+            .gte('start_date', `${year}-01-01`).lte('end_date', `${year}-12-31`)
+            .in('user_id', empIds),
+      empIds.length === 0
+        ? Promise.resolve({ data: [] })
+        : db.from('attendance').select('date, user_id, status')
+            .eq('organization_id', oid).gte('date', fromDate).lte('date', today)
+            .in('user_id', empIds),
       db.from('holidays').select('id, name, date, type').eq('organization_id', oid)
         .gte('date', today).order('date', { ascending: true }).limit(5),
       db.from('events').select('id, title, date').eq('organization_id', oid)
         .gte('date', today).order('date', { ascending: true }).limit(5),
-      db.from('attendance_regularization').select('*', { count: 'exact', head: true })
-        .eq('status', 'pending').eq('organization_id', oid),
+      empIds.length === 0
+        ? Promise.resolve({ count: 0 })
+        : db.from('attendance_regularization').select('*', { count: 'exact', head: true })
+            .eq('status', 'pending').eq('organization_id', oid).in('user_id', empIds),
       db.from('expenses').select('*', { count: 'exact', head: true })
         .eq('status', 'pending').eq('organization_id', oid),
       db.from('departments').select('*', { count: 'exact', head: true })
@@ -400,21 +444,32 @@ router.get('/dashboard', auth, rootAdminOnly, async (req, res) => {
 });
 
 // ─── Root Admin: Yearly Leave Summary ────────────────────────────────────────
-router.get('/yearly-leaves', auth, rootAdminOnly, async (req, res) => {
+router.get('/yearly-leaves', auth, rootAdminOnly, withBranchContext, async (req, res) => {
   try {
     const year = parseInt(req.query.year) || new Date().getFullYear();
+    const oid  = orgId(req);
+    const branchState = getFilterState(req.branchContext);
+
+    if (branchState.type === 'none') {
+      return res.json({ employees: [], year, totalLeaves: 18 });
+    }
+
     // Get total leaves from org settings (default 18)
-    const { data: orgRow } = await db.from('organizations').select('total_annual_leaves').eq('id', orgId(req)).single();
+    const { data: orgRow } = await db.from('organizations').select('total_annual_leaves').eq('id', oid).single();
     const TOTAL_LEAVES = orgRow?.total_annual_leaves || 18;
 
+    // Scope employees to selected branch
+    let empQuery = db.from('users')
+      .select('id, name, department, position, avatar_color')
+      .eq('role', 'employee').eq('organization_id', oid).order('name');
+    if (branchState.type === 'specific') empQuery = empQuery.eq('branch_id', branchState.branchId);
+    else if (branchState.type === 'multi') empQuery = empQuery.in('branch_id', branchState.branchIds);
+
     const [{ data: employees }, { data: leaves }] = await Promise.all([
-      db.from('users')
-        .select('id, name, department, position, avatar_color')
-        .eq('role', 'employee').eq('organization_id', orgId(req))
-        .order('name'),
+      empQuery,
       db.from('leaves')
         .select('user_id, start_date, end_date, leave_type, leave_time, status')
-        .eq('status', 'approved').eq('organization_id', orgId(req))
+        .eq('status', 'approved').eq('organization_id', oid)
         .lte('start_date', `${year}-12-31`)
         .gte('end_date',   `${year}-01-01`),
     ]);

@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Receipt, Upload, ExternalLink, CheckCircle2, XCircle, Clock, Trash2, ChevronRight, AlertTriangle, Download, X as XIcon, FileText, Search, Filter, X } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import { useBranch } from '@/context/BranchContext';
 import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
@@ -424,6 +425,7 @@ function ManagerReviewModal({ open, onClose, expense }) {
 
 export default function ExpensesPage() {
   const { user, isAdmin, isEmployee } = useAuth();
+  const { selectedBranchId } = useBranch();
   const wrap = '';
   const toast = useToast();
   const qc    = useQueryClient();
@@ -454,7 +456,7 @@ export default function ExpensesPage() {
     if (s && ['pending', 'manager_approved', 'approved', 'rejected'].includes(s)) setFilter(s);
   }, []);
 
-  const { data: _expData, isLoading } = useQuery({ queryKey: ['expenses', filter], queryFn: () => apiGet('/expenses', filter !== 'all' ? { status: filter } : {}) });
+  const { data: _expData, isLoading } = useQuery({ queryKey: ['expenses', filter, selectedBranchId], queryFn: () => apiGet('/expenses', filter !== 'all' ? { status: filter } : {}) });
   const expenses = Array.isArray(_expData) ? _expData : [];
 
   // BUG_094: scroll to highlighted expense and fade out ring after 3 seconds
@@ -469,7 +471,7 @@ export default function ExpensesPage() {
     return () => clearTimeout(t);
   }, [highlightExpId]);
   // Fetch all claims (unfiltered) to differentiate "no records for filter" vs "no claims at all"
-  const { data: _allExpData } = useQuery({ queryKey: ['expenses', 'all'], queryFn: () => apiGet('/expenses') });
+  const { data: _allExpData } = useQuery({ queryKey: ['expenses', 'all', selectedBranchId], queryFn: () => apiGet('/expenses') });
   const allExpenses = Array.isArray(_allExpData) ? _allExpData : [];
   const hasAnyClaims = allExpenses.length > 0;
 

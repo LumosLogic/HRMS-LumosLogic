@@ -124,6 +124,20 @@ router.post('/', auth, hasPermission('employees', 'create'), async (req, res) =>
       salutation, middle_name, surname, location, pay_cadre,
       weekly_off_day, work_hours_per_day, designation_id,
     } = req.body;
+
+    // Auto-assign the only active branch when none is supplied.
+    // If the org has 2+ branches the caller must specify one explicitly.
+    let resolvedBranchId = branch_id || null;
+    if (!resolvedBranchId) {
+      try {
+        const sb = await pool.query(
+          `SELECT id FROM branches WHERE org_id = $1 AND is_active = TRUE`,
+          [orgId(req)]
+        );
+        if (sb.rows.length === 1) resolvedBranchId = sb.rows[0].id;
+      } catch (_) {}
+    }
+
     // user INSERT + department assignments must be atomic.
     // A user with no department assignments is a valid partial state we must prevent.
     const department_ids = req.body.department_ids;
@@ -143,7 +157,7 @@ router.post('/', auth, hasPermission('employees', 'create'), async (req, res) =>
          RETURNING id, name, email, role, department, position, avatar_color, date_of_birth`,
         [name, email.toLowerCase(), hashed, role||'employee', department||'General',
          position||'Staff', avatar_color||'#4F46E5', date_of_birth||null, orgId(req),
-         device_enrollment_id||null, branch_id||null, grade||null, division||null,
+         device_enrollment_id||null, resolvedBranchId||null, grade||null, division||null,
          sub_division||null, salutation||null, middle_name||null, surname||null,
          location||null, pay_cadre||null, weekly_off_day||null, work_hours_per_day||null,
          designation_id ? parseInt(designation_id) : null]
@@ -168,6 +182,17 @@ router.post('/', auth, hasPermission('employees', 'create'), async (req, res) =>
       throw err;
     } finally {
       client.release();
+    }
+
+    // Auto-grant hr_branch_access for new HR admins in single-branch orgs.
+    // branchService will derive this implicitly anyway, but an explicit row
+    // ensures the grant survives if a second branch is later added.
+    if ((role === 'admin') && resolvedBranchId) {
+      pool.query(
+        `INSERT INTO hr_branch_access (user_id, org_id, branch_id, all_branches, granted_by)
+         VALUES ($1, $2, $3, FALSE, $4) ON CONFLICT DO NOTHING`,
+        [newUser.id, orgId(req), resolvedBranchId, req.user.id]
+      ).catch(() => {});
     }
 
     // Fire-and-forget side effects after COMMIT

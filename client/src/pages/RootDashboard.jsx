@@ -17,6 +17,7 @@ import {
 import { apiGet, apiPut, apiDelete } from '@/lib/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { useAuth } from '@/context/AuthContext';
+import { useBranch } from '@/context/BranchContext';
 import { useToast } from '@/context/ToastContext';
 import { AttendanceDayModal } from '@/components/AttendanceDayModal';
 
@@ -179,6 +180,7 @@ function SortIcon({ col, sort }) {
 export default function RootDashboard() {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { selectedBranchId } = useBranch();
   const toast    = useToast();
   const qc       = useQueryClient();
 
@@ -190,19 +192,19 @@ export default function RootDashboard() {
   const [pendingTab,      setPendingTab]      = useState('all');
 
   const { data, isLoading, isFetching, dataUpdatedAt, refetch } = useQuery({
-    queryKey:        ['root-dashboard'],
+    queryKey:        ['root-dashboard', selectedBranchId],
     queryFn:         () => apiGet('/root/dashboard'),
     refetchInterval: 60000,
   });
 
   const { data: yearlyData } = useQuery({
-    queryKey:        ['root-yearly-leaves', new Date().getFullYear()],
+    queryKey:        ['root-yearly-leaves', new Date().getFullYear(), selectedBranchId],
     queryFn:         () => apiGet('/root/yearly-leaves'),
     refetchInterval: 300000,
   });
 
   const { data: pendingRegs = [] } = useQuery({
-    queryKey:        ['root-pending-regs'],
+    queryKey:        ['root-pending-regs', selectedBranchId],
     queryFn:         () => apiGet('/regularization').catch(() => []),
     select:          d => (Array.isArray(d) ? d : []).filter(r => r.status === 'pending'),
     refetchInterval: 60000,
@@ -210,22 +212,22 @@ export default function RootDashboard() {
 
   const approveMut = useMutation({
     mutationFn: id => apiPut(`/leaves/${id}/approve`),
-    onSuccess:  () => { toast('Leave approved!', 'success'); qc.invalidateQueries({ queryKey: ['root-dashboard'] }); },
+    onSuccess:  () => { toast('Leave approved!', 'success'); qc.invalidateQueries({ queryKey: ['root-dashboard', selectedBranchId] }); },
     onError:    err => toast(err.message, 'error'),
   });
   const rejectMut = useMutation({
     mutationFn: id => apiPut(`/leaves/${id}/reject`),
-    onSuccess:  () => { toast('Leave rejected', 'warning'); qc.invalidateQueries({ queryKey: ['root-dashboard'] }); },
+    onSuccess:  () => { toast('Leave rejected', 'warning'); qc.invalidateQueries({ queryKey: ['root-dashboard', selectedBranchId] }); },
     onError:    err => toast(err.message, 'error'),
   });
   const approveRegMut = useMutation({
     mutationFn: id => apiPut(`/regularization/${id}/review`, { status: 'approved' }),
-    onSuccess:  () => { toast('Regularization approved!', 'success'); qc.invalidateQueries({ queryKey: ['root-pending-regs'] }); },
+    onSuccess:  () => { toast('Regularization approved!', 'success'); qc.invalidateQueries({ queryKey: ['root-pending-regs', selectedBranchId] }); },
     onError:    err => toast(err.message, 'error'),
   });
   const rejectRegMut = useMutation({
     mutationFn: id => apiPut(`/regularization/${id}/review`, { status: 'rejected' }),
-    onSuccess:  () => { toast('Regularization rejected', 'warning'); qc.invalidateQueries({ queryKey: ['root-pending-regs'] }); },
+    onSuccess:  () => { toast('Regularization rejected', 'warning'); qc.invalidateQueries({ queryKey: ['root-pending-regs', selectedBranchId] }); },
     onError:    err => toast(err.message, 'error'),
   });
 

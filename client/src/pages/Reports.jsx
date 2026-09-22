@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import { apiGet } from '@/lib/api';
 import { MONTHS } from '@/lib/utils';
+import { useBranch } from '@/context/BranchContext';
 import { Modal } from '@/components/ui/Modal';
 import { Avatar } from '@/components/ui/Avatar';
 
@@ -280,6 +281,7 @@ function Pagination({ page, totalPages, totalCount, onPageChange, label = 'recor
 // ── Main Reports page ──────────────────────────────────────────────────────────
 export default function Reports() {
   const now = new Date();
+  const { selectedBranchId } = useBranch();
   const [searchParams] = useSearchParams();
   const preselectedUserId = searchParams.get('userId') || '';
 
@@ -357,22 +359,22 @@ export default function Reports() {
   const queryParams = viewMode === 'monthly' ? { year, month } : { year };
 
   const { data: headcount } = useQuery({
-    queryKey: ['headcount'],
+    queryKey: ['headcount', selectedBranchId],
     queryFn: () => apiGet('/reports/headcount'),
   });
 
   const { data: _attResponse = {}, isLoading: attLoading } = useQuery({
-    queryKey: viewMode === 'yearly' ? ['report-attendance', 'yearly', year] : ['report-attendance', 'monthly', year, month],
+    queryKey: viewMode === 'yearly' ? ['report-attendance', 'yearly', year, selectedBranchId] : ['report-attendance', 'monthly', year, month, selectedBranchId],
     queryFn:  () => apiGet('/reports/attendance', queryParams),
   });
 
   const { data: _lvData = [], isLoading: lvLoading } = useQuery({
-    queryKey: viewMode === 'yearly' ? ['report-leaves', 'yearly', year] : ['report-leaves', 'monthly', year, month],
+    queryKey: viewMode === 'yearly' ? ['report-leaves', 'yearly', year, selectedBranchId] : ['report-leaves', 'monthly', year, month, selectedBranchId],
     queryFn:  () => apiGet('/reports/leaves', queryParams),
   });
 
   const { data: _empData = [], isLoading: empLoading } = useQuery({
-    queryKey: ['report-employees'],
+    queryKey: ['report-employees', selectedBranchId],
     queryFn:  () => apiGet('/reports/employees'),
   });
 

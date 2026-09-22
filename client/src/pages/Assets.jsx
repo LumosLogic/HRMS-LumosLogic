@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Pencil, Trash2, Monitor, Package, Smartphone, Tablet, Headphones, CreditCard, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
+import { useBranch } from '@/context/BranchContext';
 import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
@@ -149,6 +150,7 @@ function AssetModal({ open, onClose, asset, employees, allAssets = [] }) {
 
 export default function Assets() {
   const { isAdmin, isEmployee }  = useAuth();
+  const { selectedBranchId } = useBranch();
   const wrap = '';
   const toast        = useToast();
   const qc           = useQueryClient();
@@ -157,10 +159,10 @@ export default function Assets() {
   const [confirmDel, setConfirmDel] = useState(null);
   const [filter,     setFilter]     = useState('all');
 
-  const { data: _aData, isLoading } = useQuery({ queryKey: ['assets', filter], queryFn: () => apiGet('/assets', filter !== 'all' ? { status: filter } : {}) });
+  const { data: _aData, isLoading } = useQuery({ queryKey: ['assets', filter, selectedBranchId], queryFn: () => apiGet('/assets', filter !== 'all' ? { status: filter } : {}) });
   // Unfiltered list used for client-side duplicate validation in the modal
-  const { data: _allAData }         = useQuery({ queryKey: ['assets-all'], queryFn: () => apiGet('/assets'), staleTime: 30000 });
-  const { data: _eData }            = useQuery({ queryKey: ['employees'], queryFn: () => apiGet('/employees'), enabled: isAdmin });
+  const { data: _allAData }         = useQuery({ queryKey: ['assets-all', selectedBranchId], queryFn: () => apiGet('/assets'), staleTime: 30000 });
+  const { data: _eData }            = useQuery({ queryKey: ['employees', 'all', selectedBranchId], queryFn: () => apiGet('/employees'), enabled: isAdmin });
   const assets    = Array.isArray(_aData)    ? _aData    : [];
   const allAssets = Array.isArray(_allAData) ? _allAData : [];
   const employees = Array.isArray(_eData)    ? _eData    : [];
