@@ -279,6 +279,7 @@ function AppRoutes() {
         <Route path="/root/employees"       element={<Employees />} />
         <Route path="/root/employees/:id"   element={<Employees />} />
         <Route path="/root/departments"     element={<Departments />} />
+        <Route path="/root/branches"        element={<FeatureRoute featureKey="branches"><Branches /></FeatureRoute>} />
         <Route path="/root/holidays"        element={<HolidaysPage />} />
         <Route path="/root/leave-policies"  element={<FeatureRoute featureKey="leave_policies"><LeavePolicies /></FeatureRoute>} />
         <Route path="/root/leave-workflow"  element={<LeaveWorkflowSettings />} />
