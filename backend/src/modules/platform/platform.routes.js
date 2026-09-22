@@ -585,7 +585,7 @@ router.delete('/organizations/:id', platformAdminAuth, async (req, res) => {
   }
 });
 
-// ─── Platform Admin: Activity Feed ───────────────────────────────────────────
+// ─── Platform Admin: Activity Feed (Platform-level) ─────────────────────────
 router.get('/activity', platformAdminAuth, async (req, res) => {
   try {
     const limit = Math.min(parseInt(req.query.limit) || 50, 100);
@@ -594,6 +594,127 @@ router.get('/activity', platformAdminAuth, async (req, res) => {
     if (orgId) query = query.eq('organization_id', orgId);
     const { data } = await query;
     res.json(data || []);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── Platform Admin: Org-Specific Logs (all system activity per org) ──────────
+router.get('/activity/org-logs', platformAdminAuth, async (req, res) => {
+  try {
+    const limit = Math.min(parseInt(req.query.limit) || 200, 500);
+    const orgId = req.query.orgId ? parseInt(req.query.orgId) : null;
+
+    // Fetch from platform_activity filtered by org, plus synthesize logs from
+    // key tables: users, leaves, attendance, payroll_runs, documents, expenses
+    const logs = [];
+
+    // 1. platform_activity rows scoped to org
+    let paQuery = db.from('platform_activity').select('*').order('created_at', { ascending: false }).limit(limit);
+    if (orgId) paQuery = paQuery.eq('organization_id', orgId);
+    const { data: paRows } = await paQuery;
+    for (const r of paRows || []) {
+      logs.push({
+        id: `pa-${r.id}`, event_type: r.event_type, description: r.description,
+        module: 'platform', metadata: r.metadata, org_name: null,
+        actor_name: null, created_at: r.created_at,
+      });
+    }
+
+    // Helper: fetch org name map
+    const orgIds = orgId ? [orgId] : null;
+    let orgMap = {};
+    if (!orgId) {
+      const { data: orgs } = await db.from('organizations').select('id, name');
+      for (const o of orgs || []) orgMap[o.id] = o.name;
+    } else {
+      const { data: org } = await db.from('organizations').select('id, name').eq('id', orgId).maybeSingle();
+      if (org) orgMap[org.id] = org.name;
+    }
+
+    // 2. User creation logs
+    let uQuery = db.from('users').select('id, name, email, role, organization_id, created_at').order('created_at', { ascending: false }).limit(100);
+    if (orgId) uQuery = uQuery.eq('organization_id', orgId);
+    const { data: users } = await uQuery;
+    for (const u of users || []) {
+      logs.push({
+        id: `u-${u.id}`, event_type: 'user_created',
+        description: `User "${u.name}" (${u.role}) account created`,
+        module: 'users', metadata: { email: u.email },
+        org_name: orgMap[u.organization_id] || null,
+        actor_name: null, created_at: u.created_at,
+      });
+    }
+
+    // 3. Leave logs
+    let lQuery = db.from('leaves')
+      .select('id, user_id, leave_type, status, start_date, end_date, organization_id, created_at, users!leaves_user_id_fkey(name)')
+      .order('created_at', { ascending: false }).limit(100);
+    if (orgId) lQuery = lQuery.eq('organization_id', orgId);
+    const { data: leaves } = await lQuery;
+    for (const l of leaves || []) {
+      const userName = l.users?.name || `user #${l.user_id}`;
+      const evType = l.status === 'approved' ? 'leave_approved' : l.status === 'rejected' ? 'leave_rejected' : 'leave_applied';
+      logs.push({
+        id: `l-${l.id}`, event_type: evType,
+        description: `${userName} — ${l.leave_type} leave (${l.start_date} to ${l.end_date}) [${l.status}]`,
+        module: 'leaves', metadata: {},
+        org_name: orgMap[l.organization_id] || null,
+        actor_name: userName, created_at: l.created_at,
+      });
+    }
+
+    // 4. Payroll run logs
+    let prQuery = db.from('payroll_runs')
+      .select('id, month, year, status, organization_id, created_at')
+      .order('created_at', { ascending: false }).limit(50);
+    if (orgId) prQuery = prQuery.eq('organization_id', orgId);
+    const { data: payrollRuns } = await prQuery;
+    for (const p of payrollRuns || []) {
+      logs.push({
+        id: `pr-${p.id}`, event_type: 'payroll_generated',
+        description: `Payroll run for ${p.month}/${p.year} — status: ${p.status}`,
+        module: 'payroll', metadata: {},
+        org_name: orgMap[p.organization_id] || null,
+        actor_name: null, created_at: p.created_at,
+      });
+    }
+
+    // 5. Attendance regularization logs
+    let regQuery = db.from('attendance_regularization')
+      .select('id, user_id, date, status, organization_id, created_at, users!attendance_regularization_user_id_fkey(name)')
+      .order('created_at', { ascending: false }).limit(100);
+    if (orgId) regQuery = regQuery.eq('organization_id', orgId);
+    const { data: regs } = await regQuery;
+    for (const r of regs || []) {
+      const userName = r.users?.name || `user #${r.user_id}`;
+      logs.push({
+        id: `reg-${r.id}`, event_type: 'regularization',
+        description: `${userName} — attendance regularization for ${r.date} [${r.status}]`,
+        module: 'attendance', metadata: {},
+        org_name: orgMap[r.organization_id] || null,
+        actor_name: userName, created_at: r.created_at,
+      });
+    }
+
+    // 6. Expense logs
+    let expQuery = db.from('expenses')
+      .select('id, user_id, title, amount, status, organization_id, created_at, users!expenses_user_id_fkey(name)')
+      .order('created_at', { ascending: false }).limit(100);
+    if (orgId) expQuery = expQuery.eq('organization_id', orgId);
+    const { data: expenses } = await expQuery;
+    for (const e of expenses || []) {
+      const userName = e.users?.name || `user #${e.user_id}`;
+      logs.push({
+        id: `exp-${e.id}`, event_type: e.status === 'approved' ? 'approved' : e.status === 'rejected' ? 'rejected' : 'created',
+        description: `${userName} — expense "${e.title}" ₹${e.amount} [${e.status}]`,
+        module: 'expenses', metadata: {},
+        org_name: orgMap[e.organization_id] || null,
+        actor_name: userName, created_at: e.created_at,
+      });
+    }
+
+    // Sort all logs by created_at desc and return
+    logs.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    res.json(logs.slice(0, limit));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

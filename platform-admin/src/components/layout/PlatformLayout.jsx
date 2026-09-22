@@ -1,19 +1,96 @@
 import React, { useState } from 'react';
-import { Outlet, NavLink, useNavigate } from 'react-router-dom';
-import { LayoutDashboard, ClipboardList, Building2, Activity, LogOut, ShieldCheck, Menu, X } from 'lucide-react';
+import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
+import { LayoutDashboard, ClipboardList, Building2, Activity, LogOut, Menu, X, ChevronDown, Globe, Layers } from 'lucide-react';
 import { usePlatformAuth } from '@/context/PlatformAuthContext';
 
 const NAV_ITEMS = [
-  { to: '/dashboard', label: 'Dashboard',     Icon: LayoutDashboard },
-  { to: '/requests',  label: 'Org Requests',  Icon: ClipboardList },
-  { to: '/orgs',      label: 'Organizations', Icon: Building2 },
-  { to: '/activity',  label: 'Activity Log',  Icon: Activity },
+  { to: '/dashboard', label: 'Dashboard',    Icon: LayoutDashboard },
+  { to: '/requests',  label: 'Org Requests', Icon: ClipboardList },
+  { to: '/orgs',      label: 'Organizations',Icon: Building2 },
+  {
+    label: 'Activity Log', Icon: Activity,
+    children: [
+      { to: '/activity/platform', label: 'Platform Logs',      Icon: Globe },
+      { to: '/activity/org',      label: 'Org Specific Logs',  Icon: Layers },
+    ],
+  },
 ];
 
 function cn(...classes) { return classes.filter(Boolean).join(' '); }
 
 function initials(name = '') {
   return name.split(' ').map(w => w[0] || '').join('').slice(0, 2).toUpperCase() || 'PA';
+}
+
+function SidebarNav({ onClose }) {
+  const location = useLocation();
+  const activityOpen = location.pathname.startsWith('/activity');
+  const [expanded, setExpanded] = useState(activityOpen);
+
+  return (
+    <nav className="flex-1 p-3 overflow-y-auto">
+      <p className="text-[0.6rem] font-black uppercase tracking-[0.14em] text-[#777587] px-2.5 py-3">Navigation</p>
+      <div className="flex flex-col gap-0.5">
+        {NAV_ITEMS.map((item) => {
+          if (item.children) {
+            const isGroupActive = item.children.some(c => location.pathname.startsWith(c.to));
+            return (
+              <div key={item.label}>
+                <button
+                  onClick={() => setExpanded(e => !e)}
+                  className={cn(
+                    'flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold border transition-all duration-150 w-full',
+                    isGroupActive
+                      ? 'bg-[#3525cd]/10 text-[#3525cd] border-l-[3px] border-[#3525cd] border-t-transparent border-r-transparent border-b-transparent font-bold'
+                      : 'text-[#464555] border-transparent hover:bg-[#f0f3ff] hover:text-[#151c27] hover:border-[#c7c4d8]'
+                  )}>
+                  <item.Icon size={18} className={cn('flex-shrink-0', isGroupActive ? 'opacity-100' : 'opacity-60')} />
+                  <span className="flex-1 text-left">{item.label}</span>
+                  <ChevronDown size={14} className={cn('transition-transform duration-200', expanded ? 'rotate-180' : '')} />
+                </button>
+                {expanded && (
+                  <div className="ml-4 mt-0.5 flex flex-col gap-0.5 border-l-2 border-[#e7eefe] pl-2">
+                    {item.children.map(({ to, label, Icon }) => (
+                      <NavLink key={to} to={to} onClick={onClose}
+                        className={({ isActive }) => cn(
+                          'flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold border transition-all duration-150',
+                          isActive
+                            ? 'bg-[#3525cd]/10 text-[#3525cd] border-l-[3px] border-[#3525cd] border-t-transparent border-r-transparent border-b-transparent font-bold'
+                            : 'text-[#464555] border-transparent hover:bg-[#f0f3ff] hover:text-[#151c27]'
+                        )}>
+                        {({ isActive }) => (
+                          <>
+                            <Icon size={14} className={cn('flex-shrink-0', isActive ? 'opacity-100' : 'opacity-60')} />
+                            {label}
+                          </>
+                        )}
+                      </NavLink>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          }
+          return (
+            <NavLink key={item.to} to={item.to} onClick={onClose}
+              className={({ isActive }) => cn(
+                'flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold border transition-all duration-150 relative',
+                isActive
+                  ? 'bg-[#3525cd]/10 text-[#3525cd] border-l-[3px] border-[#3525cd] border-t-transparent border-r-transparent border-b-transparent font-bold'
+                  : 'text-[#464555] border-transparent hover:bg-[#f0f3ff] hover:text-[#151c27] hover:border-[#c7c4d8]'
+              )}>
+              {({ isActive }) => (
+                <>
+                  <item.Icon size={18} className={cn('flex-shrink-0', isActive ? 'opacity-100' : 'opacity-60')} />
+                  {item.label}
+                </>
+              )}
+            </NavLink>
+          );
+        })}
+      </div>
+    </nav>
+  );
 }
 
 function Sidebar({ onClose }) {
@@ -27,9 +104,9 @@ function Sidebar({ onClose }) {
       {/* Brand */}
       <div className="px-4 py-4 border-b border-[#e7eefe]">
         <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0"
-            style={{ background: 'linear-gradient(135deg,#3525cd,#4f46e5)', boxShadow: '0 2px 8px rgba(53,37,205,.3)' }}>
-            <ShieldCheck size={18} className="text-white" />
+          <div className="w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0 bg-white border border-[#e7eefe] overflow-hidden"
+            style={{ boxShadow: '0 2px 8px rgba(53,37,205,.15)' }}>
+            <img src="/LogoWithoutName.svg" alt="Lumos Logic" className="w-7 h-7 object-contain" />
           </div>
           <div>
             <h2 className="text-sm font-black text-[#151c27] leading-tight tracking-tight">Platform Admin</h2>
@@ -38,28 +115,7 @@ function Sidebar({ onClose }) {
         </div>
       </div>
 
-      {/* Nav */}
-      <nav className="flex-1 p-3 overflow-y-auto">
-        <p className="text-[0.6rem] font-black uppercase tracking-[0.14em] text-[#777587] px-2.5 py-3">Navigation</p>
-        <div className="flex flex-col gap-0.5">
-          {NAV_ITEMS.map(({ to, label, Icon }) => (
-            <NavLink key={to} to={to} onClick={onClose}
-              className={({ isActive }) => cn(
-                'flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold border transition-all duration-150 relative',
-                isActive
-                  ? 'bg-[#3525cd]/10 text-[#3525cd] border-l-[3px] border-[#3525cd] border-t-transparent border-r-transparent border-b-transparent font-bold'
-                  : 'text-[#464555] border-transparent hover:bg-[#f0f3ff] hover:text-[#151c27] hover:border-[#c7c4d8]'
-              )}>
-              {({ isActive }) => (
-                <>
-                  <Icon size={18} className={cn('flex-shrink-0', isActive ? 'opacity-100' : 'opacity-60')} />
-                  {label}
-                </>
-              )}
-            </NavLink>
-          ))}
-        </div>
-      </nav>
+      <SidebarNav onClose={onClose} />
 
       {/* User */}
       <div className="p-3 border-t border-[#e7eefe]">
@@ -87,22 +143,18 @@ export function PlatformLayout() {
 
   return (
     <div className="flex h-screen overflow-hidden bg-[#f9f9ff]">
-      {/* Mobile overlay */}
       {sidebarOpen && (
         <div className="fixed inset-0 z-[499] md:hidden"
           style={{ background: 'rgba(4,6,14,.65)', backdropFilter: 'blur(4px)' }}
           onClick={() => setSidebarOpen(false)} />
       )}
 
-      {/* Sidebar */}
       <div className={`fixed md:relative z-[500] md:z-auto h-full transition-transform duration-300 ease-in-out
         ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}>
         <Sidebar onClose={() => setSidebarOpen(false)} />
       </div>
 
-      {/* Main */}
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
-        {/* Topbar */}
         <div className="flex items-center gap-3 px-6 py-3 bg-white border-b border-[#e7eefe] flex-shrink-0">
           <button className="md:hidden p-1.5 rounded-lg text-[#464555] hover:bg-[#f0f3ff] transition-colors"
             onClick={() => setSidebarOpen(o => !o)}>
