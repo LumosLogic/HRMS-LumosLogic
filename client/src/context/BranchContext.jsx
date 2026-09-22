@@ -56,7 +56,8 @@ export function BranchProvider({ children }) {
         setHasAllBranches(!!data.hasAllBranches);
         setIsRootAdmin(!!data.isRootAdmin);
 
-        // Validate the stored selection is still accessible
+        // Validate the stored selection is still accessible; clear it if not.
+        // When no branch is stored, BranchSelect.jsx handles the 0/1/2+ cases.
         const stored = localStorage.getItem(STORAGE_KEY);
         if (stored) {
           const storedId = Number(stored);
@@ -65,16 +66,6 @@ export function BranchProvider({ children }) {
             localStorage.removeItem(STORAGE_KEY);
             setSelectedBranchIdState(null);
           }
-        }
-
-        // Auto-recover: if no branch is selected but branches exist, select the
-        // first one. Prevents "All Branches" context after a manual null-set,
-        // branch removal, or a fresh session with no stored selection.
-        const nowStored = localStorage.getItem(STORAGE_KEY);
-        if (!nowStored && branches.length > 0) {
-          const autoId = branches[0].id;
-          localStorage.setItem(STORAGE_KEY, String(autoId));
-          setSelectedBranchIdState(autoId);
         }
       })
       .catch(() => {
