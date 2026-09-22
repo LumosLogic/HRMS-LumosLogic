@@ -773,13 +773,18 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       users: undefined, approver: undefined,
     }));
 
-    // Enrich pending_approval leaves with current_level_role_type so the
-    // frontend can hide the Approve button for levels the caller can't act on.
+    // Fetch workflow levels once — used for both current_level_role_type enrichment
+    // and approval trail level_label. Hoist levelLabelMap so trail building can use it.
+    let levelLabelMap = {}; // { levelNum -> level_label }
     if (isAdminRole(req.user.role)) {
       try {
         const wf = await engine.getOrgWorkflow(orgId(req));
         const levelMap = {};
-        for (const lvl of wf.levels) levelMap[Number(lvl.level_number)] = lvl.role_type;
+        for (const lvl of wf.levels) {
+          const n = Number(lvl.level_number);
+          levelMap[n]      = lvl.role_type;
+          levelLabelMap[n] = (lvl.level_label || '').trim() || lvl.role_type;
+        }
         for (const l of result) {
           if (l.status === 'pending_approval' && l.current_level != null) {
             l.current_level_role_type = levelMap[Number(l.current_level)] || null;
@@ -826,11 +831,13 @@ router.get('/', auth, withBranchContext, async (req, res) => {
           if (!row.action?.includes('approved')) continue;
           const lid = Number(row.leave_id);
           if (!trailMap[lid]) trailMap[lid] = [];
+          const lvlNum = row.level != null ? Number(row.level) : null;
           trailMap[lid].push({
-            actor_name: row.actor_name,
-            action:     row.action,
-            level:      row.level ?? null,
-            created_at: row.created_at,
+            actor_name:  row.actor_name,
+            action:      row.action,
+            level:       lvlNum,
+            level_label: lvlNum != null ? (levelLabelMap[lvlNum] || null) : null,
+            created_at:  row.created_at,
           });
         }
         for (const l of result) {

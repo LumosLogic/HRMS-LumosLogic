@@ -283,7 +283,7 @@ function Pagination({ page, totalPages, totalCount, onPageChange, label = 'recor
 // ── Main Reports page ──────────────────────────────────────────────────────────
 export default function Reports() {
   const now = new Date();
-  const { selectedBranchId } = useBranch();
+  const { selectedBranchId, isBranchContextReady } = useBranch();
   const { isAdmin } = useAuth();
   const qc = useQueryClient();
   const [searchParams] = useSearchParams();
@@ -366,22 +366,26 @@ export default function Reports() {
 
   const { data: headcount } = useQuery({
     queryKey: ['headcount', selectedBranchId],
-    queryFn: () => apiGet('/reports/headcount'),
+    queryFn:  () => apiGet('/reports/headcount'),
+    enabled:  isBranchContextReady,
   });
 
   const { data: _attResponse = {}, isLoading: attLoading } = useQuery({
     queryKey: viewMode === 'yearly' ? ['report-attendance', 'yearly', year, selectedBranchId] : ['report-attendance', 'monthly', year, month, selectedBranchId],
     queryFn:  () => apiGet('/reports/attendance', queryParams),
+    enabled:  isBranchContextReady,
   });
 
   const { data: _lvData = [], isLoading: lvLoading } = useQuery({
     queryKey: viewMode === 'yearly' ? ['report-leaves', 'yearly', year, selectedBranchId] : ['report-leaves', 'monthly', year, month, selectedBranchId],
     queryFn:  () => apiGet('/reports/leaves', queryParams),
+    enabled:  isBranchContextReady,
   });
 
   const { data: _empData = [], isLoading: empLoading } = useQuery({
     queryKey: ['report-employees', selectedBranchId],
     queryFn:  () => apiGet('/reports/employees'),
+    enabled:  isBranchContextReady,
   });
 
   // Support both legacy array response and new { data, meta } shape

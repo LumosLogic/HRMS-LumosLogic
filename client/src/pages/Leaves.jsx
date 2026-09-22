@@ -537,27 +537,46 @@ function LeaveCard({ leave: l, isAdmin, user, onApprove, onReject, onRevert, onC
         )}
 
         {/* Workflow approval trail — who has approved so far */}
-        {l.approval_trail?.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-1.5">
-            {l.approval_trail.map((t, i) => {
-              // Derive a human-readable role label from the action string
-              // e.g. "level_1_approved" → "Level 1", "dept_approved" → "Dept Head", "root_approved" → "Root Admin"
-              let roleLabel = '';
-              if (t.action === 'dept_approved')   roleLabel = 'Dept Head';
-              else if (t.action === 'root_approved') roleLabel = 'Root Admin';
-              else {
-                const m = t.action?.match(/^level_(\d+)_approved$/);
-                if (m) roleLabel = `Level ${m[1]}`;
-              }
-              return (
-                <span key={i} className="inline-flex items-center gap-1 text-[0.65rem] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
-                  <CheckCircle2 size={9} />
-                  {roleLabel ? `${roleLabel}: ` : ''}{t.actor_name} approved
-                </span>
-              );
-            })}
-          </div>
-        )}
+        {l.approval_trail?.length > 0 && (() => {
+          // Deduplicate: when the same person approved at multiple levels
+          // (e.g. Root Admin bypassing HR then approving Root level), keep only
+          // their highest-level entry so they appear once in the timeline.
+          const byActor = {};
+          for (const t of l.approval_trail) {
+            const key = t.actor_name || '';
+            const existing = byActor[key];
+            if (!existing || Number(t.level ?? -1) > Number(existing.level ?? -1)) {
+              byActor[key] = t;
+            }
+          }
+          const trail = Object.values(byActor).sort(
+            (a, b) => Number(a.level ?? 0) - Number(b.level ?? 0)
+          );
+
+          return (
+            <div className="flex flex-wrap gap-1.5 mt-1.5">
+              {trail.map((t, i) => {
+                // Prefer level_label from backend (e.g. "HR", "Root"),
+                // fall back to legacy action-derived labels.
+                let roleLabel = t.level_label || '';
+                if (!roleLabel) {
+                  if (t.action === 'dept_approved')      roleLabel = 'Dept Head';
+                  else if (t.action === 'root_approved') roleLabel = 'Root Admin';
+                  else {
+                    const m = t.action?.match(/^level_(\d+)_approved$/);
+                    if (m) roleLabel = `Level ${m[1]}`;
+                  }
+                }
+                return (
+                  <span key={i} className="inline-flex items-center gap-1 text-[0.65rem] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-full">
+                    <CheckCircle2 size={9} />
+                    {roleLabel ? `${roleLabel}: ` : ''}{t.actor_name} approved
+                  </span>
+                );
+              })}
+            </div>
+          );
+        })()}
 
         <div className="flex gap-2 mt-2.5 flex-wrap">
           {/* Old-flow pending — both HR Admin and Root Admin can approve */}
