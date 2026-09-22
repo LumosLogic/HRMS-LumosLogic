@@ -2,6 +2,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { apiGet } from '@/lib/api';
 import { useAuth } from './AuthContext';
+import { useFeature } from './FeatureFlagContext';
 
 export const BranchContext = createContext(null);
 
@@ -9,6 +10,7 @@ const STORAGE_KEY = 'lt_selected_branch'; // stores branch id as string, or abse
 
 export function BranchProvider({ children }) {
   const { user, token } = useAuth();
+  const branchesEnabled = useFeature('branches');
 
   const [accessibleBranches, setAccessibleBranches] = useState([]);
   const [hasAllBranches,     setHasAllBranches]     = useState(false);
@@ -25,10 +27,22 @@ export function BranchProvider({ children }) {
     return stored ? Number(stored) : null;
   });
 
-  // Fetch accessible branches whenever auth changes.
+  // Fetch accessible branches whenever auth or feature flag changes.
   // Only fetch for admin / root_admin — employees don't need the branch selector.
+  // Skip entirely when branches feature is OFF for this org.
   useEffect(() => {
     if (!token || !user) {
+      setAccessibleBranches([]);
+      setHasAllBranches(false);
+      setIsRootAdmin(false);
+      setSelectedBranchIdState(null);
+      setBranchesLoaded(false);
+      localStorage.removeItem(STORAGE_KEY);
+      return;
+    }
+
+    // When branches feature is OFF: clear all branch state and do not fetch
+    if (!branchesEnabled) {
       setAccessibleBranches([]);
       setHasAllBranches(false);
       setIsRootAdmin(false);
@@ -79,7 +93,7 @@ export function BranchProvider({ children }) {
         setIsLoading(false);
         setBranchesLoaded(true);
       });
-  }, [token, user?.id, user?.role, reloadTick]);
+  }, [token, user?.id, user?.role, reloadTick, branchesEnabled]);
 
   const setSelectedBranchId = useCallback((branchId) => {
     // Always store as Number so === comparisons against b.id (also Number) are safe.

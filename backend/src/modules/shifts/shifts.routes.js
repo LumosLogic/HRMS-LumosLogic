@@ -3,6 +3,8 @@ const router  = express.Router();
 const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
@@ -65,17 +67,30 @@ router.delete('/:id', auth, hasPermission('shifts', 'manage'), async (req, res) 
 // ─── Shift Assignments ────────────────────────────────────────────────────────
 
 // GET /api/shifts/assignments?month=YYYY-MM
-router.get('/assignments', auth, async (req, res) => {
+router.get('/assignments', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { month, userId } = req.query;
+
     let q = db.from('shift_assignments')
       .select('*, shift:shifts(id, name, start_time, end_time, color), user:users!shift_assignments_user_id_fkey(id, name, avatar_color, department)')
       .eq('organization_id', oId)
       .order('date');
     if (month) q = q.gte('date', `${month}-01`).lte('date', `${month}-31`);
-    if (userId) q = q.eq('user_id', userId);
-    else if (!isAdmin(req.user.role)) q = q.eq('user_id', req.user.id);
+
+    if (userId) {
+      q = q.eq('user_id', userId);
+    } else if (!isAdmin(req.user.role)) {
+      q = q.eq('user_id', req.user.id);
+    } else {
+      // Admin: restrict to accessible branches via employee branch membership
+      const accessibleIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (accessibleIds !== null) {
+        if (accessibleIds.length === 0) return res.json([]);
+        q = q.in('user_id', accessibleIds);
+      }
+    }
+
     const { data, error } = await q;
     if (error) throw error;
     res.json(data || []);
@@ -84,7 +99,7 @@ router.get('/assignments', auth, async (req, res) => {
 
 // POST /api/shifts/assignments/range — assign a shift to selected employees across a date range
 // Generates one row per employee per matching day. Returns conflict info before saving.
-router.post('/assignments/range', auth, hasPermission('shifts', 'manage'), async (req, res) => {
+router.post('/assignments/range', auth, withBranchContext, hasPermission('shifts', 'manage'), async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = req.user.organization_id;
@@ -113,6 +128,14 @@ router.post('/assignments/range', auth, hasPermission('shifts', 'manage'), async
     const safeEmpIds  = employee_ids.map(id => parseInt(id, 10)).filter(n => n > 0);
     if (!safeEmpIds.length)
       return res.status(400).json({ error: 'employee_ids must be valid positive integers' });
+
+    // Branch isolation: reject any employee the admin cannot access
+    if (req.user.role !== 'root_admin') {
+      for (const empId of safeEmpIds) {
+        if (!await canAdminAccessUser(req.branchContext, empId, oId))
+          return res.status(403).json({ error: `You do not have access to employee ID ${empId}.` });
+      }
+    }
 
     // ── Generate date list ────────────────────────────────────────────────────
     const allowedDays = Array.isArray(days_of_week) && days_of_week.length > 0
@@ -182,7 +205,7 @@ router.post('/assignments/bulk', auth, hasPermission('shifts', 'manage'), async 
 });
 
 // DELETE /api/shifts/assignments/range — unassign employees from a shift over a date range
-router.delete('/assignments/range', auth, hasPermission('shifts', 'manage'), async (req, res) => {
+router.delete('/assignments/range', auth, withBranchContext, hasPermission('shifts', 'manage'), async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = req.user.organization_id;
@@ -194,6 +217,14 @@ router.delete('/assignments/range', auth, hasPermission('shifts', 'manage'), asy
     const safeEmpIds   = employee_ids.map(id => parseInt(id, 10)).filter(n => n > 0);
     const safeShiftId  = parseInt(shift_id, 10);
     if (!safeEmpIds.length) return res.status(400).json({ error: 'No valid employee IDs' });
+
+    // Branch isolation: reject any employee the admin cannot access
+    if (req.user.role !== 'root_admin') {
+      for (const empId of safeEmpIds) {
+        if (!await canAdminAccessUser(req.branchContext, empId, oId))
+          return res.status(403).json({ error: `You do not have access to employee ID ${empId}.` });
+      }
+    }
 
     // If days_of_week supplied, only delete assignments on those weekdays
     let q = db.from('shift_assignments')

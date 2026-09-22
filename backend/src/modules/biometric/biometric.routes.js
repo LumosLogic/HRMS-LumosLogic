@@ -68,11 +68,18 @@ router.get('/devices', auth, adminOnly, withBranchContext, async (req, res) => {
 });
 
 // ─── POST /api/biometric/devices ─────────────────────────────────────────────
-router.post('/devices', auth, adminOnly, async (req, res) => {
+router.post('/devices', auth, adminOnly, withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const { device_name, serial_number, location, branch_id, area_code, device_ip } = req.body;
     if (!serial_number) return res.status(400).json({ error: 'serial_number is required' });
+
+    // Branch isolation: non-root admin can only create a device in an accessible branch
+    if (req.user.role !== 'root_admin' && branch_id) {
+      const { validateBranchAccess } = require('../../services/branchService');
+      const ok = await validateBranchAccess(req.user.id, orgId, req.user.role, parseInt(branch_id, 10));
+      if (!ok) return res.status(403).json({ error: 'You do not have access to the specified branch.' });
+    }
 
     const result = await pool.query(
       `INSERT INTO biometric_devices
@@ -91,10 +98,29 @@ router.post('/devices', auth, adminOnly, async (req, res) => {
 });
 
 // ─── PUT /api/biometric/devices/:id ──────────────────────────────────────────
-router.put('/devices/:id', auth, adminOnly, async (req, res) => {
+router.put('/devices/:id', auth, adminOnly, withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const { device_name, location, branch_id, area_code, device_ip } = req.body;
+
+    // Branch isolation: load current device and verify admin can access its branch
+    if (req.user.role !== 'root_admin') {
+      const cur = await pool.query(
+        `SELECT branch_id FROM biometric_devices WHERE id = $1 AND org_id = $2`,
+        [req.params.id, orgId]
+      );
+      if (!cur.rows.length) return res.status(404).json({ error: 'Device not found' });
+      const { getFilterState } = require('../../utils/branchFilter');
+      const state = getFilterState(req.branchContext);
+      const devBranch = cur.rows[0].branch_id;
+      if (state.type === 'specific' && devBranch !== state.branchId)
+        return res.status(403).json({ error: 'You do not have access to this device.' });
+      if (state.type === 'multi' && devBranch && !state.branchIds.includes(devBranch))
+        return res.status(403).json({ error: 'You do not have access to this device.' });
+      if (state.type === 'none')
+        return res.status(403).json({ error: 'You do not have access to this device.' });
+    }
+
     const result = await pool.query(
       `UPDATE biometric_devices
        SET device_name = $1, location = $2, branch_id = $3, area_code = $4, device_ip = $5
@@ -110,9 +136,28 @@ router.put('/devices/:id', auth, adminOnly, async (req, res) => {
 });
 
 // ─── DELETE /api/biometric/devices/:id ───────────────────────────────────────
-router.delete('/devices/:id', auth, adminOnly, async (req, res) => {
+router.delete('/devices/:id', auth, adminOnly, withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
+
+    // Branch isolation: verify admin can access this device's branch before deleting
+    if (req.user.role !== 'root_admin') {
+      const cur = await pool.query(
+        `SELECT branch_id FROM biometric_devices WHERE id = $1 AND org_id = $2`,
+        [req.params.id, orgId]
+      );
+      if (!cur.rows.length) return res.status(404).json({ error: 'Device not found' });
+      const { getFilterState } = require('../../utils/branchFilter');
+      const state = getFilterState(req.branchContext);
+      const devBranch = cur.rows[0].branch_id;
+      if (state.type === 'specific' && devBranch !== state.branchId)
+        return res.status(403).json({ error: 'You do not have access to this device.' });
+      if (state.type === 'multi' && devBranch && !state.branchIds.includes(devBranch))
+        return res.status(403).json({ error: 'You do not have access to this device.' });
+      if (state.type === 'none')
+        return res.status(403).json({ error: 'You do not have access to this device.' });
+    }
+
     const result = await pool.query(
       `DELETE FROM biometric_devices WHERE id = $1 AND org_id = $2 RETURNING id, device_name`,
       [req.params.id, orgId]
@@ -124,7 +169,7 @@ router.delete('/devices/:id', auth, adminOnly, async (req, res) => {
 });
 
 // ─── GET /api/biometric/live-logs ─────────────────────────────────────────────
-router.get('/live-logs', auth, adminOnly, async (req, res) => {
+router.get('/live-logs', auth, adminOnly, withBranchContext, async (req, res) => {
   const orgId = req.user.organization_id;
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -132,10 +177,25 @@ router.get('/live-logs', auth, adminOnly, async (req, res) => {
   res.setHeader('Connection', 'keep-alive');
   res.flushHeaders?.();
 
-  // Load allowed SNs for this organization
+  // Load allowed SNs — scoped to org and (if applicable) to accessible branches
   let allowedSns = new Set();
   try {
-    const devRes = await pool.query(`SELECT serial_number FROM biometric_devices WHERE org_id = $1`, [orgId]);
+    const branchState = getFilterState(req.branchContext);
+    let snQuery = `SELECT serial_number FROM biometric_devices WHERE org_id = $1`;
+    const snParams = [orgId];
+    if (branchState.type === 'specific') {
+      snQuery += ` AND branch_id = $2`;
+      snParams.push(branchState.branchId);
+    } else if (branchState.type === 'multi') {
+      snQuery += ` AND branch_id = ANY($2::bigint[])`;
+      snParams.push(branchState.branchIds);
+    } else if (branchState.type === 'none') {
+      // No accessible branches — send nothing; close immediately
+      res.end();
+      return;
+    }
+    // type 'all' → no additional filter (all org devices)
+    const devRes = await pool.query(snQuery, snParams);
     devRes.rows.forEach(d => { if (d.serial_number) allowedSns.add(d.serial_number); });
   } catch (err) {
     console.error('[biometric] SSE DB error:', err);

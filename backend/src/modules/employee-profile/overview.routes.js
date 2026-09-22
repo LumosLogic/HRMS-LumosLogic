@@ -23,7 +23,8 @@ router.get('/:id/overview', auth, async (req, res) => {
         department, position, grade, branch_id, employee_status, joining_date,
         employment_type, avatar_color, profile_photo_url, organization_id, created_at,
         reporting_to, cost_centre, pay_cadre,
-        current_city, current_state, current_country
+        current_city, current_state, current_country,
+        location, work_hours_per_day, weekly_off_day, hod_id
       `)
       .eq('id', empId).eq('organization_id', oId).maybeSingle();
 
@@ -37,6 +38,15 @@ router.get('/:id/overview', auth, async (req, res) => {
         .select('id, name, avatar_color, position')
         .eq('id', emp.reporting_to).maybeSingle();
       manager = mgr;
+    }
+
+    // HOD name
+    let hod = null;
+    if (emp.hod_id) {
+      const { data: hodRow } = await db.from('users')
+        .select('id, name, position')
+        .eq('id', emp.hod_id).maybeSingle();
+      hod = hodRow;
     }
 
     // Branch name
@@ -86,6 +96,7 @@ router.get('/:id/overview', auth, async (req, res) => {
     res.json({
       ...emp,
       manager,
+      hod,
       branch,
       todayAttendance: todayAtt || null,
       profileCompletion,

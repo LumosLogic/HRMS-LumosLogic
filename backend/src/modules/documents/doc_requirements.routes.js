@@ -5,7 +5,7 @@ const { auth }   = require('../../middleware/auth');
 const cloudinary = require('cloudinary').v2;
 const multer     = require('multer');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { getFilterState, validateBranchAccess } = require('../../utils/branchFilter');
+const { getFilterState, validateBranchAccess, resolveEmployeeIds } = require('../../utils/branchFilter');
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -177,16 +177,35 @@ router.get('/', auth, withBranchContext, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/doc-requirements/analytics — real compliance metrics for admin
-router.get('/analytics', auth, async (req, res) => {
+// GET /api/doc-requirements/analytics — real compliance metrics for admin (branch-filtered)
+router.get('/analytics', auth, withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
     const oId = req.user.organization_id;
 
+    // Resolve accessible employee IDs for branch isolation
+    const accessibleIds = await resolveEmployeeIds(req.branchContext, oId);
+
+    let empQuery = db.from('users').select('id').eq('organization_id', oId).eq('role', 'employee').eq('status', 'active');
+    let subsQuery = db.from('employee_doc_submissions').select('id, status, uploaded_at, requirement_id, user_id, expiry_date').eq('organization_id', oId);
+
+    if (accessibleIds !== null) {
+      if (accessibleIds.length === 0) {
+        return res.json({
+          totalRequirements: 0, activeRequired: 0, totalEmployees: 0,
+          compliancePercent: 0, expiringCount: 0, totalSubmissions: 0,
+          approved: 0, hr_approved: 0, under_review: 0, rejected: 0, re_upload_requested: 0,
+          requirementStats: [], weeklyTrend: [],
+        });
+      }
+      empQuery  = empQuery.in('id', accessibleIds);
+      subsQuery = subsQuery.in('user_id', accessibleIds);
+    }
+
     const [{ data: requirements }, { data: subs }, { data: employees }] = await Promise.all([
       db.from('document_requirements').select('id, name, is_required, is_active').eq('organization_id', oId),
-      db.from('employee_doc_submissions').select('id, status, uploaded_at, requirement_id, user_id, expiry_date').eq('organization_id', oId),
-      db.from('users').select('id').eq('organization_id', oId).eq('role', 'employee').eq('status', 'active'),
+      subsQuery,
+      empQuery,
     ]);
 
     const reqList  = requirements || [];
@@ -254,18 +273,26 @@ router.get('/my-activity', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/doc-requirements/verification-queue — HR all submissions (filterable by status)
-router.get('/verification-queue', auth, async (req, res) => {
+// GET /api/doc-requirements/verification-queue — HR all submissions (branch-filtered)
+router.get('/verification-queue', auth, withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
     const oId = req.user.organization_id;
     const { status } = req.query; // optional filter: under_review | approved | rejected | re_upload_requested
+
+    // Branch isolation: only show submissions from accessible-branch employees
+    const accessibleIds = await resolveEmployeeIds(req.branchContext, oId);
+    if (accessibleIds !== null && accessibleIds.length === 0) return res.json([]);
 
     let query = db
       .from('employee_doc_submissions')
       .select('*, employee:users(id, name, email, avatar_color, department, position), requirement:document_requirements!employee_doc_submissions_requirement_id_fkey(id, name, description, category), reviewer:users!employee_doc_submissions_reviewed_by_fkey(name)')
       .eq('organization_id', oId)
       .order('uploaded_at', { ascending: false });
+
+    if (accessibleIds !== null) {
+      query = query.in('user_id', accessibleIds);
+    }
 
     if (status && ['under_review', 'hr_approved', 'approved', 'rejected', 're_upload_requested'].includes(status)) {
       query = query.eq('status', status);

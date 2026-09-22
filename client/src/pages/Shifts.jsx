@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -751,6 +752,7 @@ export default function Shifts() {
   const { isAdmin } = useAuth();
   const toast = useToast();
   const qc    = useQueryClient();
+  const { selectedBranchId } = useBranch();
   const now   = new Date();
 
   const [tab,         setTab]         = useState('shifts');
@@ -767,11 +769,11 @@ export default function Shifts() {
     queryFn:  () => apiGet('/shifts'),
   });
   const { data: _aData, isLoading: aLoad } = useQuery({
-    queryKey: ['shift-assign', month],
+    queryKey: ['shift-assign', month, selectedBranchId],
     queryFn:  () => apiGet('/shifts/assignments', { month }),
   });
   const { data: _eData } = useQuery({
-    queryKey: ['employees'],
+    queryKey: ['employees', 'all', selectedBranchId],
     queryFn:  () => apiGet('/employees'),
     enabled:  isAdmin,
   });

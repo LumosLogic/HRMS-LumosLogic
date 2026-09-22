@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPut, apiPost } from '@/lib/api';
+import { useBranch } from '@/context/BranchContext';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -57,6 +58,7 @@ function StatusBadge({ status }) {
 export default function BiometricSettings() {
   const toast = useToast();
   const qc    = useQueryClient();
+  const { selectedBranchId } = useBranch();
 
   // ── ADMS URL ─────────────────────────────────────────────────────────────────
   const { data: admsData, isLoading: admsLoading } = useQuery({
@@ -72,7 +74,7 @@ export default function BiometricSettings() {
 
   // ── Auto-sync config ──────────────────────────────────────────────────────────
   const { data: syncCfg, isLoading: cfgLoading } = useQuery({
-    queryKey: ['biometric-auto-sync-config'],
+    queryKey: ['biometric-auto-sync-config', selectedBranchId],
     queryFn:  () => apiGet('/biometric/auto-sync/config'),
   });
 
@@ -90,7 +92,7 @@ export default function BiometricSettings() {
 
   // ── Sync history ──────────────────────────────────────────────────────────────
   const { data: history = [], isLoading: histLoading, refetch: refetchHistory } = useQuery({
-    queryKey: ['biometric-auto-sync-history'],
+    queryKey: ['biometric-auto-sync-history', selectedBranchId],
     queryFn:  () => apiGet('/biometric/auto-sync/history', { limit: 100 }),
     refetchInterval: syncCfg?.last_sync_status === 'running' ? 4000 : false,
   });
@@ -132,7 +134,7 @@ export default function BiometricSettings() {
     onSuccess: () => {
       toast('Schedule saved and applied immediately.', 'success');
       setDirty(false);
-      qc.invalidateQueries(['biometric-auto-sync-config']);
+      qc.invalidateQueries({ queryKey: ['biometric-auto-sync-config'] });
     },
     onError: (err) => toast(err.message, 'error'),
   });
@@ -143,8 +145,8 @@ export default function BiometricSettings() {
     onSuccess: () => {
       toast('Sync triggered — devices will upload on next heartbeat (~30–60 s).', 'success');
       setTimeout(() => {
-        qc.invalidateQueries(['biometric-auto-sync-config']);
-        qc.invalidateQueries(['biometric-auto-sync-history']);
+        qc.invalidateQueries({ queryKey: ['biometric-auto-sync-config'] });
+        qc.invalidateQueries({ queryKey: ['biometric-auto-sync-history'] });
       }, 5000);
     },
     onError: (err) => toast(err.message, 'error'),
@@ -370,7 +372,7 @@ export default function BiometricSettings() {
                   </button>
 
                   <button
-                    onClick={() => { refetchHistory(); qc.invalidateQueries(['biometric-auto-sync-config']); }}
+                    onClick={() => { refetchHistory(); qc.invalidateQueries({ queryKey: ['biometric-auto-sync-config'] }); }}
                     className="ml-auto flex items-center gap-1.5 text-xs text-[#777587] hover:text-[#3525cd] font-semibold transition-colors">
                     <RefreshCw size={12} />Refresh
                   </button>

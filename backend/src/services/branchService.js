@@ -39,14 +39,20 @@ async function getUserBranchAccess(userId, orgId, role) {
     );
 
     if (!result.rows.length) {
-      // Single-branch org: implicitly grant access to the one branch so the HR
-      // admin can work without requiring a manual grant in hr_branch_access.
-      // If 2+ branches exist, fall through to the explicit-grant-only path.
+      // No explicit branch grants — check how many branches this org has.
+      // 0 branches → org has branches disabled (feature OFF); grant full org-wide access.
+      // 1 branch   → single-branch org; implicitly grant that branch so HR can work.
+      // 2+ branches → explicit grants required; deny access (return empty branchIds).
       try {
         const sb = await pool.query(
           `SELECT id FROM branches WHERE org_id = $1 AND is_active = TRUE`,
           [orgId]
         );
+        if (sb.rows.length === 0) {
+          // No branches at all — org is operating without the branches feature.
+          // Treat as org-wide access so dashboards and all admin pages work normally.
+          return { isRootAdmin: false, hasAllBranches: true, branchIds: null };
+        }
         if (sb.rows.length === 1) {
           return { isRootAdmin: false, hasAllBranches: false, branchIds: [Number(sb.rows[0].id)] };
         }

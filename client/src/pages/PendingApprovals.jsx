@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPut } from '@/lib/api';
+import { useBranch } from '@/context/BranchContext';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
 import { fmtDate } from '@/lib/utils';
@@ -166,6 +167,7 @@ function ExpenseReviewModal({ open, onClose, expense, onDone }) {
 export default function PendingApprovals() {
   const toast = useToast();
   const qc    = useQueryClient();
+  const { selectedBranchId } = useBranch();
 
   const [tab,         setTab]         = useState('all');
   const [search,      setSearch]      = useState('');
@@ -181,7 +183,7 @@ export default function PendingApprovals() {
   // Fetch ALL leaves in any pending state so root/HR admin see the full picture.
   // Includes both old-flow ('pending','pending_root') and new-flow ('pending_approval','pending_dept').
   const { data: _allLeaves = [], isLoading: loadLeaves } = useQuery({
-    queryKey: ['pending-approvals-leaves'],
+    queryKey: ['pending-approvals-leaves', selectedBranchId],
     queryFn:  () => apiGet('/leaves').catch(() => []),
     select:   d  => (Array.isArray(d) ? d : []).filter(l =>
       ['pending', 'pending_approval', 'pending_dept', 'pending_root'].includes(l.status)
@@ -190,7 +192,7 @@ export default function PendingApprovals() {
   });
 
   const { data: _rootLeaves = [], isLoading: loadRootLeaves } = useQuery({
-    queryKey: ['pending-root-leaves'],
+    queryKey: ['pending-root-leaves', selectedBranchId],
     queryFn:  () => apiGet('/leaves/pending-root').catch(() => []),
     select:   d  => (Array.isArray(d) ? d : []).filter(l => l._flow === 'legacy' || l.status === 'pending_root'),
     refetchInterval: 30000,
@@ -199,13 +201,13 @@ export default function PendingApprovals() {
   // my-approvals returns leaves where THIS user must act (enriched with current_level_* fields).
   // We show ALL of them regardless of which role type is required — root admin has full visibility.
   const { data: _myApprovals = [], isLoading: loadMyApprovals } = useQuery({
-    queryKey: ['my-workflow-approvals'],
+    queryKey: ['my-workflow-approvals', selectedBranchId],
     queryFn:  () => apiGet('/leaves/my-approvals').catch(() => []),
     refetchInterval: 30000,
   });
 
   const { data: _regs = [], isLoading: loadRegs } = useQuery({
-    queryKey: ['pending-approvals-regs'],
+    queryKey: ['pending-approvals-regs', selectedBranchId],
     queryFn:  () => apiGet('/regularization').catch(() => []),
     select:   d  => (Array.isArray(d) ? d : []).filter(r => r.status === 'pending'),
     refetchInterval: 30000,
@@ -213,7 +215,7 @@ export default function PendingApprovals() {
 
   // Pending expenses — 'pending' (no manager) and 'manager_approved' (ready for HR/admin)
   const { data: _expenses = [], isLoading: loadExpenses } = useQuery({
-    queryKey: ['pending-approvals-expenses'],
+    queryKey: ['pending-approvals-expenses', selectedBranchId],
     queryFn:  () => apiGet('/expenses').catch(() => []),
     select:   d  => (Array.isArray(d) ? d : []).filter(e => ['pending', 'manager_approved'].includes(e.status)),
     refetchInterval: 30000,

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Pencil, Trash2, CalendarDays, Globe, Star, PartyPopper, ChevronLeft, ChevronRight, Copy, LayoutGrid, List, MapPin, History } from 'lucide-react';
+import { Plus, Pencil, Trash2, CalendarDays, Globe, Star, PartyPopper, ChevronLeft, ChevronRight, Copy, LayoutGrid, List, History } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
@@ -152,7 +152,6 @@ export default function HolidaysPage() {
   const [editH,       setEditH]       = useState(null);
   const [confirmDel,  setConfirmDel]  = useState(null);
   const [viewMode,    setViewMode]    = useState('list');   // 'list' | 'calendar'
-  const [branchId,    setBranchId]    = useState('');       // EHN_Holidays_003
   const [copyConfirm, setCopyConfirm] = useState(false);    // EHN_Holidays_002
 
   // Auto-open Add Holiday modal when navigated with ?action=add
@@ -163,16 +162,11 @@ export default function HolidaysPage() {
     }
   }, []);
 
-  // EHN_Holidays_003: fetch branches for filter
-  const { data: branchList = [] } = useQuery({ queryKey: ['branches'], queryFn: () => apiGet('/branches').catch(() => []), staleTime: 5 * 60 * 1000 });
-
-  const queryParams = { year };
-  if (branchId) queryParams.branch_id = branchId;
-  const { data: _hData, isLoading } = useQuery({ queryKey: ['holidays', year, branchId], queryFn: () => apiGet('/holidays', queryParams) });
+  const { data: _hData, isLoading } = useQuery({ queryKey: ['holidays', year], queryFn: () => apiGet('/holidays', { year }) });
   const holidays = Array.isArray(_hData) ? _hData : [];
 
   // EHN_Holidays_002: fetch prev-year count for copy confirmation
-  const { data: prevYearData = [] } = useQuery({ queryKey: ['holidays', year - 1, ''], queryFn: () => apiGet('/holidays', { year: year - 1 }), enabled: copyConfirm });
+  const { data: prevYearData = [] } = useQuery({ queryKey: ['holidays', year - 1], queryFn: () => apiGet('/holidays', { year: year - 1 }), enabled: copyConfirm });
 
   const delMut = useMutation({
     mutationFn: id => apiDelete(`/holidays/${id}`),
@@ -208,16 +202,6 @@ export default function HolidaysPage() {
           <p className="page-subtitle">{holidays.length} holidays in {year} · {upcoming} upcoming</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* EHN_Holidays_003: Branch filter */}
-          {branchList.length > 0 && (
-            <div className="flex items-center gap-1.5">
-              <MapPin size={13} className="text-[#777587]" />
-              <select className="form-control py-1.5 text-xs pr-7 min-w-[120px]" value={branchId} onChange={e => setBranchId(e.target.value)}>
-                <option value="">All Branches</option>
-                {branchList.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
-              </select>
-            </div>
-          )}
           {/* Year picker */}
           <div className="flex items-center gap-1 bg-white border border-[#c7c4d8] rounded-lg px-2 py-1.5 shadow-sm">
             <button onClick={() => setYear(y => y - 1)} className="w-7 h-7 flex items-center justify-center rounded text-[#777587] hover:text-[#3525cd] hover:bg-[#f0f3ff] transition-colors">

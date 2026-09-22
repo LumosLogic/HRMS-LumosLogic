@@ -11,6 +11,8 @@ const { pool } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { orgId }         = require('../../utils/helpers');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { resolveEmployeeIds } = require('../../utils/branchFilter');
 
 const {
   applyStatutoryCalculations,
@@ -277,8 +279,8 @@ router.put('/config/bonus', auth, hasPermission('statutory', 'configure'), async
 // TAX DECLARATIONS (Employee self-service)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// GET /api/statutory/declarations — employee: own; HR: all
-router.get('/declarations', auth, async (req, res) => {
+// GET /api/statutory/declarations — employee: own; HR: all (branch-filtered)
+router.get('/declarations', auth, withBranchContext, async (req, res) => {
   try {
     const oId    = orgId(req);
     const isHR   = ['admin','root_admin'].includes(req.user.role);
@@ -288,11 +290,20 @@ router.get('/declarations', auth, async (req, res) => {
     const params = [oId];
 
     if (!isHR) {
+      // Employee: own only — no branch filter needed
       conds.push(`d.user_id = $${params.length + 1}`);
       params.push(req.user.id);
     } else if (userId) {
       conds.push(`d.user_id = $${params.length + 1}`);
       params.push(parseInt(userId, 10));
+    } else {
+      // HR listing all: restrict to accessible branches via employee branch membership
+      const accessibleIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (accessibleIds !== null) {
+        if (accessibleIds.length === 0) return res.json([]);
+        conds.push(`d.user_id = ANY($${params.length + 1}::bigint[])`);
+        params.push(accessibleIds);
+      }
     }
     if (fy)     { conds.push(`d.financial_year = $${params.length + 1}`); params.push(fy); }
     if (status) { conds.push(`d.status = $${params.length + 1}`);         params.push(status); }
@@ -444,8 +455,8 @@ router.put('/declarations/:id/reject', auth, hasPermission('statutory', 'approve
 // INVESTMENT PROOFS
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// GET /api/statutory/proofs
-router.get('/proofs', auth, async (req, res) => {
+// GET /api/statutory/proofs — employee: own; HR: accessible branches only
+router.get('/proofs', auth, withBranchContext, async (req, res) => {
   try {
     const oId    = orgId(req);
     const isHR   = ['admin','root_admin'].includes(req.user.role);
@@ -455,8 +466,17 @@ router.get('/proofs', auth, async (req, res) => {
     const params = [oId];
 
     if (!isHR) {
+      // Employee: own only — no branch filter needed
       conds.push(`ip.user_id = $${params.length + 1}`);
       params.push(req.user.id);
+    } else {
+      // HR listing all: restrict to accessible branches via employee branch membership
+      const accessibleIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (accessibleIds !== null) {
+        if (accessibleIds.length === 0) return res.json([]);
+        conds.push(`ip.user_id = ANY($${params.length + 1}::bigint[])`);
+        params.push(accessibleIds);
+      }
     }
     if (declarationId) {
       conds.push(`ip.declaration_id = $${params.length + 1}`);

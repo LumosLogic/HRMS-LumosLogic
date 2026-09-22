@@ -7,6 +7,7 @@ import {
 import { useToast } from '@/context/ToastContext';
 import { useAuth } from '@/context/AuthContext';
 import { apiGet, apiPost, apiPut } from '@/lib/api';
+import { useBranch } from '@/context/BranchContext';
 import { cn } from '@/lib/utils';
 
 const REGIME_INFO = {
@@ -97,7 +98,7 @@ function HRReviewPanel({ declarations }) {
 
   const approveMut = useMutation({
     mutationFn: ({ id, reviewer_notes }) => apiPut(`/statutory/declarations/${id}/approve`, { reviewer_notes }),
-    onSuccess: () => { toast('Declaration approved', 'success'); qc.invalidateQueries({ queryKey: ['declarations-hr'] }); },
+    onSuccess: () => { toast('Declaration approved', 'success'); qc.invalidateQueries({ queryKey: ['declarations-hr'] }); qc.invalidateQueries({ queryKey: ['proofs-hr'] }); },
     onError: e => toast(e.message, 'error'),
   });
   const rejectMut = useMutation({
@@ -301,6 +302,7 @@ export default function TaxDeclaration() {
   const toast   = useToast();
   const qc      = useQueryClient();
   const { user } = useAuth();
+  const { selectedBranchId } = useBranch();
   const isHR    = ['admin','root_admin'].includes(user?.role);
 
   const currentFY = () => {
@@ -328,13 +330,13 @@ export default function TaxDeclaration() {
   });
 
   const { data: allDecl = [] } = useQuery({
-    queryKey: ['declarations-hr'],
+    queryKey: ['declarations-hr', selectedBranchId],
     queryFn:  () => apiGet('/statutory/declarations'),
     enabled:  isHR,
   });
 
   const { data: allProofs = [], refetch: refetchProofs } = useQuery({
-    queryKey: ['proofs-hr'],
+    queryKey: ['proofs-hr', selectedBranchId],
     queryFn:  () => apiGet('/statutory/proofs'),
     enabled:  isHR,
     staleTime: 60000,

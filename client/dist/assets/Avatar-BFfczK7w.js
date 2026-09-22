@@ -1,0 +1,1 @@
+import{ag as a,af as o}from"./index-WCsIXpyO.js";function d({name:e,color:r="#3525cd",size:t=36,className:i=""}){const n={width:t,height:t,background:r,fontSize:t*.33,flexShrink:0};return a.jsx("div",{className:`rounded-full flex items-center justify-center font-black text-white border-2 border-white/90 shadow-md ${i}`,style:n,children:o(e)})}export{d as A};

@@ -4,6 +4,8 @@ const { db } = require('../../config/db');
 const { auth, adminOnly } = require('../../middleware/auth');
 const { orgId } = require('../../utils/helpers');
 const gcal = require('../../services/googleCalendar');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { resolveEmployeeIds } = require('../../utils/branchFilter');
 
 // ─── Holidays CRUD ────────────────────────────────────────────────────────────
 router.get('/holidays', auth, async (req, res) => {
@@ -80,7 +82,7 @@ router.delete('/events/:id', auth, adminOnly, async (req, res) => {
 });
 
 // ─── Culture (Birthdays / Holidays / Events) ──────────────────────────────────
-router.get('/culture', auth, async (req, res) => {
+router.get('/culture', auth, withBranchContext, async (req, res) => {
   try {
     const { localDateStr } = require('../../utils/helpers');
     const today    = localDateStr();
@@ -92,11 +94,24 @@ router.get('/culture', auth, async (req, res) => {
 
     // BUG_059 / BUG_068: Birthdays from active employees only — exclude
     // inactive/resigned/terminated so they don't appear in the culture feed.
-    const { data: users } = await db.from('users')
+    // Branch isolation: when a branch is selected/accessible, only show employees
+    // from that branch. resolveEmployeeIds returns null (org-wide) or an array.
+    const accessibleIds = await resolveEmployeeIds(req.branchContext, orgId(req));
+
+    let usersQuery = db.from('users')
       .select('id, name, avatar_color, department, date_of_birth')
       .eq('role', 'employee')
       .eq('organization_id', orgId(req))
       .not('employee_status', 'in', ['inactive', 'resigned', 'terminated']);
+
+    if (accessibleIds !== null) {
+      if (accessibleIds.length === 0) {
+        return res.json({ birthdaysToday: [], upcomingBirthdays: [], holidays: [], events: [] });
+      }
+      usersQuery = usersQuery.in('id', accessibleIds);
+    }
+
+    const { data: users } = await usersQuery;
 
     const birthdaysToday    = (users || []).filter(u => u.date_of_birth && u.date_of_birth.slice(5) === todayMD);
     const upcomingBirthdays = [];

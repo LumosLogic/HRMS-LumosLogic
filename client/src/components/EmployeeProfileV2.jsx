@@ -541,6 +541,7 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
   const toast = useToast();
   const qc = useQueryClient();
   const { selectedBranchId } = useBranch();
+  const branchingEnabled = useFeature('branches');
   const [skillModal, setSkillModal]             = useState(null);
   const [expModal, setExpModal]                 = useState(null);
   const [orgStructEditing, setOrgStructEditing] = useState(false);
@@ -558,11 +559,7 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
     queryFn: () => apiGet('/departments'),
     staleTime: 5 * 60 * 1000,
   });
-  const { data: designations = [] } = useQuery({
-    queryKey: ['designations'],
-    queryFn: () => apiGet('/designations'),
-    staleTime: 5 * 60 * 1000,
-  });
+
   const { data: allEmployees = [] } = useQuery({
     queryKey: ['employees-list', selectedBranchId],
     queryFn: () => apiGet('/employees'),
@@ -669,7 +666,6 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
           setForm({
             employee_id:     prof.employee_id     || '',
             department_ids:  prof.departments?.map(d => d.id) || [],
-            designation_id:  prof.designation_id  || '',
             position:        prof.position        || '',
             grade:           prof.grade           || '',
             pay_cadre:       prof.pay_cadre       || '',
@@ -696,12 +692,6 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
                   {departments.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}
                 </select>
                 <p className="text-[0.65rem] text-[#777587] mt-0.5">Hold Ctrl/Cmd to select multiple</p>
-              </div>
-              <div><label className="form-label">Designation</label>
-                <select className="form-control" value={form.designation_id||''} onChange={e=>set('designation_id',e.target.value)}>
-                  <option value="">— Select —</option>
-                  {designations.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}
-                </select>
               </div>
               <div><label className="form-label">Position / Title</label><input className="form-control" value={form.position||''} onChange={e=>set('position',e.target.value)}/></div>
               <div><label className="form-label">Grade</label><input className="form-control" value={form.grade||''} onChange={e=>set('grade',e.target.value)}/></div>
@@ -759,7 +749,7 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
           <div>
             <InfoRow label="Employee ID" value={prof.employee_id || emp?.employee_id || `EMP${String(empId).padStart(3, '0')}`} />
             <InfoRow label="Department" value={prof.departments?.map(d => d.name).join(', ') || prof.department} icon={Building2} />
-            <InfoRow label="Designation" value={prof.position} />
+            <InfoRow label="Position / Title" value={prof.position} />
             <InfoRow label="Grade" value={prof.grade} />
             <InfoRow label="Pay Cadre" value={prof.pay_cadre} />
             <InfoRow label="Cost Centre" value={prof.cost_centre} />
@@ -778,19 +768,21 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
         {orgStructEditing ? (
           <div>
             <div className="grid grid-cols-2 gap-3">
-              <div className="col-span-2">
-                <label className="form-label">Branch</label>
-                <select className="form-control" value={form.branch_id || ''} onChange={e => {
-                  const bId = e.target.value;
-                  set('branch_id', bId);
-                  const branch = branches.find(b => String(b.id) === String(bId));
-                  if (branch?.location) set('location', branch.location);
-                  else if (!bId) set('location', '');
-                }}>
-                  <option value="">— No branch —</option>
-                  {branches.map(b => <option key={b.id} value={b.id}>{b.name}{b.location ? ` · ${b.location}` : ''}</option>)}
-                </select>
-              </div>
+              {branchingEnabled && (
+                <div className="col-span-2">
+                  <label className="form-label">Branch</label>
+                  <select className="form-control" value={form.branch_id || ''} onChange={e => {
+                    const bId = e.target.value;
+                    set('branch_id', bId);
+                    const branch = branches.find(b => String(b.id) === String(bId));
+                    if (branch?.location) set('location', branch.location);
+                    else if (!bId) set('location', '');
+                  }}>
+                    <option value="">— No branch —</option>
+                    {branches.map(b => <option key={b.id} value={b.id}>{b.name}{b.location ? ` · ${b.location}` : ''}</option>)}
+                  </select>
+                </div>
+              )}
               <div>
                 <label className="form-label">Joining Date</label>
                 <input type="date" className="form-control" value={form.joining_date || ''} onChange={e => set('joining_date', e.target.value)} />
@@ -822,7 +814,7 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
           <div>
             <InfoRow label="Joining Date" value={prof.joining_date ? fmtDate(prof.joining_date) : null} />
             <InfoRow label="HOD" value={prof.hod?.name} />
-            <InfoRow label="Branch" value={prof.branch?.name} icon={MapPin} />
+            {branchingEnabled && <InfoRow label="Branch" value={prof.branch?.name} icon={MapPin} />}
             <InfoRow label="Work Location" value={prof.location} />
             <InfoRow label="Weekly Off" value={deriveWeeklyOff(prof.weekly_off_day, workSchedule)} />
             <InfoRow label="Work Hours/Day" value={prof.work_hours_per_day ? `${prof.work_hours_per_day}h` : null} />
@@ -2551,6 +2543,7 @@ export default function EmployeeProfileV2({ emp, onBack, onEdit }) {
   const { user } = useAuth();
   const isAdmin = user.role === 'admin' || user.role === 'root_admin';
   const isRoot  = user.role === 'root_admin';
+  const branchingEnabled = useFeature('branches');
 
   const now = new Date();
   const [currentTab, setCurrentTab] = useState('overview');
@@ -2699,13 +2692,13 @@ export default function EmployeeProfileV2({ emp, onBack, onEdit }) {
               {todayRecord && <StatusBadge status={todayRecord.status} />}
             </div>
 
-            {/* Designation */}
+            {/* Position / Title */}
             <p className="text-sm font-semibold text-[#464555] mb-3">{emp.position || '—'}</p>
 
             {/* Info row */}
             <div className="flex flex-wrap gap-x-5 gap-y-1.5 text-xs text-[#777587]">
               <span className="flex items-center gap-1.5"><Building2 size={13} className="text-[#3525cd]" />{deptLabel}</span>
-              {overview.branch?.name && <span className="flex items-center gap-1.5"><MapPin size={13} className="text-[#3525cd]" />{overview.branch.name}</span>}
+              {branchingEnabled && overview.branch?.name && <span className="flex items-center gap-1.5"><MapPin size={13} className="text-[#3525cd]" />{overview.branch.name}</span>}
               {emp.email && <span className="flex items-center gap-1.5"><Mail size={13} className="text-[#3525cd]" />{emp.email}</span>}
               {emp.phone && <span className="flex items-center gap-1.5"><Phone size={13} className="text-[#3525cd]" />{emp.phone}</span>}
             </div>
@@ -2829,7 +2822,7 @@ export default function EmployeeProfileV2({ emp, onBack, onEdit }) {
                     ['Employment',   emp.employment_type?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()), Users],
                     ['Work Mode',    emp.work_mode,          Home],
                     ['Grade',        emp.grade,              Award],
-                    ['Branch',       overview.branch?.name,  MapPin],
+                    ...(branchingEnabled ? [['Branch', overview.branch?.name, MapPin]] : []),
                     ['Manager',      overview.manager?.name, User],
                     ['Joining Date', emp.joining_date ? fmtDate(emp.joining_date) : null, Calendar],
                     ['Status',       statusCfg.label,        CheckCircle2],

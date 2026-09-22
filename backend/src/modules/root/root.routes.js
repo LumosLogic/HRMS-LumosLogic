@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const bcrypt   = require('bcryptjs');
-const { db } = require('../../config/db');
+const { db, pool } = require('../../config/db');
 const { auth, adminOnly, rootAdminOnly, unblockUser } = require('../../middleware/auth');
 const { flat, orgId, getOrgContext } = require('../../utils/helpers');
 const { sendMail, welcomeEmployeeHtml } = require('../../services/emailService');

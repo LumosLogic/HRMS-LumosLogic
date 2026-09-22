@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { Building2, ChevronDown, Check } from 'lucide-react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useBranch } from '@/context/BranchContext';
+import { useFeature } from '@/context/FeatureFlagContext';
 import { cn } from '@/lib/utils';
 
 /**
@@ -10,6 +11,7 @@ import { cn } from '@/lib/utils';
  */
 export function BranchSelector() {
   const qc = useQueryClient();
+  const branchesEnabled = useFeature('branches');
   const {
     accessibleBranches,
     selectedBranchId,
@@ -45,7 +47,7 @@ export function BranchSelector() {
     }
   }, [selectedBranchId, qc]);
 
-  if (!showBranchSelector) return null;
+  if (!branchesEnabled || !showBranchSelector) return null;
 
   const displayName = selectedBranch ? selectedBranch.name : 'Select Branch';
 

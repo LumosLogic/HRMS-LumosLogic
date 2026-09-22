@@ -11,6 +11,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
+import { useFeature } from '@/context/FeatureFlagContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
@@ -224,6 +225,7 @@ function InfoPill({ icon: Icon, text }) {
 
 function ProfilePrintModal({ empId, open, onClose }) {
   const toast = useToast();
+  const branchesEnabled = useFeature('branches');
   const { data: ov }  = useQuery({ queryKey: ['profile-overview', empId], queryFn: () => apiGet(`/profile/${empId}/overview`), enabled: !!empId && open });
   const { data: per } = useQuery({ queryKey: ['profile-personal',  empId], queryFn: () => apiGet(`/profile/${empId}/personal`),  enabled: !!empId && open });
 
@@ -320,15 +322,20 @@ function ProfilePrintModal({ empId, open, onClose }) {
             {/* Professional Info */}
             <div className="bg-gray-50 rounded-xl p-4">
               <p className="text-[0.65rem] font-black text-[#3525cd] uppercase tracking-widest mb-3">Professional Information</p>
-              <Row label="Employee ID"     value={ov ? (ov.employee_id || ov.device_enrollment_id || `EMP${String(ov.id || '').padStart(3, '0')}`) : undefined} />
-              <Row label="Department"      value={ov?.department} />
-              <Row label="Position"        value={ov?.position} />
-              <Row label="Grade"           value={ov?.grade} />
-              <Row label="Employment Type" value={empType} />
-              <Row label="Joining Date"    value={ov?.joining_date ? fmtDate(ov.joining_date) : null} />
-              <Row label="Branch"          value={ov?.branch?.name} />
-              <Row label="Reporting To"    value={ov?.manager?.name} />
-              <Row label="Cost Centre"     value={ov?.cost_centre} />
+              <Row label="Employee ID"      value={ov ? (ov.employee_id || ov.device_enrollment_id || `EMP${String(ov.id || '').padStart(3, '0')}`) : undefined} />
+              <Row label="Department"       value={ov?.department} />
+              <Row label="Position / Title" value={ov?.position} />
+              <Row label="Grade"            value={ov?.grade} />
+              <Row label="Employment Type"  value={empType} />
+              <Row label="Employee Status"  value={ov?.employee_status} />
+              <Row label="Joining Date"     value={ov?.joining_date ? fmtDate(ov.joining_date) : null} />
+              <Row label="Work Location"    value={ov?.location} />
+              <Row label="Work Hours/Day"   value={ov?.work_hours_per_day != null ? `${ov.work_hours_per_day} hrs` : null} />
+              <Row label="Weekly Off"       value={ov?.weekly_off_day} />
+              {branchesEnabled && <Row label="Branch" value={ov?.branch?.name} />}
+              <Row label="Reporting To"     value={ov?.manager?.name} />
+              <Row label="HOD"              value={ov?.hod?.name} />
+              <Row label="Cost Centre"      value={ov?.cost_centre} />
             </div>
 
             {/* Personal Info */}
@@ -449,6 +456,7 @@ function ProfileActions({ empId, onTabChange }) {
 // ─── PROFILE HEADER CARD ─────────────────────────────────────────────────────
 
 function ProfileHeaderCard({ empId, onTabChange }) {
+  const branchesEnabled = useFeature('branches');
   const { data, isLoading } = useQuery({
     queryKey: ['profile-overview', empId],
     queryFn: () => apiGet(`/profile/${empId}/overview`),
@@ -466,6 +474,7 @@ function ProfileHeaderCard({ empId, onTabChange }) {
   const employmentType = (data.employment_type || 'full_time').replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
   const managerName = data.manager?.name || null;
   const managerPos = data.manager?.position || null;
+  const hodName = data.hod?.name || null;
   const joiningDate = data.joining_date;
   const experience = calcExperience(joiningDate);
   const phone = data.phone || '—';
@@ -515,13 +524,18 @@ function ProfileHeaderCard({ empId, onTabChange }) {
             <div className="flex flex-wrap items-center gap-3 mt-2">
               <InfoPill icon={Building2} text={empNo} />
               <InfoPill icon={Layers} text={department} />
-              <InfoPill icon={MapPin} text={branchName} />
+              {branchesEnabled && branchName && <InfoPill icon={MapPin} text={branchName} />}
               <InfoPill icon={Clock} text={employmentType} />
             </div>
 
             {managerName && (
               <p className="text-xs text-[#777587] mt-2">
                 Reporting To: <span className="font-semibold text-[#464555]">{managerName}{managerPos ? ` (${managerPos})` : ''}</span>
+              </p>
+            )}
+            {hodName && (
+              <p className="text-xs text-[#777587] mt-1">
+                HOD: <span className="font-semibold text-[#464555]">{hodName}</span>
               </p>
             )}
 
@@ -653,7 +667,7 @@ function OverviewTab({ empId }) {
   const summaryCards = [
     { label: 'Employee ID',       value: overview.employee_id || overview.device_enrollment_id || `EMP${String(overview.id || '').padStart(3, '0')}`, icon: BadgeCheck },
     { label: 'Department',        value: overview.department || '—',                          icon: Layers },
-    { label: 'Designation',       value: overview.position || overview.designation || '—',    icon: Briefcase },
+    { label: 'Position / Title',  value: overview.position || '—',                           icon: Briefcase },
     { label: 'Joining Date',      value: joiningDate ? fmtDate(joiningDate) : '—',            icon: Calendar },
     { label: 'Experience',        value: experience,                                           icon: TrendingUp },
     { label: 'Reporting Manager', value: managerName,                                          icon: User },
