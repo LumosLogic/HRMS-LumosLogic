@@ -1,8 +1,9 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Building2, ArrowRight, MapPin } from 'lucide-react';
+import { Building2, ArrowRight, MapPin, Plus } from 'lucide-react';
 import { useBranch } from '@/context/BranchContext';
 import { useAuth } from '@/context/AuthContext';
+import { apiPost } from '@/lib/api';
 
 function Spinner() {
   return (
@@ -26,7 +27,12 @@ export default function BranchSelect() {
     setSelectedBranchId,
     branchesLoaded,
     isLoading,
+    reloadBranches,
   } = useBranch();
+
+  const [createName,    setCreateName]    = useState('');
+  const [createLoading, setCreateLoading] = useState(false);
+  const [createError,   setCreateError]   = useState('');
 
   const orgName = user?.organization_name || 'Your Organization';
 
@@ -57,12 +63,30 @@ export default function BranchSelect() {
     navigate('/root/dashboard', { replace: true });
   }
 
+  async function handleCreateBranch(e) {
+    e.preventDefault();
+    const name = createName.trim();
+    if (!name) { setCreateError('Branch name is required.'); return; }
+    if (name.length < 2) { setCreateError('Name must be at least 2 characters.'); return; }
+    setCreateLoading(true);
+    setCreateError('');
+    try {
+      await apiPost('/branches', { name, is_active: true });
+      setCreateName('');
+      reloadBranches(); // BranchContext re-fetches; the 1-branch useEffect auto-selects
+    } catch (err) {
+      setCreateError(err.message || 'Failed to create branch.');
+    } finally {
+      setCreateLoading(false);
+    }
+  }
+
   // Still loading or redirecting (single branch auto-select)
   if (isLoading || !branchesLoaded || accessibleBranches.length === 1) {
     return <Spinner />;
   }
 
-  // ── 0 branches: no branch structure configured yet ──────────────────────────
+  // ── 0 branches: prompt to create the first branch ───────────────────────────
   if (accessibleBranches.length === 0) {
     return (
       <div className="min-h-screen bg-[#f9f9ff] flex flex-col items-center justify-center px-6">
@@ -74,20 +98,47 @@ export default function BranchSelect() {
           <p className="text-[#777587] text-sm">Root Admin Console</p>
         </div>
 
-        <div className="bg-white rounded-2xl border border-[#c7c4d8] shadow-sm p-8 max-w-sm w-full text-center">
+        <div className="bg-white rounded-2xl border border-[#c7c4d8] shadow-sm p-8 max-w-sm w-full">
           <div className="w-12 h-12 rounded-xl bg-[#f0f3ff] flex items-center justify-center mx-auto mb-4">
             <Building2 size={22} className="text-[#3525cd]" />
           </div>
-          <h2 className="text-lg font-black text-[#151c27] mb-2">No branches configured</h2>
-          <p className="text-sm text-[#777587] mb-6 leading-relaxed">
-            Your organization hasn't set up branches yet. You can create branches from Settings after entering the workspace.
+          <h2 className="text-lg font-black text-[#151c27] mb-1 text-center">Set up your first branch</h2>
+          <p className="text-sm text-[#777587] mb-6 text-center leading-relaxed">
+            Create a branch to organize your workforce. You can add more branches later from Branch Management.
           </p>
-          <button
-            onClick={handleEnterWorkspace}
-            className="w-full py-3 bg-[#3525cd] text-white font-bold rounded-xl hover:bg-[#4f46e5] transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#3525cd]/20"
-          >
-            Enter Workspace <ArrowRight size={16} />
-          </button>
+
+          <form onSubmit={handleCreateBranch} className="space-y-3">
+            <div>
+              <label className="block text-xs font-bold text-[#464555] mb-1">Branch Name <span className="text-rose-500">*</span></label>
+              <input
+                type="text"
+                className="w-full px-3 py-2.5 text-sm rounded-xl border border-[#c7c4d8] bg-[#f9f9ff] focus:outline-none focus:border-[#3525cd] focus:ring-2 focus:ring-[#3525cd]/10 transition-all"
+                placeholder="e.g. Head Office, Dalal, Bhuj…"
+                value={createName}
+                onChange={e => { setCreateName(e.target.value); if (createError) setCreateError(''); }}
+                autoFocus
+              />
+              {createError && <p className="text-xs text-rose-600 mt-1">{createError}</p>}
+            </div>
+            <button
+              type="submit"
+              disabled={createLoading || !createName.trim()}
+              className="w-full py-3 bg-[#3525cd] text-white font-bold rounded-xl hover:bg-[#4f46e5] transition-all flex items-center justify-center gap-2 shadow-lg shadow-[#3525cd]/20 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {createLoading
+                ? <><span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />Creating…</>
+                : <><Plus size={16} />Create Branch</>}
+            </button>
+          </form>
+
+          <div className="mt-4 pt-4 border-t border-[#f0f3ff] text-center">
+            <button
+              onClick={handleEnterWorkspace}
+              className="text-xs text-[#777587] hover:text-[#3525cd] font-semibold transition-colors"
+            >
+              Skip for now — enter workspace without branches
+            </button>
+          </div>
         </div>
       </div>
     );

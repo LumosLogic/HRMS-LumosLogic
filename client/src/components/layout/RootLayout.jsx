@@ -17,6 +17,7 @@ import { rootAdminTourSteps } from '@/lib/tours';
 import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '@/lib/api';
 import { GlobalSearchModal } from '@/components/ui/GlobalSearchModal';
+import { BranchSelector } from '@/components/layout/BranchSelector';
 
 // ── Payroll sub-items (inside collapsible dropdown) ──────────────────────────
 const ROOT_PAYROLL_SUB_ITEMS = [
@@ -233,6 +234,9 @@ function RootSidebar({ onClose, onMenuClick, onSearchOpen }) {
           <span>Search...</span>
         </button>
       </div>
+
+      {/* Global branch selector — shows when org has 1+ branch */}
+      <BranchSelector />
 
       {/* Nav */}
       <nav className="flex-1 p-3 overflow-y-auto space-y-1">

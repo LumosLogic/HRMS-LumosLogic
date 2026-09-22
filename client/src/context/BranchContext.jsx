@@ -15,6 +15,9 @@ export function BranchProvider({ children }) {
   const [isRootAdmin,        setIsRootAdmin]         = useState(false);
   const [isLoading,          setIsLoading]           = useState(false);
   const [branchesLoaded,     setBranchesLoaded]     = useState(false);
+  // Increment to force a re-fetch (e.g. after creating the first branch)
+  const [reloadTick,         setReloadTick]         = useState(0);
+  const reloadBranches = useCallback(() => setReloadTick(t => t + 1), []);
 
   // Restore selected branch from localStorage
   const [selectedBranchId, setSelectedBranchIdState] = useState(() => {
@@ -73,7 +76,7 @@ export function BranchProvider({ children }) {
         setIsLoading(false);
         setBranchesLoaded(true);
       });
-  }, [token, user?.id, user?.role]);
+  }, [token, user?.id, user?.role, reloadTick]);
 
   const setSelectedBranchId = useCallback((branchId) => {
     setSelectedBranchIdState(branchId);
@@ -105,6 +108,7 @@ export function BranchProvider({ children }) {
       isLoading,
       branchesLoaded,
       showBranchSelector,
+      reloadBranches,
     }}>
       {children}
     </BranchContext.Provider>

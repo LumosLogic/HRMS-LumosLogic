@@ -240,6 +240,16 @@ export default function Branches() {
     onError: e => toast(e.message, 'error'),
   });
 
+  const toggleMut = useMutation({
+    mutationFn: ({ id, is_active }) => apiPut(`/branches/${id}`, { is_active }),
+    onSuccess: (_, { is_active }) => {
+      toast(is_active ? 'Branch activated' : 'Branch deactivated', 'success');
+      qc.invalidateQueries({ queryKey: ['branches'] });
+      qc.invalidateQueries({ queryKey: ['branches-my-access'] });
+    },
+    onError: e => toast(e.message, 'error'),
+  });
+
   const active   = branches.filter(b => b.is_active !== false).length;
   const inactive = branches.filter(b => b.is_active === false).length;
 
@@ -354,6 +364,17 @@ export default function Branches() {
                               <ShieldCheck size={13} />
                             </button>
                           )}
+                          {/* Quick activate/deactivate */}
+                          <button
+                            onClick={() => toggleMut.mutate({ id: b.id, is_active: !b.is_active })}
+                            disabled={toggleMut.isPending}
+                            className="p-1.5 rounded-lg transition-colors disabled:opacity-40"
+                            title={b.is_active !== false ? 'Deactivate' : 'Activate'}
+                          >
+                            {b.is_active !== false
+                              ? <ToggleRight size={16} className="text-[#3525cd]" />
+                              : <ToggleLeft  size={16} className="text-[#c7c4d8] hover:text-[#3525cd]" />}
+                          </button>
                           <button onClick={() => setEditBranch(b)}
                             className="p-1.5 rounded-lg text-[#464555] hover:bg-[#f0f3ff] hover:text-[#3525cd] transition-colors" title="Edit">
                             <Pencil size={13} />
