@@ -1,5 +1,6 @@
 // @refresh reset
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 
 export const AuthContext = createContext(null);
 
@@ -32,6 +33,7 @@ function loadStoredPermissions() {
 }
 
 export function AuthProvider({ children }) {
+  const queryClient = useQueryClient();
   const initial = loadStoredAuth();
   const [user,        setUser]        = useState(initial.user);
   const [token,       setToken]       = useState(initial.token);
@@ -73,7 +75,8 @@ export function AuthProvider({ children }) {
     localStorage.removeItem('lt_token');
     localStorage.removeItem('lt_user');
     localStorage.removeItem('lt_permissions');
-  }, []);
+    queryClient.clear();
+  }, [queryClient]);
 
   // Auto-logout when any API call returns 401 (token expired mid-session)
   useEffect(() => {
@@ -81,6 +84,43 @@ export function AuthProvider({ children }) {
     window.addEventListener('auth:expired', handler);
     return () => window.removeEventListener('auth:expired', handler);
   }, [logout]);
+
+  // ── Cross-tab auth sync ────────────────────────────────────────────────────
+  // The `storage` event fires in every tab EXCEPT the one that wrote the key.
+  // When another tab logs out or logs in as a different user, we re-read auth
+  // from localStorage and update this tab's React state immediately.
+  // We watch only lt_token: lt_user and lt_permissions are always written
+  // alongside it, so a single event is enough.
+  useEffect(() => {
+    function onStorageChange(e) {
+      if (e.key !== 'lt_token') return;
+      const next = loadStoredAuth();
+      setToken(next.token);
+      setUser(next.user);
+      queryClient.clear(); // discard previous user's cached API responses
+      // If next.token is null  → the permissions useEffect clears lt_permissions
+      // If next.token changed  → the permissions useEffect re-fetches for new user
+    }
+    window.addEventListener('storage', onStorageChange);
+    return () => window.removeEventListener('storage', onStorageChange);
+  }, [queryClient]);
+
+  // Fallback: re-check when the user switches back to this tab (e.g. after
+  // Tab 2 logged in while Tab 1 was in the background and the storage event
+  // was missed or deferred by the browser).
+  useEffect(() => {
+    function onVisible() {
+      if (document.hidden) return;
+      const stored = localStorage.getItem('lt_token');
+      if (stored === token) return; // nothing changed
+      const next = loadStoredAuth();
+      setToken(next.token);
+      setUser(next.user);
+      queryClient.clear();
+    }
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [token, queryClient]);
 
   const isRootAdmin = user?.role === 'root_admin';
   const isHR        = user?.role === 'admin';

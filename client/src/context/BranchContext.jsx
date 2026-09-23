@@ -138,6 +138,19 @@ export function BranchProvider({ children }) {
     }
   }, []);
 
+  // Sync branch selection when another tab switches branches (same user) or
+  // when another tab's login clears lt_selected_branch (user change is handled
+  // above via token/user deps — this catches same-user cross-tab branch switches).
+  useEffect(() => {
+    function onStorageChange(e) {
+      if (e.key !== STORAGE_KEY) return;
+      const newId = e.newValue ? Number(e.newValue) : null;
+      setSelectedBranchIdState(newId);
+    }
+    window.addEventListener('storage', onStorageChange);
+    return () => window.removeEventListener('storage', onStorageChange);
+  }, []);
+
   // Resolved objects
   // Coerce b.id to Number: PostgreSQL BIGINT returns as string via node-postgres.
   const selectedBranch = accessibleBranches.find(b => Number(b.id) === selectedBranchId) || null;
