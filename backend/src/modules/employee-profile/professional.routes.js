@@ -102,6 +102,28 @@ router.put('/:id/professional', auth, adminOnly, async (req, res) => {
         await db.from('user_departments').insert(
           body.department_ids.map(did => ({ user_id: empId, department_id: did, organization_id: orgId(req) }))
         );
+
+        // Keep users.department text in sync with the primary department name (M-12)
+        // so that reports, the employee portal, and attendance all read the correct value.
+        const { data: dRow } = await db.from('departments')
+          .select('name')
+          .eq('id', body.department_ids[0])
+          .eq('organization_id', orgId(req))
+          .maybeSingle();
+        if (dRow?.name) {
+          await db.from('users')
+            .update({ department: dRow.name })
+            .eq('id', empId)
+            .eq('organization_id', orgId(req));
+          data.department = dRow.name;
+        }
+      } else {
+        // Departments cleared — blank the text column too
+        await db.from('users')
+          .update({ department: null })
+          .eq('id', empId)
+          .eq('organization_id', orgId(req));
+        data.department = null;
       }
     }
 
