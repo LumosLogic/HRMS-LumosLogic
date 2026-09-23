@@ -969,7 +969,7 @@ export default function Reports() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className={cn('text-[0.68rem] font-bold px-2 py-0.5 rounded-full border capitalize', ATT_STATUS_STYLE[r.status] || 'bg-slate-50 text-slate-500 border-slate-200')}>
+                          <span className={cn('text-[0.68rem] font-bold px-2 py-0.5 rounded-full border capitalize whitespace-nowrap', ATT_STATUS_STYLE[r.status] || 'bg-slate-50 text-slate-500 border-slate-200')}>
                             {r.status === 'holiday'
                               ? (r.holiday_name ? `${r.holiday_type === 'public' ? 'Public ' : ''}Holiday` : 'Holiday')
                               : r.status === 'off_day' ? 'Off Day'
