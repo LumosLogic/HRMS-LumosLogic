@@ -61,7 +61,19 @@ function ReviewModal({ open, onClose, request }) {
 
   const mut = useMutation({
     mutationFn: status => apiPut(`/regularization/${request.id}/review`, { status, reviewer_notes: notes }),
-    onSuccess: () => { toast('Review submitted!', 'success'); qc.invalidateQueries({ queryKey: ['regularization'] }); qc.invalidateQueries({ queryKey: ['el-usage'] }); onClose(); },
+    onSuccess: () => {
+      toast('Review submitted!', 'success');
+      qc.invalidateQueries({ queryKey: ['regularization'] });
+      qc.invalidateQueries({ queryKey: ['el-usage'] });
+      // Attendance record is updated on the backend when regularization is approved —
+      // invalidate all attendance-consuming views so they reflect the corrected data.
+      qc.invalidateQueries({ queryKey: ['report-attendance'] });
+      qc.invalidateQueries({ queryKey: ['calendar'] });
+      qc.invalidateQueries({ queryKey: ['att-day-modal'] });
+      qc.invalidateQueries({ queryKey: ['root-dashboard'] });
+      qc.invalidateQueries({ queryKey: ['dashboard'] });
+      onClose();
+    },
     onError: e => toast(e.message, 'error'),
   });
 

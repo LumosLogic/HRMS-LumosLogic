@@ -5,7 +5,7 @@ import {
   Download, BarChart3, Users, FileText, CalendarDays, TrendingUp,
   Search, Filter, X, ChevronUp, ChevronDown, Printer,
   CheckCircle2, Clock, AlertCircle, UserCheck, Umbrella,
-  Building2, ArrowUpDown, ChevronRight, Fingerprint, Pencil,
+  Building2, ArrowUpDown, ChevronRight, Fingerprint, Pencil, Calendar,
 } from 'lucide-react';
 import { apiGet } from '@/lib/api';
 import { MONTHS } from '@/lib/utils';
@@ -310,13 +310,17 @@ export default function Reports() {
   const qc = useQueryClient();
   const [searchParams] = useSearchParams();
   const preselectedUserId = searchParams.get('userId') || '';
+  // When navigating from Calendar → View Attendance, month and year are passed as URL params
+  const preselectedMonth = parseInt(searchParams.get('month')) || null;
+  const preselectedYear  = parseInt(searchParams.get('year'))  || null;
 
   // ── Filters & UI state ────────────────────────────────────────────────────────
   const [active,          setActive]          = useState('attendance');
   const [viewMode,        setViewMode]        = useState('monthly');
-  const [year,            setYear]            = useState(now.getFullYear());
-  const [month,           setMonth]           = useState(now.getMonth() + 1);
+  const [year,            setYear]            = useState(preselectedYear  || now.getFullYear());
+  const [month,           setMonth]           = useState(preselectedMonth || now.getMonth() + 1);
   const [selectedEmpId,   setSelectedEmpId]   = useState(preselectedUserId);
+  const [calModalOpen,    setCalModalOpen]    = useState(false);
   const [deptFilter,      setDeptFilter]      = useState('');
   const [statusFilter,    setStatusFilter]    = useState('');
   const [leaveTypeFilter, setLeaveTypeFilter] = useState('');
@@ -705,10 +709,16 @@ export default function Reports() {
       {/* ── PAGE HEADER ──────────────────────────────────────────────────────── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="page-title">Reports & Analytics</h1>
-          <p className="page-subtitle">Attendance, leave, and employee data for {periodLabel}</p>
+          <h1 className="page-title">Attendance Management</h1>
+          <p className="page-subtitle">Attendance correction, leaves, and employee data for {periodLabel}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* View Calendar — opens a calendar popup for the selected employee/month */}
+          {active === 'attendance' && selectedEmpId && viewMode === 'monthly' && fullCalendarRows && (
+            <button className="btn btn-outline btn-sm" onClick={() => setCalModalOpen(true)}>
+              <Calendar size={14} /> View Calendar
+            </button>
+          )}
           <button className="btn btn-outline btn-sm" onClick={() => window.print()}>
             <Printer size={14} /> Print
           </button>
@@ -883,9 +893,12 @@ export default function Reports() {
                   <SortTh col="name"       sort={sort} onSort={toggleSort}>Employee</SortTh>
                   <SortTh col="department" sort={sort} onSort={toggleSort}>Department</SortTh>
                   <SortTh col="date"       sort={sort} onSort={toggleSort}>Date</SortTh>
+                  <th className="px-4 py-3 text-left text-xs font-black text-[#464555] whitespace-nowrap uppercase tracking-wider">Day</th>
                   <th className="px-4 py-3 text-left text-xs font-black text-[#464555] whitespace-nowrap uppercase tracking-wider">Status</th>
                   <SortTh col="check_in"  sort={sort} onSort={toggleSort}>{isFiloOrg ? 'First In' : 'Check In'}</SortTh>
                   <SortTh col="check_out" sort={sort} onSort={toggleSort}>{isFiloOrg ? 'Last Out' : 'Check Out'}</SortTh>
+                  <th className="px-4 py-3 text-left text-xs font-black text-[#464555] whitespace-nowrap uppercase tracking-wider">Late Coming</th>
+                  <th className="px-4 py-3 text-left text-xs font-black text-[#464555] whitespace-nowrap uppercase tracking-wider">Early Going</th>
                   <th className="px-4 py-3 text-left text-xs font-black text-[#464555] whitespace-nowrap uppercase tracking-wider">
                     {isFiloOrg ? 'Non-Working' : 'Break'}
                   </th>
@@ -898,14 +911,14 @@ export default function Reports() {
                 {attLoading ? (
                   Array.from({ length: 5 }).map((_, i) => (
                     <tr key={i} className="animate-pulse">
-                      {Array.from({ length: isAdmin ? 10 : 9 }).map((_, j) => (
+                      {Array.from({ length: isAdmin ? 13 : 12 }).map((_, j) => (
                         <td key={j} className="px-4 py-3"><div className="h-4 bg-[#f0f3ff] rounded w-full" /></td>
                       ))}
                     </tr>
                   ))
                 ) : displayRows.length === 0 ? (
                   <tr>
-                    <td colSpan={isAdmin ? 10 : 9} className="py-14 text-center">
+                    <td colSpan={isAdmin ? 13 : 12} className="py-14 text-center">
                       <CalendarDays size={32} className="text-[#c7c4d8] mx-auto mb-2" />
                       <p className="text-sm font-semibold text-[#464555]">No attendance records found</p>
                       <p className="text-xs text-[#9ca3af] mt-1">{anyFilter ? 'Try adjusting your filters.' : `No data for ${periodLabel}.`}</p>
@@ -950,6 +963,10 @@ export default function Reports() {
                       </td>
                       <td className="px-4 py-3 text-[#464555] text-xs">{r.department || '—'}</td>
                       <td className="px-4 py-3 text-[#464555] text-xs whitespace-nowrap">{r.date}</td>
+                      {/* Day of week — derived client-side from date */}
+                      <td className="px-4 py-3 text-[#777587] text-xs whitespace-nowrap">
+                        {r.date ? new Date(r.date + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'short' }) : '—'}
+                      </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className={cn('text-[0.68rem] font-bold px-2 py-0.5 rounded-full border capitalize', ATT_STATUS_STYLE[r.status] || 'bg-slate-50 text-slate-500 border-slate-200')}>
@@ -990,6 +1007,18 @@ export default function Reports() {
                             Not checked out
                           </span>
                         ) : '—'}
+                      </td>
+                      {/* Late Coming */}
+                      <td className="px-4 py-3 text-xs">
+                        {r.is_late
+                          ? <span className="font-bold px-1.5 py-0.5 rounded-full bg-orange-50 text-orange-700 border border-orange-200">Late</span>
+                          : <span className="text-slate-300">—</span>}
+                      </td>
+                      {/* Early Going */}
+                      <td className="px-4 py-3 text-xs">
+                        {r.is_early_exit
+                          ? <span className="font-bold px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200">Early</span>
+                          : <span className="text-slate-300">—</span>}
                       </td>
                       {/* Break / Non-Working */}
                       <td className="px-4 py-3 text-xs font-semibold">
@@ -1039,7 +1068,7 @@ export default function Reports() {
                         user_id={r.user_id || r.users?.id || null}
                         date={r.date}
                         name={r.name}
-                        colSpan={isAdmin ? 10 : 9}
+                        colSpan={isAdmin ? 13 : 12}
                       />
                     )}
                     </React.Fragment>
@@ -1227,16 +1256,207 @@ export default function Reports() {
           isSynthetic={false}
           onClose={() => setEditTarget(null)}
           onRefresh={() => {
-            // Invalidate the active attendance report query so the table refreshes
             qc.invalidateQueries({ queryKey: ['report-attendance'] });
-            // Also refresh dashboard/calendar caches in case they're open
             qc.invalidateQueries({ queryKey: ['root-dashboard'] });
             qc.invalidateQueries({ queryKey: ['dashboard'] });
             qc.invalidateQueries({ queryKey: ['calendar'] });
+            qc.invalidateQueries({ queryKey: ['att-day-modal'] });
+            qc.invalidateQueries({ queryKey: ['leaves-month'] });
           }}
         />
       )}
 
+      {/* ── VIEW CALENDAR MODAL ──────────────────────────────────────────────── */}
+      {calModalOpen && fullCalendarRows && selectedEmpId && (
+        <ReportsCalendarModal
+          open={calModalOpen}
+          onClose={() => setCalModalOpen(false)}
+          empName={selectedEmpName || empRows.find(e => String(e.id) === selectedEmpId)?.name || ''}
+          year={year}
+          month={month}
+          calendarRows={fullCalendarRows}
+          attStatusStyle={ATT_STATUS_STYLE}
+        />
+      )}
+
     </div>
+  );
+}
+
+// ── View Calendar Modal ────────────────────────────────────────────────────────
+// Renders a mini month-calendar for the selected employee using the data already
+// loaded in Reports (no extra API calls). Clicking a date shows attendance details.
+const DAY_ABBR = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function fmtTimeCal(t) {
+  if (!t) return '—';
+  const [h, m] = t.split(':').map(Number);
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`;
+}
+
+function ReportsCalendarModal({ open, onClose, empName, year, month, calendarRows, attStatusStyle }) {
+  const [selectedDate, setSelectedDate] = useState(null);
+
+  const rowMap = useMemo(() => {
+    const map = {};
+    for (const r of calendarRows || []) map[r.date] = r;
+    return map;
+  }, [calendarRows]);
+
+  if (!open) return null;
+
+  const firstDay  = new Date(year, month - 1, 1);
+  const lastDay   = new Date(year, month,     0);
+  const startCell = new Date(firstDay);
+  startCell.setDate(startCell.getDate() - startCell.getDay());
+  const endCell = new Date(lastDay);
+  endCell.setDate(endCell.getDate() + (6 - endCell.getDay()));
+
+  const cells = [];
+  const cur = new Date(startCell);
+  while (cur <= endCell) { cells.push(new Date(cur)); cur.setDate(cur.getDate() + 1); }
+
+  const todayStr = new Date().toLocaleDateString('en-CA');
+
+  const STATUS_CELL = {
+    present:     { cls: 'bg-emerald-100 text-emerald-700', lbl: 'P' },
+    early_leave: { cls: 'bg-orange-100 text-orange-700',   lbl: 'EL' },
+    wfh:         { cls: 'bg-indigo-100 text-indigo-700',   lbl: 'WFH' },
+    half_day:    { cls: 'bg-amber-100 text-amber-700',     lbl: 'HD' },
+    on_leave:    { cls: 'bg-rose-100 text-rose-600',       lbl: 'L' },
+    absent:      { cls: 'bg-slate-100 text-slate-500',     lbl: 'A' },
+    holiday:     { cls: 'bg-violet-100 text-violet-700',   lbl: 'H' },
+    off_day:     { cls: 'bg-slate-50 text-slate-400',      lbl: 'Off' },
+  };
+
+  const selRow = selectedDate ? rowMap[selectedDate] : null;
+
+  return (
+    <Modal open onClose={onClose} title={`${empName} — ${MONTHS[month - 1]} ${year}`} size="lg">
+      {{
+        body: (
+          <div className="space-y-4">
+
+            {/* Calendar grid */}
+            <div className="grid grid-cols-7 gap-px bg-[#c7c4d8] border border-[#c7c4d8] rounded-xl overflow-hidden">
+              {DAY_ABBR.map(d => (
+                <div key={d} className="bg-[#f9f9ff] py-2 text-center text-[0.6rem] font-black uppercase tracking-wider text-[#777587]">
+                  {d}
+                </div>
+              ))}
+              {cells.map((c, i) => {
+                const isOther = c.getMonth() !== month - 1;
+                const ds = c.toLocaleDateString('en-CA');
+                const isToday = ds === todayStr;
+                const row = rowMap[ds];
+                const sCell = row ? STATUS_CELL[row.status] : null;
+                const isSelected = ds === selectedDate;
+
+                return (
+                  <div key={i}
+                    onClick={() => !isOther && setSelectedDate(prev => prev === ds ? null : ds)}
+                    className={cn(
+                      'bg-white min-h-[52px] p-1.5 transition-colors',
+                      isOther ? 'opacity-30 cursor-default' : 'cursor-pointer hover:bg-[#f0f3ff]',
+                      isSelected && 'bg-[#eef0ff] ring-1 ring-inset ring-[#3525cd]',
+                      isToday && !isSelected && 'bg-[#f0f3ff]',
+                    )}>
+                    <div className={cn(
+                      'text-xs font-bold w-5 h-5 flex items-center justify-center rounded-full mb-0.5',
+                      isToday ? 'bg-[#3525cd] text-white text-[0.6rem]' : 'text-[#464555]',
+                    )}>
+                      {c.getDate()}
+                    </div>
+                    {!isOther && sCell && (
+                      <span className={cn('text-[0.55rem] font-bold px-1 py-0.5 rounded block text-center leading-tight', sCell.cls)}>
+                        {sCell.lbl}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Legend */}
+            <div className="flex flex-wrap gap-1.5">
+              {Object.entries(STATUS_CELL).map(([k, v]) => (
+                <span key={k} className={cn('text-[0.6rem] font-bold px-1.5 py-0.5 rounded capitalize', v.cls)}>
+                  {k.replace(/_/g, ' ')}
+                </span>
+              ))}
+            </div>
+
+            {/* Detail panel for selected date */}
+            {selectedDate && (
+              <div className="rounded-xl border border-[#c7c4d8] p-4 bg-[#f9f9ff]">
+                <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+                  <span className="text-sm font-black text-[#151c27]">
+                    {new Date(selectedDate + 'T12:00:00').toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' })}
+                  </span>
+                  {selRow && (
+                    <span className={cn('text-[0.68rem] font-bold px-2 py-0.5 rounded-full border capitalize', attStatusStyle[selRow.status] || 'bg-slate-50 text-slate-500 border-slate-200')}>
+                      {selRow.status?.replace(/_/g, ' ') || '—'}
+                    </span>
+                  )}
+                </div>
+                {selRow?.check_in ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                    <div>
+                      <p className="text-[#777587] mb-0.5">Check In</p>
+                      <p className="font-bold text-[#151c27] font-mono">{fmtTimeCal(selRow.check_in)}</p>
+                    </div>
+                    <div>
+                      <p className="text-[#777587] mb-0.5">Check Out</p>
+                      <p className="font-bold text-[#151c27] font-mono">{fmtTimeCal(selRow.check_out)}</p>
+                    </div>
+                    {selRow.work_hours > 0 && (
+                      <div>
+                        <p className="text-[#777587] mb-0.5">Working Hrs</p>
+                        <p className="font-bold text-[#151c27]">
+                          {Math.floor(selRow.work_hours)}h {Math.round((selRow.work_hours % 1) * 60)}m
+                        </p>
+                      </div>
+                    )}
+                    {selRow.total_break_minutes > 0 && (
+                      <div>
+                        <p className="text-[#777587] mb-0.5">Break</p>
+                        <p className="font-bold text-[#151c27]">
+                          {Math.floor(selRow.total_break_minutes / 60)}h {selRow.total_break_minutes % 60}m
+                        </p>
+                      </div>
+                    )}
+                    {selRow.is_late && (
+                      <div>
+                        <p className="text-[#777587] mb-0.5">Late Coming</p>
+                        <span className="font-bold px-1.5 py-0.5 rounded-full bg-orange-50 text-orange-700 border border-orange-200 text-[0.65rem]">Late</span>
+                      </div>
+                    )}
+                    {selRow.is_early_exit && (
+                      <div>
+                        <p className="text-[#777587] mb-0.5">Early Going</p>
+                        <span className="font-bold px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-[0.65rem]">Early Exit</span>
+                      </div>
+                    )}
+                    {selRow.notes && (
+                      <div className="col-span-2 sm:col-span-4">
+                        <p className="text-[#777587] mb-0.5">Notes</p>
+                        <p className="text-[#464555] italic text-[0.7rem]">{selRow.notes}</p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-[#777587]">
+                    {selRow
+                      ? (selRow.status === 'off_day' ? 'Weekly off — no attendance expected.' : selRow.status === 'holiday' ? `Public holiday${selRow.holiday_name ? `: ${selRow.holiday_name}` : ''}.` : 'No punch record for this day.')
+                      : 'No data for this date.'}
+                  </p>
+                )}
+              </div>
+            )}
+
+          </div>
+        ),
+      }}
+    </Modal>
   );
 }

@@ -420,6 +420,7 @@ export function AttendanceDayModal({ dateStr, initialTab = 'all', onClose, onRef
 
   function handleAttRefresh() {
     refetchAtt();
+    qc.invalidateQueries({ queryKey: ['report-attendance'] });
     qc.invalidateQueries({ queryKey: ['root-dashboard'] });
     qc.invalidateQueries({ queryKey: ['dashboard'] });
     qc.invalidateQueries({ queryKey: ['calendar'] });

@@ -253,6 +253,9 @@ router.get('/attendance', auth, withBranchContext, async (req, res) => {
         is_live,
         is_on_break:          !!(r.break_start && !r.break_end && !check_out),
         non_working_minutes:  policy === 'first_in_last_out' ? total_break_minutes : null,
+        is_late:              !!r.is_late,
+        is_early_exit:        !!r.is_early_exit,
+        notes:                r.notes || null,
       };
     });
 
@@ -270,6 +273,8 @@ router.get('/attendance', auth, withBranchContext, async (req, res) => {
           : [{ key: 'total_break_minutes', label: 'Break (min)' }]),
         { key: 'gross_hours', label: 'Total Hours' },
         { key: 'work_hours', label: 'Working Hours' },
+        { key: 'is_late',       label: 'Late Coming' },
+        { key: 'is_early_exit', label: 'Early Going' },
       ]);
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', `attachment; filename="attendance_report_${year||'all'}_${month||'all'}.csv"`);

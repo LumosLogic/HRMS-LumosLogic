@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, Clock, Home, Umbrella, UserCheck, XCircle, Timer, Play, Pause, Square, ChevronDown, ChevronUp, Download, Search } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
-import { apiGet, apiPost, apiPut } from '@/lib/api';
+import { apiGet, apiPost } from '@/lib/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { StatusBadge, LeaveTypeBadge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
@@ -26,7 +26,6 @@ export default function Calendar() {
   const [mode, setMode]   = useState('month');
   const [dayModal, setDayModal] = useState(null);
   const [dayModalInitialTab, setDayModalInitialTab] = useState(null);
-  const [editModal, setEditModal] = useState(null);
   const [monthPickerOpen, setMonthPickerOpen] = useState(false); // ENH_CALENDER_003
   const [weekSearch,      setWeekSearch]      = useState('');    // ENH_CALENDER_006
   const monthPickerRef = useRef(null);
@@ -253,19 +252,14 @@ export default function Calendar() {
         : <WeekView weekDates={weekDates} grouped={grouped} employees={employees} user={user} isAdmin={isAdmin} onDayClick={openDayModal} getLeaveForDate={getLeaveForDate} searchQuery={weekSearch} />
       }
 
-      {/* Day Modal */}
+      {/* Day Modal — read-only; admin uses View Attendance to correct records in Reports */}
       {dayModal && (
         <DayModal dateStr={dayModal} records={grouped[dayModal] || []} employees={employees} isAdmin={isAdmin} user={user}
           initialTab={dayModalInitialTab}
           getLeaveForDate={getLeaveForDate}
+          year={year} month={month}
           onClose={() => { setDayModal(null); setDayModalInitialTab(null); }}
-          onEditAtt={r => { setDayModal(null); setDayModalInitialTab(null); setEditModal(r); }}
           onRefresh={refetch} />
-      )}
-
-      {/* Edit Attendance Modal */}
-      {editModal && (
-        <EditAttModal record={editModal} onClose={() => setEditModal(null)} onRefresh={refetch} />
       )}
     </div>
   );
@@ -469,7 +463,10 @@ function WeekView({ weekDates, grouped, employees, user, isAdmin, onDayClick, ge
 
 
 // ── Day Modal ─────────────────────────────────────────────────────────────────
-function DayModal({ dateStr, records, employees, isAdmin, user, onClose, onEditAtt, onRefresh, getLeaveForDate, initialTab }) {
+// Calendar is read-only. Admins use "View Attendance" to open Reports for the
+// selected employee, where attendance correction is handled.
+function DayModal({ dateStr, records, employees, isAdmin, user, onClose, onRefresh, getLeaveForDate, initialTab, year, month }) {
+  const navigate = useNavigate();
   const toast = useToast();
   const d = new Date(dateStr + 'T12:00:00');
   const [activeTab, setActiveTab] = useState(initialTab || 'all');
@@ -630,11 +627,13 @@ function DayModal({ dateStr, records, employees, isAdmin, user, onClose, onEditA
                     </div>
                     {isAdmin && (
                       <div className="flex gap-1.5 shrink-0">
-                        {/* Only allow Edit for real DB records — synthetic (leave) records
-                            have no attendance id; attempting PUT /attendance/undefined fails silently. */}
-                        {rec && !rec._synthetic && (
-                          <button className="btn btn-outline btn-sm text-xs py-1 px-2" onClick={() => onEditAtt(rec)}>Edit</button>
-                        )}
+                        {/* View Attendance → navigate to Reports pre-filtered to this employee + month.
+                            Available for any employee (with or without a record) so admins can add records too. */}
+                        <button
+                          className="btn btn-outline btn-sm text-xs py-1 px-2"
+                          onClick={() => navigate(`/root/reports?userId=${emp.id}&month=${month}&year=${year}`)}>
+                          View Attendance
+                        </button>
                         {!rec && dateStr <= todayStr() && (
                           <button className="btn btn-danger btn-sm text-xs py-1 px-2" onClick={() => setConfirmAbsent(emp)}>Absent</button>
                         )}
@@ -665,44 +664,3 @@ function DayModal({ dateStr, records, employees, isAdmin, user, onClose, onEditA
   );
 }
 
-// ── Edit Attendance Modal ─────────────────────────────────────────────────────
-function EditAttModal({ record: r, onClose, onRefresh }) {
-  const toast = useToast();
-  const [form, setForm] = useState({
-    check_in:   r.check_in  || '',
-    check_out:  r.check_out || '',
-    status:     r.status    || 'present',
-    work_hours: r.work_hours || '',
-  });
-
-  async function save() {
-    try {
-      await apiPut(`/attendance/${r.id}`, form);
-      toast('Attendance updated', 'success');
-      onRefresh();
-      onClose();
-    } catch (err) { toast(err.message, 'error'); }
-  }
-
-  return (
-    <Modal open onClose={onClose} title={`Edit Attendance — ${r.name}`} size="sm"
-      footer={<><button className="btn btn-outline" onClick={onClose}>Cancel</button><button className="btn btn-primary" onClick={save}>Save</button></>}>
-      {{
-        body: (
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className="form-label">Check In</label><input type="time" className="form-control" value={form.check_in} onChange={e => setForm(f => ({ ...f, check_in: e.target.value }))} /></div>
-              <div><label className="form-label">Check Out</label><input type="time" className="form-control" value={form.check_out} onChange={e => setForm(f => ({ ...f, check_out: e.target.value }))} /></div>
-            </div>
-            <div><label className="form-label">Status</label>
-              <select className="form-control" value={form.status} onChange={e => setForm(f => ({ ...f, status: e.target.value }))}>
-                {['present','absent','on_leave','half_day','wfh'].map(s => <option key={s} value={s}>{statusLabel(s)}</option>)}
-              </select>
-            </div>
-            <div><label className="form-label">Work Hours</label><input type="number" className="form-control" step="0.25" value={form.work_hours} onChange={e => setForm(f => ({ ...f, work_hours: e.target.value }))} /></div>
-          </div>
-        ),
-      }}
-    </Modal>
-  );
-}
