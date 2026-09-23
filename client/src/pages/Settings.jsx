@@ -774,69 +774,66 @@ function LeaveWorkflowPanel() {
   );
 }
 
-// ── 6. Attendance Maintenance ─────────────────────────────────────────────────
-function AttendanceMaintenancePanel() {
-  const toast = useToast();
-  const [running, setRunning] = useState(false);
-  const [result,  setResult]  = useState(null);
-  const [confirm, setConfirm] = useState(false);
-
-  async function runCleanup() {
-    setRunning(true); setResult(null);
-    try {
-      const data = await apiPost('/attendance/cleanup-orphaned', {});
-      setResult(data.removed);
-      toast(data.removed > 0 ? `Cleaned up ${data.removed} orphaned record${data.removed !== 1 ? 's' : ''}.` : 'No orphaned records found.', data.removed > 0 ? 'success' : 'info');
-    } catch (err) { toast(err.message, 'error'); }
-    finally { setRunning(false); }
-  }
-
-  return (
-    <PanelWrap group="Leave & Attendance" label="Attendance Maintenance" icon={Wrench} accentColor="#f59e0b">
-      <div className="max-w-xl space-y-5">
-        {/* Cleanup */}
-        <div className="border border-[#e7eefe] rounded-xl p-5 bg-white">
-          <div className="flex items-start gap-3 mb-4">
-            <div className="w-9 h-9 rounded-xl bg-rose-50 flex items-center justify-center flex-shrink-0">
-              <RefreshCw size={16} className="text-rose-500" />
-            </div>
-            <div>
-              <p className="font-bold text-sm text-[#151c27]">Orphaned Record Cleanup</p>
-              <p className="text-xs text-[#777587] mt-0.5">Remove attendance records marked On Leave / WFH / Half Day that no longer have a matching approved leave.</p>
-            </div>
-          </div>
-          {result !== null && (
-            <div className={`flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-lg mb-4 ${result > 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-[#f0f3ff] text-[#3525cd] border border-[#c7c4d8]'}`}>
-              <Check size={13} /> {result > 0 ? `${result} orphaned record${result !== 1 ? 's' : ''} removed.` : 'Attendance data is clean.'}
-            </div>
-          )}
-          <button onClick={() => setConfirm(true)} disabled={running}
-            className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-white disabled:opacity-60"
-            style={{ background: 'linear-gradient(135deg,#3525cd,#4f46e5)' }}>
-            {running ? <><span className="spinner w-3.5 h-3.5" /> Running…</> : <><RefreshCw size={14} /> Run Cleanup</>}
-          </button>
-          <ConfirmModal open={confirm} title="Run Attendance Cleanup"
-            message="This permanently deletes orphaned attendance records. Continue?"
-            confirmLabel="Yes, Run Cleanup" onConfirm={() => { setConfirm(false); runCleanup(); }} onCancel={() => setConfirm(false)} />
-        </div>
-
-        {/* Future placeholder */}
-        <div className="border border-dashed border-[#c7c4d8] rounded-xl p-5 opacity-50">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-xl bg-[#f0f3ff] flex items-center justify-center flex-shrink-0">
-              <Sparkles size={16} className="text-[#3525cd]" />
-            </div>
-            <div>
-              <p className="font-bold text-sm text-[#151c27]">Attendance Reprocessing</p>
-              <p className="text-xs text-[#777587] mt-0.5">Reprocess historical attendance records. Coming soon.</p>
-            </div>
-            <span className="ml-auto text-[0.6rem] font-bold px-2 py-0.5 rounded-full bg-[#f0f3ff] text-[#3525cd] border border-[#c7c4d8]">Soon</span>
-          </div>
-        </div>
-      </div>
-    </PanelWrap>
-  );
-}
+// ── 6. Attendance Maintenance (hidden — endpoint restricted to Root Admin; re-enable by uncommenting below + nav item + case) ──
+// function AttendanceMaintenancePanel() {
+//   const toast = useToast();
+//   const [running, setRunning] = useState(false);
+//   const [result,  setResult]  = useState(null);
+//   const [confirm, setConfirm] = useState(false);
+//
+//   async function runCleanup() {
+//     setRunning(true); setResult(null);
+//     try {
+//       const data = await apiPost('/attendance/cleanup-orphaned', {});
+//       setResult(data.removed);
+//       toast(data.removed > 0 ? `Cleaned up ${data.removed} orphaned record${data.removed !== 1 ? 's' : ''}.` : 'No orphaned records found.', data.removed > 0 ? 'success' : 'info');
+//     } catch (err) { toast(err.message, 'error'); }
+//     finally { setRunning(false); }
+//   }
+//
+//   return (
+//     <PanelWrap group="Leave & Attendance" label="Attendance Maintenance" icon={Wrench} accentColor="#f59e0b">
+//       <div className="max-w-xl space-y-5">
+//         <div className="border border-[#e7eefe] rounded-xl p-5 bg-white">
+//           <div className="flex items-start gap-3 mb-4">
+//             <div className="w-9 h-9 rounded-xl bg-rose-50 flex items-center justify-center flex-shrink-0">
+//               <RefreshCw size={16} className="text-rose-500" />
+//             </div>
+//             <div>
+//               <p className="font-bold text-sm text-[#151c27]">Orphaned Record Cleanup</p>
+//               <p className="text-xs text-[#777587] mt-0.5">Remove attendance records marked On Leave / WFH / Half Day that no longer have a matching approved leave.</p>
+//             </div>
+//           </div>
+//           {result !== null && (
+//             <div className={`flex items-center gap-2 text-xs font-semibold px-3 py-2 rounded-lg mb-4 ${result > 0 ? 'bg-emerald-50 text-emerald-700 border border-emerald-200' : 'bg-[#f0f3ff] text-[#3525cd] border border-[#c7c4d8]'}`}>
+//               <Check size={13} /> {result > 0 ? `${result} orphaned record${result !== 1 ? 's' : ''} removed.` : 'Attendance data is clean.'}
+//             </div>
+//           )}
+//           <button onClick={() => setConfirm(true)} disabled={running}
+//             className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-bold text-white disabled:opacity-60"
+//             style={{ background: 'linear-gradient(135deg,#3525cd,#4f46e5)' }}>
+//             {running ? <><span className="spinner w-3.5 h-3.5" /> Running…</> : <><RefreshCw size={14} /> Run Cleanup</>}
+//           </button>
+//           <ConfirmModal open={confirm} title="Run Attendance Cleanup"
+//             message="This permanently deletes orphaned attendance records. Continue?"
+//             confirmLabel="Yes, Run Cleanup" onConfirm={() => { setConfirm(false); runCleanup(); }} onCancel={() => setConfirm(false)} />
+//         </div>
+//         <div className="border border-dashed border-[#c7c4d8] rounded-xl p-5 opacity-50">
+//           <div className="flex items-center gap-3">
+//             <div className="w-9 h-9 rounded-xl bg-[#f0f3ff] flex items-center justify-center flex-shrink-0">
+//               <Sparkles size={16} className="text-[#3525cd]" />
+//             </div>
+//             <div>
+//               <p className="font-bold text-sm text-[#151c27]">Attendance Reprocessing</p>
+//               <p className="text-xs text-[#777587] mt-0.5">Reprocess historical attendance records. Coming soon.</p>
+//             </div>
+//             <span className="ml-auto text-[0.6rem] font-bold px-2 py-0.5 rounded-full bg-[#f0f3ff] text-[#3525cd] border border-[#c7c4d8]">Soon</span>
+//           </div>
+//         </div>
+//       </div>
+//     </PanelWrap>
+//   );
+// }
 
 // ── 7. Push Notifications ─────────────────────────────────────────────────────
 function PushNotificationsPanel({ userId }) {
@@ -1272,7 +1269,7 @@ const NAV_GROUPS = [
     id: 'leave', label: 'Leave & Attendance', icon: GitBranch, color: '#10b981',
     items: [
       { id: 'leave_workflow',  label: 'Leave Workflow',          icon: Settings2, roles: ['admin','root_admin'] },
-      { id: 'att_maintenance', label: 'Attendance Maintenance',  icon: Wrench,    roles: ['admin','root_admin'] },
+      // { id: 'att_maintenance', label: 'Attendance Maintenance',  icon: Wrench,    roles: ['root_admin'] },  // hidden — backend: POST /attendance/cleanup-orphaned (rootAdminOnly)
     ],
   },
   {
@@ -1347,7 +1344,7 @@ export default function Settings() {
       case 'status_legend':    return <StatusLegendPanel />;
       case 'email_automation': return <EmailAutomationPanel schedule={schedule} />;
       case 'leave_workflow':   return <LeaveWorkflowPanel />;
-      case 'att_maintenance':  return <AttendanceMaintenancePanel />;
+      // case 'att_maintenance':  return <AttendanceMaintenancePanel />;  // hidden — see commented component above
       case 'push':             return <PushNotificationsPanel userId={user?.id} />;
       case 'email_recipients': return <EmailRecipientsPanel />;
       case 'root_admins':      return <RootAdminsPanel />;

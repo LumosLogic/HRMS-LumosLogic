@@ -2,7 +2,7 @@ const express = require('express');
 const router  = express.Router();
 const { db } = require('../../config/db');
 const { pool } = require('../../config/db-pg-adapter');
-const { auth, isAdminRole } = require('../../middleware/auth');
+const { auth, isAdminRole, rootAdminOnly } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { localDateStr, localTimeStr, flat, orgId, toMinutes, getSettings, isWorkingDay } = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
@@ -473,7 +473,7 @@ router.delete('/late-early/:id', auth, hasPermission('attendance', 'edit'), with
 
 // ─── Attendance: Cleanup Orphaned Leave Records ───────────────────────────────
 // Clean up attendance records with leave-based status on weekends or with no approved leave backing them
-router.post('/cleanup-orphaned', auth, async (req, res) => {
+router.post('/cleanup-orphaned', auth, rootAdminOnly, async (req, res) => {
   try {
     const oid = orgId(req);
 
