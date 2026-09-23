@@ -144,6 +144,20 @@ router.post('/', auth, hasPermission('employees', 'create'), async (req, res) =>
     // user INSERT + department assignments must be atomic.
     // A user with no department assignments is a valid partial state we must prevent.
     const department_ids = req.body.department_ids;
+
+    // Resolve the display department name from department_ids[0] so users.department
+    // stays in sync with user_departments — same logic as the EDIT handler (M-12).
+    let resolvedDeptName = department || 'General';
+    if (Array.isArray(department_ids) && department_ids.length > 0) {
+      try {
+        const dRes = await pool.query(
+          'SELECT name FROM departments WHERE id = $1 AND organization_id = $2',
+          [parseInt(department_ids[0]), orgId(req)]
+        );
+        if (dRes.rows[0]?.name) resolvedDeptName = dRes.rows[0].name;
+      } catch (_) {}
+    }
+
     const client = await pool.connect();
     let newUser;
     try {
@@ -158,7 +172,7 @@ router.post('/', auth, hasPermission('employees', 'create'), async (req, res) =>
             weekly_off_day, work_hours_per_day, designation_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
          RETURNING id, name, email, role, department, position, avatar_color, date_of_birth`,
-        [name, email.toLowerCase(), hashed, role||'employee', department||'General',
+        [name, email.toLowerCase(), hashed, role||'employee', resolvedDeptName,
          position||'Staff', avatar_color||'#4F46E5', date_of_birth||null, orgId(req),
          device_enrollment_id||null, resolvedBranchId||null, grade||null, division||null,
          sub_division||null, salutation||null, middle_name||null, surname||null,
@@ -200,7 +214,7 @@ router.post('/', auth, hasPermission('employees', 'create'), async (req, res) =>
 
     // Fire-and-forget side effects after COMMIT
     getOrgContext(orgId(req)).then(({ orgName, orgEmail }) => {
-      sendMail({ to: email, subject: `Welcome to ${orgName || 'the Team'} — Your Account Details`, html: welcomeEmployeeHtml({ name, email, department: department||'General', position: position||'Staff' }, password, orgName, orgEmail) });
+      sendMail({ to: email, subject: `Welcome to ${orgName || 'the Team'} — Your Account Details`, html: welcomeEmployeeHtml({ name, email, department: resolvedDeptName, position: position||'Staff' }, password, orgName, orgEmail) });
     });
     db.from('platform_activity').insert({ event_type: 'member_added', organization_id: orgId(req), description: `Member added: ${name} (${email})`, metadata: { name, email, role: role||'employee', org_id: orgId(req) } }).then(() => {});
 
