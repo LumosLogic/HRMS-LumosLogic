@@ -5,7 +5,7 @@ const { auth, adminOnly } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { getOrgPolicy } = require('../../utils/orgPolicy');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, getFilterState, getBranchUserSQLFilter } = require('../../utils/branchFilter');
 
 function toCSV(rows, cols) {
   const header = cols.map(c => c.label).join(',');
@@ -287,10 +287,19 @@ router.get('/attendance', auth, withBranchContext, async (req, res) => {
 });
 
 // GET /api/reports/leaves?year=&month=&format=csv
-router.get('/leaves', auth, async (req, res) => {
+router.get('/leaves', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { year, month, format, status } = req.query;
+
+    // Branch scope: leaves don't have branch_id directly — filter via employee IDs
+    const empIds = await resolveEmployeeIds(req.branchContext, oId);
+    if (empIds !== null && empIds.length === 0) {
+      return format === 'csv'
+        ? res.setHeader('Content-Type', 'text/csv').send('name,department,leave_type,start_date,end_date,status\n')
+        : res.json([]);
+    }
+
     let q = db.from('leaves')
       .select('*, users!leaves_user_id_fkey(name, department), approver:users!leaves_approved_by_fkey(name)')
       .eq('organization_id', oId)
@@ -302,6 +311,7 @@ router.get('/leaves', auth, async (req, res) => {
       q = q.gte('start_date', `${year}-01-01`).lte('start_date', `${year}-12-31`);
     }
     if (status) q = q.eq('status', status);
+    if (empIds !== null) q = q.in('user_id', empIds);
     const { data, error } = await q;
     if (error) throw error;
 
@@ -337,18 +347,27 @@ router.get('/leaves', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// GET /api/reports/headcount — summary stats (role-scoped)
-router.get('/headcount', auth, async (req, res) => {
+// GET /api/reports/headcount — summary stats (role-scoped, branch-scoped)
+router.get('/headcount', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     // root_admin sees HR admins + employees; HR admin sees employees only
     const roleFilter = req.user.role === 'root_admin' ? ['admin', 'employee'] : ['employee'];
+
+    // Branch scope: resolve accessible employee IDs for the selected branch
+    const empIds = await resolveEmployeeIds(req.branchContext, oId);
+    if (empIds !== null && empIds.length === 0) {
+      return res.json({ total: 0, active: 0, byDepartment: {} });
+    }
+
     // BUG_117/BUG_068: exclude inactive/resigned/terminated from headcount stats
-    const { data: users } = await db.from('users')
+    let q = db.from('users')
       .select('id, role, employee_status, department, date_of_joining, created_at')
       .eq('organization_id', oId)
       .in('role', roleFilter)
       .not('employee_status', 'in', ['inactive', 'resigned', 'terminated']);
+    if (empIds !== null) q = q.in('id', empIds);
+    const { data: users } = await q;
     const total   = users?.length || 0;
     const active  = users?.filter(u => u.employee_status === 'active' || !u.employee_status).length || 0;
     const byDept  = {};
@@ -363,10 +382,19 @@ router.get('/headcount', auth, async (req, res) => {
 // GET /api/reports/employees?format=csv
 // Always scoped to the caller's organization_id — root_admin is per-org, not platform-wide.
 // Uses adminOnly (not hasPermission) to avoid RBAC table dependency causing 500s.
-router.get('/employees', auth, adminOnly, async (req, res) => {
+router.get('/employees', auth, adminOnly, withBranchContext, async (req, res) => {
   try {
     const oId    = req.user.organization_id;
     const { format } = req.query;
+
+    // Branch scope — filter employees by their users.branch_id
+    const state = getFilterState(req.branchContext);
+    if (state.type === 'none') {
+      return format === 'csv'
+        ? res.setHeader('Content-Type', 'text/csv').send('name,email,department,position,type,status,joining_date\n')
+        : res.json([]);
+    }
+    const bf = getBranchUserSQLFilter(state, 1, 'u'); // $1 = oId already bound
 
     const dateExpr = await getJoiningDateExpr();
 
@@ -385,8 +413,9 @@ router.get('/employees', auth, adminOnly, async (req, res) => {
       FROM users u
       WHERE u.role = 'employee'
         AND u.organization_id = $1
+        ${bf.clause}
       ORDER BY u.name ASC
-    `, [oId]);
+    `, [oId, ...bf.params]);
 
     const rows = (result.rows || []).map(r => ({
       ...r,

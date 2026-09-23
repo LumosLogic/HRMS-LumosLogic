@@ -1,8 +1,17 @@
 // @refresh reset
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useQueryClient } from '@tanstack/react-query';
+import { InactivityWarningModal } from '@/components/InactivityWarningModal';
 
 export const AuthContext = createContext(null);
+
+// 30 minutes of genuine user inactivity before warning appears.
+// 2 minute warning countdown before automatic logout.
+// IMPORTANT: only DOM interaction events reset this timer — never API calls or
+// background polling, which would keep an idle user logged in indefinitely.
+const INACTIVITY_MS = 30 * 60 * 1000;
+const WARNING_SECS  = 2 * 60;
 
 function isTokenExpired(token) {
   if (!token) return true;
@@ -39,6 +48,18 @@ export function AuthProvider({ children }) {
   const [token,       setToken]       = useState(initial.token);
   const [permissions, setPermissions] = useState(loadStoredPermissions);
 
+  // ── Inactivity warning UI state ───────────────────────────────────────────
+  const [warnVisible, setWarnVisible] = useState(false);
+  const [warnSecs,    setWarnSecs]    = useState(WARNING_SECS);
+
+  // Timer refs — mutations here never trigger re-renders
+  const idleTimerRef = useRef(null);
+  const warnTimerRef = useRef(null);
+  const countdownRef = useRef(null);
+  // Holds the current resetIdleTimer function so stayLoggedIn can call it
+  // without being re-created every render
+  const resetRef     = useRef(null);
+
   // Fetch the user's effective RBAC permissions whenever the token changes.
   // Results are stored in localStorage so they survive page refreshes.
   useEffect(() => {
@@ -69,6 +90,13 @@ export function AuthProvider({ children }) {
   }, []);
 
   const logout = useCallback(() => {
+    // Clear inactivity timers before wiping auth state so no orphaned timer
+    // can fire logout() again after the user has already been redirected.
+    clearTimeout(idleTimerRef.current);
+    clearTimeout(warnTimerRef.current);
+    clearInterval(countdownRef.current);
+    setWarnVisible(false);
+
     setToken(null);
     setUser(null);
     setPermissions([]);
@@ -77,6 +105,63 @@ export function AuthProvider({ children }) {
     localStorage.removeItem('lt_permissions');
     queryClient.clear();
   }, [queryClient]);
+
+  // ── Inactivity timer ──────────────────────────────────────────────────────
+  // Only genuine DOM interactions (mousemove, mousedown, keydown, touchstart,
+  // scroll) reset the timer. API calls, React Query refetches, setInterval
+  // clock ticks, focus/blur, and background polling do NOT reset it.
+  useEffect(() => {
+    if (!token) {
+      // Ensure everything is cleaned up when the user is not authenticated
+      clearTimeout(idleTimerRef.current);
+      clearTimeout(warnTimerRef.current);
+      clearInterval(countdownRef.current);
+      setWarnVisible(false);
+      return;
+    }
+
+    function triggerWarning() {
+      setWarnVisible(true);
+      setWarnSecs(WARNING_SECS);
+
+      // Visual countdown — clamped at 0, never goes negative
+      countdownRef.current = setInterval(() => {
+        setWarnSecs(s => Math.max(0, s - 1));
+      }, 1000);
+
+      // Actual logout fires after the full warning period elapses
+      warnTimerRef.current = setTimeout(() => logout(), WARNING_SECS * 1000);
+    }
+
+    function resetIdleTimer() {
+      clearTimeout(idleTimerRef.current);
+      clearTimeout(warnTimerRef.current);
+      clearInterval(countdownRef.current);
+      setWarnVisible(false);
+      idleTimerRef.current = setTimeout(triggerWarning, INACTIVITY_MS);
+    }
+
+    // Expose to stayLoggedIn without recreating that callback on each render
+    resetRef.current = resetIdleTimer;
+
+    const EVENTS = ['mousemove', 'mousedown', 'keydown', 'touchstart', 'scroll'];
+    EVENTS.forEach(ev => document.addEventListener(ev, resetIdleTimer, { passive: true }));
+
+    // Kick off the initial timer on login / page load
+    resetIdleTimer();
+
+    return () => {
+      EVENTS.forEach(ev => document.removeEventListener(ev, resetIdleTimer));
+      clearTimeout(idleTimerRef.current);
+      clearTimeout(warnTimerRef.current);
+      clearInterval(countdownRef.current);
+    };
+  }, [token, logout]);
+
+  // Stable callback — always delegates to the latest resetIdleTimer via ref
+  const stayLoggedIn = useCallback(() => {
+    resetRef.current?.();
+  }, []);
 
   // Auto-logout when any API call returns 401 (token expired mid-session)
   useEffect(() => {
@@ -173,6 +258,16 @@ export function AuthProvider({ children }) {
       can: hasPermission,
     }}>
       {children}
+
+      {/* Inactivity warning — rendered once via portal for all three roles.
+          Portal to document.body ensures it floats above the sidebar (z-500). */}
+      {warnVisible && createPortal(
+        <InactivityWarningModal
+          secondsLeft={warnSecs}
+          onStayLoggedIn={stayLoggedIn}
+        />,
+        document.body
+      )}
     </AuthContext.Provider>
   );
 }
