@@ -75,8 +75,8 @@ export function BranchSelector() {
 
       {open && (
         <div className="absolute left-3 right-3 top-full mt-1 bg-white border border-[#c7c4d8] rounded-xl shadow-lg z-50 py-1 max-h-56 overflow-y-auto">
-          {/* No "All Branches" option — a specific branch is always the working context */}
-          {accessibleBranches.map(branch => {
+              {/* Only active branches are valid working contexts */}
+          {accessibleBranches.filter(b => b.is_active !== false).map(branch => {
             // Coerce both sides: BIGINT from PostgreSQL comes as string via node-postgres
             const isActive = Number(branch.id) === selectedBranchId;
             return (
@@ -102,8 +102,8 @@ export function BranchSelector() {
             );
           })}
 
-          {accessibleBranches.length === 0 && (
-            <p className="px-3 py-2 text-xs text-[#777587] italic">No branches assigned</p>
+          {accessibleBranches.filter(b => b.is_active !== false).length === 0 && (
+            <p className="px-3 py-2 text-xs text-[#777587] italic">No active branches</p>
           )}
         </div>
       )}

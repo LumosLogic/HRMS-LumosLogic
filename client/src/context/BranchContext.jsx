@@ -76,18 +76,44 @@ export function BranchProvider({ children }) {
         setHasAllBranches(!!data.hasAllBranches);
         setIsRootAdmin(!!data.isRootAdmin);
 
-        // Validate the stored selection is still accessible; clear it if not.
+        // Validate the stored selection is still accessible and active; clear/switch if not.
         // Use Number() coercion on both sides: PostgreSQL BIGINT/BIGSERIAL IDs
         // are returned as strings by node-postgres, so strict === would always
         // fail against the stored numeric ID and clear the branch on every refresh.
         const stored = localStorage.getItem(STORAGE_KEY);
+        const activeBranches = branches.filter(b => b.is_active !== false);
         if (stored) {
-          const storedId = Number(stored);
-          const stillAccessible = branches.some(b => Number(b.id) === storedId);
-          if (!stillAccessible) {
-            localStorage.removeItem(STORAGE_KEY);
-            setSelectedBranchIdState(null);
+          const storedId     = Number(stored);
+          const storedBranch = branches.find(b => Number(b.id) === storedId);
+          if (!storedBranch) {
+            // Branch no longer accessible — switch to first active
+            const firstActive = activeBranches[0];
+            if (firstActive) {
+              const numId = Number(firstActive.id);
+              setSelectedBranchIdState(numId);
+              localStorage.setItem(STORAGE_KEY, String(numId));
+            } else {
+              localStorage.removeItem(STORAGE_KEY);
+              setSelectedBranchIdState(null);
+            }
+          } else if (storedBranch.is_active === false) {
+            // Branch was deactivated — switch to first active
+            const firstActive = activeBranches[0];
+            if (firstActive) {
+              const numId = Number(firstActive.id);
+              setSelectedBranchIdState(numId);
+              localStorage.setItem(STORAGE_KEY, String(numId));
+            } else {
+              localStorage.removeItem(STORAGE_KEY);
+              setSelectedBranchIdState(null);
+            }
           }
+        } else if (activeBranches.length > 0) {
+          // No stored selection — auto-select first active branch so the sidebar
+          // never shows "Select Branch" with combined/no-branch data.
+          const numId = Number(activeBranches[0].id);
+          setSelectedBranchIdState(numId);
+          localStorage.setItem(STORAGE_KEY, String(numId));
         }
       })
       .catch(() => {
