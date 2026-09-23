@@ -221,51 +221,51 @@ function HRAssignModal({ open, onClose, branch }) {
 
 function BranchCard({ branch, onSelect, onAssignHR, disabled }) {
   return (
-    <div className={`relative bg-white rounded-2xl border shadow-sm p-6 transition-all
+    <div className={`relative bg-white rounded-xl border shadow-sm p-4 transition-all
       ${disabled
-        ? 'border-[#c7c4d8] opacity-55 cursor-not-allowed'
-        : 'border-[#c7c4d8] hover:border-[#3525cd]/50 hover:shadow-md cursor-pointer group'
+        ? 'border-[#c7c4d8] opacity-55'
+        : 'border-[#c7c4d8] hover:border-[#3525cd]/50 hover:shadow-md group'
       }`}
     >
       {/* HR assign button — top-right corner */}
       <button
         onClick={e => { e.stopPropagation(); onAssignHR(branch); }}
-        className="absolute top-3 right-3 p-1.5 rounded-lg text-[#777587] hover:bg-[#f0f3ff] hover:text-[#3525cd] transition-colors"
+        className="absolute top-2.5 right-2.5 p-1 rounded-md text-[#aaa] hover:bg-[#f0f3ff] hover:text-[#3525cd] transition-colors"
         title="Assign HR Manager"
       >
-        <UserCheck size={14} />
+        <UserCheck size={12} />
       </button>
 
-      <div className={`w-11 h-11 rounded-xl flex items-center justify-center mb-4 transition-colors
+      <div className={`w-9 h-9 rounded-lg flex items-center justify-center mb-3 transition-colors
         ${disabled ? 'bg-[#f5f5f5]' : 'bg-[#f0f3ff] group-hover:bg-[#3525cd]/10'}`}>
-        <Building2 size={20} className={disabled ? 'text-[#aaa]' : 'text-[#3525cd]'} />
+        <Building2 size={16} className={disabled ? 'text-[#aaa]' : 'text-[#3525cd]'} />
       </div>
 
-      <h3 className="text-base font-black text-[#151c27] mb-1 leading-tight pr-6">{branch.name}</h3>
+      <h3 className="text-sm font-black text-[#151c27] mb-0.5 leading-tight pr-5 truncate">{branch.name}</h3>
 
       {branch.code && (
-        <p className="text-[0.7rem] font-semibold text-[#3525cd] uppercase tracking-wider mb-1">{branch.code}</p>
+        <p className="text-[0.6rem] font-bold text-[#3525cd] uppercase tracking-wider mb-1">{branch.code}</p>
       )}
 
       {(branch.location || branch.address) ? (
-        <div className="flex items-start gap-1.5 text-[#777587] text-xs mb-4">
-          <MapPin size={11} className="flex-shrink-0 mt-0.5" />
-          <span className="line-clamp-2">{branch.location || branch.address}</span>
+        <div className="flex items-start gap-1 text-[#777587] text-[0.65rem] mb-3">
+          <MapPin size={9} className="flex-shrink-0 mt-0.5" />
+          <span className="line-clamp-1">{branch.location || branch.address}</span>
         </div>
       ) : (
-        <div className="mb-4" />
+        <div className="mb-3" />
       )}
 
       {disabled ? (
-        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-50 text-slate-500 border border-slate-200">
-          <span className="w-1.5 h-1.5 rounded-full bg-slate-400 inline-block" /> Inactive
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[0.6rem] font-semibold bg-slate-50 text-slate-500 border border-slate-200">
+          <span className="w-1 h-1 rounded-full bg-slate-400 inline-block" /> Inactive
         </span>
       ) : (
         <button
           onClick={() => onSelect(branch.id)}
-          className="flex items-center gap-1.5 text-[#3525cd] text-xs font-bold group-hover:gap-2.5 transition-all"
+          className="flex items-center gap-1 text-[#3525cd] text-[0.7rem] font-bold group-hover:gap-2 transition-all"
         >
-          Select <ArrowRight size={13} />
+          Select <ArrowRight size={11} />
         </button>
       )}
     </div>
@@ -390,88 +390,95 @@ export default function BranchSelect() {
     );
   }
 
-  // ── Active + Inactive branch grid ─────────────────────────────────────────
-  const gridClass = (count) =>
-    count === 1 ? 'grid-cols-1 max-w-xs' :
-    count === 2 ? 'grid-cols-1 sm:grid-cols-2' :
-    'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
-
+  // ── Active + Inactive branch grid — full width, scrollable ──────────────
   return (
-    <div className="min-h-screen bg-[#f9f9ff] flex flex-col items-center px-6 py-10">
-      {/* Header */}
-      <div className="w-full max-w-3xl mb-8">
-        <div className="flex items-center justify-between mb-8">
+    // h-screen + overflow-y-auto creates its own scroll context, bypassing
+    // the global body { overflow: hidden } set in index.css
+    <div className="h-screen overflow-y-auto bg-[#f9f9ff]">
+
+      {/* ── Sticky top bar ── */}
+      <div className="sticky top-0 z-20 bg-white border-b border-[#e7eefe] shadow-sm">
+        <div className="flex items-center justify-between px-6 py-3">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-[#3525cd] flex items-center justify-center shadow-md shadow-[#3525cd]/20 flex-shrink-0">
-              <Building2 size={18} className="text-white" />
+            <div className="w-8 h-8 rounded-lg bg-[#3525cd] flex items-center justify-center shadow-sm flex-shrink-0">
+              <Building2 size={15} className="text-white" />
             </div>
             <div>
-              <h2 className="text-sm font-black text-[#151c27] leading-tight">{orgName}</h2>
-              <p className="text-[0.65rem] text-[#777587]">Root Admin Console</p>
+              <p className="text-sm font-black text-[#151c27] leading-tight">{orgName}</p>
+              <p className="text-[0.6rem] text-[#777587] leading-none mt-0.5">Root Admin Console</p>
             </div>
           </div>
 
-          <button
-            onClick={() => setAddBranchOpen(true)}
-            className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-xl bg-[#3525cd] text-white hover:bg-[#4f46e5] transition-colors"
-          >
-            <Plus size={13} /> Add Branch
-          </button>
-        </div>
-
-        <div className="text-center mb-2">
-          <h1 className="text-2xl font-black text-[#151c27] tracking-tight mb-1">Select a Branch</h1>
-          <p className="text-[#777587] text-sm">Choose the branch workspace to enter. You can switch branches anytime from the sidebar.</p>
-        </div>
-
-        {/* Summary counts */}
-        <div className="flex items-center justify-center gap-4 mt-3">
-          <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full">
-            {activeBranches.length} Active
-          </span>
-          {inactiveBranches.length > 0 && (
-            <span className="text-xs font-semibold text-slate-500 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-full">
-              {inactiveBranches.length} Inactive
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2.5 py-1 rounded-full">
+              {activeBranches.length} Active
             </span>
-          )}
+            {inactiveBranches.length > 0 && (
+              <span className="text-xs font-semibold text-slate-500 bg-slate-50 border border-slate-200 px-2.5 py-1 rounded-full">
+                {inactiveBranches.length} Inactive
+              </span>
+            )}
+            <button
+              onClick={() => setAddBranchOpen(true)}
+              className="flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg bg-[#3525cd] text-white hover:bg-[#4f46e5] transition-colors"
+            >
+              <Plus size={13} /> Add Branch
+            </button>
+          </div>
         </div>
       </div>
 
-      {/* Active branches */}
-      {activeBranches.length > 0 && (
-        <div className="w-full max-w-3xl mb-8">
-          <p className="text-xs font-black uppercase tracking-wider text-[#777587] mb-3">Active Branches</p>
-          <div className={`grid gap-4 ${gridClass(activeBranches.length)}`}>
-            {activeBranches.map(branch => (
-              <BranchCard
-                key={branch.id}
-                branch={branch}
-                onSelect={handleSelect}
-                onAssignHR={setHrBranch}
-                disabled={false}
-              />
-            ))}
-          </div>
-        </div>
-      )}
+      {/* ── Page content — full width ── */}
+      <div className="px-6 py-6">
 
-      {/* Inactive branches */}
-      {inactiveBranches.length > 0 && (
-        <div className="w-full max-w-3xl">
-          <p className="text-xs font-black uppercase tracking-wider text-[#777587] mb-3">Inactive Branches</p>
-          <div className={`grid gap-4 ${gridClass(inactiveBranches.length)}`}>
-            {inactiveBranches.map(branch => (
-              <BranchCard
-                key={branch.id}
-                branch={branch}
-                onSelect={handleSelect}
-                onAssignHR={setHrBranch}
-                disabled={true}
-              />
-            ))}
-          </div>
+        {/* Title row */}
+        <div className="mb-6">
+          <h1 className="text-xl font-black text-[#151c27] tracking-tight">Select a Branch</h1>
+          <p className="text-xs text-[#777587] mt-0.5">Choose a branch workspace to enter. Switch anytime from the sidebar.</p>
         </div>
-      )}
+
+        {/* Active branches */}
+        {activeBranches.length > 0 && (
+          <div className="mb-8">
+            <p className="text-[0.7rem] font-black uppercase tracking-widest text-[#777587] mb-3 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" />
+              Active Branches
+            </p>
+            <div className="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+              {activeBranches.map(branch => (
+                <BranchCard
+                  key={branch.id}
+                  branch={branch}
+                  onSelect={handleSelect}
+                  onAssignHR={setHrBranch}
+                  disabled={false}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Inactive branches */}
+        {inactiveBranches.length > 0 && (
+          <div>
+            <p className="text-[0.7rem] font-black uppercase tracking-widest text-[#777587] mb-3 flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-slate-400 inline-block" />
+              Inactive Branches
+            </p>
+            <div className="grid gap-4 grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
+              {inactiveBranches.map(branch => (
+                <BranchCard
+                  key={branch.id}
+                  branch={branch}
+                  onSelect={handleSelect}
+                  onAssignHR={setHrBranch}
+                  disabled={true}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
 
       {addBranchOpen && (
         <AddBranchModal open onClose={() => setAddBranchOpen(false)} />

@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Server, Copy, Info, RefreshCw, CheckCircle2,
-  XCircle, Clock, Play, Calendar, Save, ChevronDown,
+  XCircle, Clock, Play, Calendar, Save, ChevronDown, AlertTriangle, Building2,
 } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPut, apiPost } from '@/lib/api';
@@ -58,7 +58,7 @@ function StatusBadge({ status }) {
 export default function BiometricSettings() {
   const toast = useToast();
   const qc    = useQueryClient();
-  const { selectedBranchId } = useBranch();
+  const { selectedBranchId, selectedBranch } = useBranch();
 
   // ── ADMS URL ─────────────────────────────────────────────────────────────────
   const { data: admsData, isLoading: admsLoading } = useQuery({
@@ -152,6 +152,17 @@ export default function BiometricSettings() {
     onError: (err) => toast(err.message, 'error'),
   });
 
+  // ── Reset stuck jobs ──────────────────────────────────────────────────────────
+  const resetStuckMut = useMutation({
+    mutationFn: () => apiPost('/biometric/auto-sync/reset-stuck', {}),
+    onSuccess: (data) => {
+      toast(`${data.reset} stuck job(s) reset — future syncs will now proceed.`, 'success');
+      qc.invalidateQueries({ queryKey: ['biometric-auto-sync-history'] });
+      qc.invalidateQueries({ queryKey: ['biometric-auto-sync-config'] });
+    },
+    onError: (err) => toast(err.message, 'error'),
+  });
+
   function setField(key, val) {
     setForm(f => ({ ...f, [key]: val }));
     setDirty(true);
@@ -159,6 +170,12 @@ export default function BiometricSettings() {
 
   const loading  = admsLoading || cfgLoading;
   const latestJob = history[0];
+
+  // Detect jobs stuck in 'running' for >2 hours (blocking future auto-syncs)
+  const twoHoursAgo = Date.now() - 2 * 60 * 60 * 1000;
+  const stuckJobs = history.filter(
+    r => r.status === 'running' && new Date(r.created_at).getTime() < twoHoursAgo
+  );
 
   // ── Render ────────────────────────────────────────────────────────────────────
   return (
@@ -168,7 +185,14 @@ export default function BiometricSettings() {
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
           <h1 className="page-title">Biometric Settings</h1>
-          <p className="page-subtitle">ZKTeco ADMS configuration and automatic biometric sync schedule</p>
+          <div className="flex items-center gap-2 mt-0.5">
+            <p className="page-subtitle">ZKTeco ADMS configuration and automatic biometric sync schedule</p>
+            {selectedBranch && (
+              <span className="inline-flex items-center gap-1 text-[0.68rem] font-bold bg-[#f0f3ff] text-[#3525cd] border border-[#3525cd]/20 px-2 py-0.5 rounded-full">
+                <Building2 size={10} /> {selectedBranch.name}
+              </span>
+            )}
+          </div>
         </div>
         {form && (
           <button
@@ -181,6 +205,30 @@ export default function BiometricSettings() {
           </button>
         )}
       </div>
+
+      {/* ── Stuck jobs warning ── */}
+      {stuckJobs.length > 0 && (
+        <div className="flex items-start gap-3 p-4 rounded-xl bg-amber-50 border border-amber-200">
+          <AlertTriangle size={16} className="text-amber-600 flex-shrink-0 mt-0.5" />
+          <div className="flex-1 min-w-0">
+            <p className="text-sm font-bold text-amber-800">
+              {stuckJobs.length} sync job{stuckJobs.length > 1 ? 's' : ''} stuck in "Running" state
+            </p>
+            <p className="text-xs text-amber-700 mt-0.5">
+              {stuckJobs.map(j => j.device_name || j.serial_number).join(', ')} — started {new Date(stuckJobs[stuckJobs.length - 1].created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })}. These block future auto-syncs for the affected device(s).
+            </p>
+          </div>
+          <button
+            onClick={() => resetStuckMut.mutate()}
+            disabled={resetStuckMut.isPending}
+            className="flex-shrink-0 flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg bg-amber-600 text-white hover:bg-amber-700 transition-colors disabled:opacity-50"
+          >
+            {resetStuckMut.isPending
+              ? <><RefreshCw size={11} className="animate-spin" />Resetting…</>
+              : 'Reset Stuck Jobs'}
+          </button>
+        </div>
+      )}
 
       {loading ? (
         <div className="loading"><div className="spinner" />Loading…</div>

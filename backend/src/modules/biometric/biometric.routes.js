@@ -1169,25 +1169,56 @@ router.put('/auto-sync/config', auth, adminOnly, async (req, res) => {
 });
 
 // ─── GET /api/biometric/auto-sync/history ─────────────────────────────────────
-// Returns auto-triggered historical sync jobs (same table as manual sync, filtered).
-router.get('/auto-sync/history', auth, adminOnly, async (req, res) => {
+// Returns auto-triggered historical sync jobs filtered by selected branch (via X-Branch-Id).
+router.get('/auto-sync/history', auth, adminOnly, withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
-    const limit = Math.min(50, parseInt(req.query.limit) || 20);
+    const limit = Math.min(100, parseInt(req.query.limit) || 20);
+
+    const params = [orgId, limit];
+    let branchWhere = '';
+
+    const selectedBranchId = req.branchContext?.selectedBranchId;
+    if (selectedBranchId) {
+      branchWhere = `AND d.branch_id = $3`;
+      params.push(selectedBranchId);
+    }
+
     const result = await pool.query(
       `SELECT j.id, j.serial_number, j.from_date, j.to_date,
               j.status, j.created_at, j.completed_at,
               j.records_received, j.records_in_range,
               j.records_inserted, j.records_duplicate, j.records_ignored,
-              j.error, d.device_name
+              j.error, d.device_name, d.branch_id
        FROM biometric_historical_sync_jobs j
        LEFT JOIN biometric_devices d ON d.id = j.device_id
-       WHERE j.org_id = $1 AND j.auto_triggered = true
+       WHERE j.org_id = $1 AND j.auto_triggered = true ${branchWhere}
        ORDER BY j.created_at DESC
        LIMIT $2`,
-      [orgId, limit]
+      params
     );
     res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── POST /api/biometric/auto-sync/reset-stuck ────────────────────────────────
+// Marks jobs stuck in 'running' state for >2 hours as 'failed'.
+// Safe: does NOT touch the scheduler, config, or any active in-memory jobs.
+router.post('/auto-sync/reset-stuck', auth, adminOnly, async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+    const result = await pool.query(
+      `UPDATE biometric_historical_sync_jobs
+       SET status = 'failed',
+           completed_at = NOW(),
+           error = 'Reset by admin — job was stuck in running state'
+       WHERE org_id = $1
+         AND status = 'running'
+         AND created_at < NOW() - INTERVAL '2 hours'
+       RETURNING id, serial_number, device_id`,
+      [orgId]
+    );
+    res.json({ ok: true, reset: result.rows.length, jobs: result.rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
