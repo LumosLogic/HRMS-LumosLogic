@@ -1,5 +1,5 @@
 // @refresh reset
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
 import { apiGet } from '@/lib/api';
 import { useAuth } from './AuthContext';
 import { useFeature, FeatureFlagsLoadedContext } from './FeatureFlagContext';
@@ -28,9 +28,32 @@ export function BranchProvider({ children }) {
     return stored ? Number(stored) : null;
   });
 
-  // Fetch accessible branches whenever auth or feature flag changes.
-  // Only fetch for admin / root_admin — employees don't need the branch selector.
-  // Skip entirely when branches feature is OFF for this org.
+  // ── Pre-fetch ref (Issue 5: startup parallelization) ────────────────────────
+  // Holds the raw /branches/my-access response fetched early (before feature
+  // flags resolve). The main effect below uses this cached result instead of
+  // starting a second sequential request, reducing startup latency for
+  // branches-enabled organisations by one serial round-trip.
+  const _prefetchRef = useRef(null);
+
+  // ── Early branch pre-fetch ───────────────────────────────────────────────────
+  // Fires as soon as we know auth state (token + non-employee), without waiting
+  // for feature flags. The result is stored in _prefetchRef for the main effect
+  // to consume once flags are confirmed. Branch selection is NEVER applied here —
+  // that only happens in the main effect after flagsLoaded is true, so branch
+  // isolation is never weakened.
+  useEffect(() => {
+    _prefetchRef.current = null; // reset on every trigger before new fetch
+    if (!token || !user || user.role === 'employee') return;
+    apiGet('/branches/my-access')
+      .then(data  => { _prefetchRef.current = data; })
+      .catch(() => { /* main effect handles its own error path */ });
+  }, [token, user?.id, user?.role, reloadTick]);
+
+  // ── Main branch effect ───────────────────────────────────────────────────────
+  // Applies branch data and validates the selected branch. Waits for feature
+  // flags before applying (branch isolation depends on knowing whether the
+  // feature is on or off). Uses pre-fetched data when available to save the
+  // second round-trip.
   useEffect(() => {
     if (!token || !user) {
       setAccessibleBranches([]);
@@ -38,6 +61,7 @@ export function BranchProvider({ children }) {
       setIsRootAdmin(false);
       setSelectedBranchIdState(null);
       setBranchesLoaded(false);
+      _prefetchRef.current = null;
       localStorage.removeItem(STORAGE_KEY);
       return;
     }
@@ -51,11 +75,13 @@ export function BranchProvider({ children }) {
       setIsRootAdmin(false);
       setSelectedBranchIdState(null);
       setBranchesLoaded(false);
+      _prefetchRef.current = null;
       localStorage.removeItem(STORAGE_KEY);
       return;
     }
 
-    // Flags not loaded yet — wait before fetching branches or clearing state
+    // Flags not loaded yet — wait before applying any branch selection.
+    // The pre-fetch effect has already started fetching in parallel.
     if (!flagsLoaded) return;
 
     // Employees don't need a branch selector — their branch is fixed via users.branch_id
@@ -64,66 +90,88 @@ export function BranchProvider({ children }) {
       setHasAllBranches(false);
       setIsRootAdmin(false);
       setBranchesLoaded(false);
+      _prefetchRef.current = null;
       return;
     }
 
+    // ── Apply branch data (validates and persists the selected branch) ──────
+    function applyBranchData(data) {
+      const branches = data.branches || [];
+      setAccessibleBranches(branches);
+      setHasAllBranches(!!data.hasAllBranches);
+      setIsRootAdmin(!!data.isRootAdmin);
+
+      const stored = localStorage.getItem(STORAGE_KEY);
+      const activeBranches = branches.filter(b => b.is_active !== false);
+      if (stored) {
+        const storedId     = Number(stored);
+        const storedBranch = branches.find(b => Number(b.id) === storedId);
+        if (!storedBranch) {
+          // Branch no longer accessible — switch to first active
+          const firstActive = activeBranches[0];
+          if (firstActive) {
+            const numId = Number(firstActive.id);
+            setSelectedBranchIdState(numId);
+            localStorage.setItem(STORAGE_KEY, String(numId));
+          } else {
+            localStorage.removeItem(STORAGE_KEY);
+            setSelectedBranchIdState(null);
+          }
+        } else if (storedBranch.is_active === false) {
+          // Branch was deactivated — switch to first active
+          const firstActive = activeBranches[0];
+          if (firstActive) {
+            const numId = Number(firstActive.id);
+            setSelectedBranchIdState(numId);
+            localStorage.setItem(STORAGE_KEY, String(numId));
+          } else {
+            localStorage.removeItem(STORAGE_KEY);
+            setSelectedBranchIdState(null);
+          }
+        }
+      } else if (activeBranches.length > 0) {
+        // No stored selection — auto-select first active branch
+        const numId = Number(activeBranches[0].id);
+        setSelectedBranchIdState(numId);
+        localStorage.setItem(STORAGE_KEY, String(numId));
+      }
+    }
+
     setIsLoading(true);
-    setBranchesLoaded(false);
+    // Issue 4 fix: do NOT set branchesLoaded=false here.
+    // During a background refresh, existing queries can continue running with
+    // the current data — isBranchContextReady stays true. Only the initial state
+    // (branchesLoaded = false from useState) blocks queries on first load.
+
+    // Issue 5 optimization: consume pre-fetched data if available, avoiding a
+    // second serial round-trip for branches-enabled orgs on startup.
+    const prefetched = _prefetchRef.current;
+    _prefetchRef.current = null; // always clear so stale data never leaks to future runs
+
+    if (prefetched) {
+      applyBranchData(prefetched);
+      setIsLoading(false);
+      setBranchesLoaded(true);
+      return;
+    }
+
+    // No prefetch data — start a normal fetch (also covers reloadTick re-fetches
+    // where the pre-fetch and main effect fire simultaneously and the main effect
+    // finds an empty ref because the pre-fetch hasn't completed yet).
     apiGet('/branches/my-access')
       .then(data => {
-        const branches = data.branches || [];
-        setAccessibleBranches(branches);
-        setHasAllBranches(!!data.hasAllBranches);
-        setIsRootAdmin(!!data.isRootAdmin);
-
-        // Validate the stored selection is still accessible and active; clear/switch if not.
-        // Use Number() coercion on both sides: PostgreSQL BIGINT/BIGSERIAL IDs
-        // are returned as strings by node-postgres, so strict === would always
-        // fail against the stored numeric ID and clear the branch on every refresh.
-        const stored = localStorage.getItem(STORAGE_KEY);
-        const activeBranches = branches.filter(b => b.is_active !== false);
-        if (stored) {
-          const storedId     = Number(stored);
-          const storedBranch = branches.find(b => Number(b.id) === storedId);
-          if (!storedBranch) {
-            // Branch no longer accessible — switch to first active
-            const firstActive = activeBranches[0];
-            if (firstActive) {
-              const numId = Number(firstActive.id);
-              setSelectedBranchIdState(numId);
-              localStorage.setItem(STORAGE_KEY, String(numId));
-            } else {
-              localStorage.removeItem(STORAGE_KEY);
-              setSelectedBranchIdState(null);
-            }
-          } else if (storedBranch.is_active === false) {
-            // Branch was deactivated — switch to first active
-            const firstActive = activeBranches[0];
-            if (firstActive) {
-              const numId = Number(firstActive.id);
-              setSelectedBranchIdState(numId);
-              localStorage.setItem(STORAGE_KEY, String(numId));
-            } else {
-              localStorage.removeItem(STORAGE_KEY);
-              setSelectedBranchIdState(null);
-            }
-          }
-        } else if (activeBranches.length > 0) {
-          // No stored selection — auto-select first active branch so the sidebar
-          // never shows "Select Branch" with combined/no-branch data.
-          const numId = Number(activeBranches[0].id);
-          setSelectedBranchIdState(numId);
-          localStorage.setItem(STORAGE_KEY, String(numId));
-        }
+        _prefetchRef.current = null; // discard any concurrent pre-fetch result
+        applyBranchData(data);
       })
       .catch(() => {
+        _prefetchRef.current = null;
         setAccessibleBranches([]);
         setHasAllBranches(false);
         setIsRootAdmin(false);
       })
       .finally(() => {
         setIsLoading(false);
-        setBranchesLoaded(true);
+        setBranchesLoaded(true); // always mark loaded (even on error) to unblock queries
       });
   }, [token, user?.id, user?.role, reloadTick, branchesEnabled, flagsLoaded]);
 
@@ -156,7 +204,6 @@ export function BranchProvider({ children }) {
   const selectedBranch = accessibleBranches.find(b => Number(b.id) === selectedBranchId) || null;
 
   // Show the selector only when there are 2+ branches to switch between.
-  // "All Branches" is not a valid working context so we never include it as an option.
   const showBranchSelector = accessibleBranches.length >= 2;
 
   // isBranchContextReady: true when selectedBranchId is fully settled and safe to use
@@ -166,8 +213,8 @@ export function BranchProvider({ children }) {
   //   branches ON:  ready once /branches/my-access has been fetched and selectedBranchId
   //                 has been validated against the accessible list (branchesLoaded)
   //
-  // This prevents branch-dependent queries from firing during the brief window between
-  // page load and branch context initialization, which would produce stale/wrong data.
+  // Because branchesLoaded is NOT reset on background re-fetches (Issue 4 fix),
+  // this stays true during refresh cycles, preventing brief query-disabled windows.
   const isBranchContextReady = flagsLoaded && (!branchesEnabled || branchesLoaded);
 
   return (

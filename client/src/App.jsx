@@ -154,23 +154,9 @@ function MaintenanceGate({ children }) {
     return () => window.removeEventListener('maintenance:active', handler);
   }, []);
 
-  if (health === null) {
-    return (
-      <div style={{
-        minHeight: '100vh', display: 'flex', alignItems: 'center',
-        justifyContent: 'center', background: '#f9f9ff',
-      }}>
-        <div style={{
-          width: '32px', height: '32px', borderRadius: '50%',
-          border: '3px solid #e5e3f0', borderTopColor: '#3525cd',
-          animation: 'spin 0.8s linear infinite',
-        }} />
-        <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-      </div>
-    );
-  }
-
-  if (health.status === 'maintenance') {
+  // health === null means the /health check is still in-flight.
+  // Render children immediately — if maintenance is confirmed the UI switches below.
+  if (health?.status === 'maintenance') {
     // Root admin with bypass configured can proceed normally
     if (health.bypassAvailable && user?.role === 'root_admin') return children;
     return (

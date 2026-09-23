@@ -560,11 +560,15 @@ export default function MyLeaves() {
     queryKey: ['leave-policies'],
     queryFn:  () => apiGet('/leave-policies'),
   });
-  // BUG_14: staleTime:0 ensures balance always refreshes after leave submission
+  // BUG_14: staleTime:0 ensures balance always refreshes after leave submission.
+  // refetchOnWindowFocus:true restores window-focus refresh explicitly since the
+  // global default was changed to false — needed so the balance updates when an
+  // admin approves a leave in another tab and the employee switches back here.
   const { data: leaveBalance } = useQuery({
     queryKey: ['my-leave-balance'],
     queryFn:  () => apiGet('/leaves/balance'),
     staleTime: 0,
+    refetchOnWindowFocus: true,
   });
 
   const apply = useMutation({

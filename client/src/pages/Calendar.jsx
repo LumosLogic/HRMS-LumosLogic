@@ -54,7 +54,7 @@ export default function Calendar() {
   const month = date.getMonth() + 1;
   const today = new Date();
 
-  const { data: attendance = [], isLoading, refetch } = useQuery({
+  const { data: attendance = [], isFetching, refetch } = useQuery({
     queryKey: ['calendar', year, month, selectedBranchId],
     queryFn: () => apiGet('/attendance', { year, month }),
   });
@@ -164,8 +164,6 @@ export default function Calendar() {
           : `${MONTHS[s.getMonth()]} ${s.getDate()} – ${MONTHS[e.getMonth()]} ${e.getDate()}, ${e.getFullYear()}`;
       })();
 
-  if (isLoading) return <div className="loading"><span className="spinner" /> Loading…</div>;
-
   return (
     <div>
       {/* Toolbar */}
@@ -200,6 +198,10 @@ export default function Calendar() {
           )}
         </div>
         <button className="btn btn-outline btn-sm" onClick={() => { setDate(new Date()); openDayModal(todayStr()); }}>Today</button>
+        {/* Subtle spinner during data load — calendar grid remains visible */}
+        {isFetching && (
+          <div className="w-4 h-4 rounded-full border-2 border-[#e7eefe] border-t-[#3525cd] animate-spin flex-shrink-0" aria-label="Loading attendance data" />
+        )}
         <div className="flex bg-[#f0f3ff] border border-[#c7c4d8] rounded-xl p-1 gap-1">
           {['month','week'].map(m => (
             <button key={m} onClick={() => setMode(m)}

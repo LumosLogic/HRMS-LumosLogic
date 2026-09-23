@@ -686,6 +686,59 @@ function HRInsightsRow({ d, culture, navigate }) {
   );
 }
 
+// ── Dashboard skeleton — shown on first load instead of a full-page spinner ────
+// Matches the real layout grid so there is no layout shift when data arrives.
+function DashboardSkeleton() {
+  return (
+    <div className="space-y-5">
+      {/* Hero */}
+      <div className="rounded-2xl h-[108px] animate-pulse"
+        style={{ background: 'linear-gradient(135deg, #1e1b5e 0%, #3525cd 45%, #6d28d9 80%, #9333ea 100%)', opacity: 0.7 }} />
+      {/* 6 KPI cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        {Array.from({ length: 6 }).map((_, i) => (
+          <div key={i} className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm p-4 animate-pulse">
+            <div className="w-10 h-10 rounded-full bg-[#f0f3ff] mb-3" />
+            <div className="h-7 w-10 bg-[#f0f3ff] rounded mb-1.5" />
+            <div className="h-2.5 w-20 bg-[#f0f3ff] rounded mb-1" />
+            <div className="h-2 w-14 bg-[#f0f3ff] rounded" />
+          </div>
+        ))}
+      </div>
+      {/* Main 3-column grid */}
+      <div className="grid lg:grid-cols-[1fr_300px_280px] gap-4">
+        <div className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm p-5 animate-pulse">
+          <div className="h-4 w-32 bg-[#f0f3ff] rounded mb-4" />
+          <div className="space-y-3">
+            {Array.from({ length: 5 }).map((_, i) => (
+              <div key={i} className="flex items-center gap-3">
+                <div className="w-9 h-9 rounded-full bg-[#f0f3ff] flex-shrink-0" />
+                <div className="flex-1 space-y-1.5">
+                  <div className="h-3 w-28 bg-[#f0f3ff] rounded" />
+                  <div className="h-2.5 w-20 bg-[#f0f3ff] rounded" />
+                </div>
+                <div className="h-5 w-14 bg-[#f0f3ff] rounded-full" />
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm p-5 animate-pulse">
+          <div className="h-4 w-24 bg-[#f0f3ff] rounded mb-4" />
+          <div className="h-48 bg-[#f0f3ff] rounded-xl" />
+        </div>
+        <div className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm p-5 animate-pulse">
+          <div className="h-4 w-28 bg-[#f0f3ff] rounded mb-4" />
+          <div className="space-y-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <div key={i} className="h-16 bg-[#f0f3ff] rounded-xl" />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Dashboard ─────────────────────────────────────────────────────────────
 export default function Dashboard() {
   const { user, isAdmin } = useAuth();
@@ -762,7 +815,7 @@ export default function Dashboard() {
     catch (err) { toast(err.message, 'error'); }
   }
 
-  if (isLoading) return <div className="loading"><span className="spinner" /> Loading…</div>;
+  if (isLoading) return <DashboardSkeleton />;
   if (isError) return (
     <div className="card p-8 text-center">
       <div className="text-rose-600 font-bold mb-2">Dashboard failed to load</div>
