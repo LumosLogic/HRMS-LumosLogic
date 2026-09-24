@@ -17,6 +17,9 @@ function BranchModal({ open, onClose, branch }) {
   const toast           = useToast();
   const qc              = useQueryClient();
   const { reloadBranches } = useBranch();
+  // Branch active/inactive state is Root-Admin-only (enforced server-side in
+  // PUT /branches/:id). Other admins edit details without touching status.
+  const { isRootAdmin } = useAuth();
   const isEdit = !!branch;
 
   const empty = { name: '', code: '', location: '', address: '', is_active: true };
@@ -85,10 +88,15 @@ function BranchModal({ open, onClose, branch }) {
         <div className="flex items-center justify-between p-3 rounded-xl border border-[#c7c4d8] bg-[#f8f9fe]">
           <div>
             <p className="text-sm font-bold text-[#151c27]">Status</p>
-            <p className="text-xs text-[#777587]">{form.is_active ? 'Active — visible and in use' : 'Inactive — hidden from selections'}</p>
+            <p className="text-xs text-[#777587]">
+              {!isRootAdmin
+                ? 'Only a Root Admin can change branch status'
+                : form.is_active ? 'Active — visible and in use' : 'Inactive — hidden from selections'}
+            </p>
           </div>
           <button type="button" onClick={() => set('is_active', !form.is_active)}
-            className="flex-shrink-0">
+            disabled={!isRootAdmin}
+            className="flex-shrink-0 disabled:cursor-not-allowed disabled:opacity-60">
             {form.is_active
               ? <ToggleRight size={32} className="text-[#3525cd]" />
               : <ToggleLeft size={32} className="text-[#c7c4d8]" />}
@@ -389,17 +397,19 @@ export default function Branches() {
                               <ShieldCheck size={13} />
                             </button>
                           )}
-                          {/* Quick activate/deactivate */}
-                          <button
-                            onClick={() => toggleMut.mutate({ id: b.id, is_active: !b.is_active })}
-                            disabled={toggleMut.isPending}
-                            className="p-1.5 rounded-lg transition-colors disabled:opacity-40"
-                            title={b.is_active !== false ? 'Deactivate' : 'Activate'}
-                          >
-                            {b.is_active !== false
-                              ? <ToggleRight size={16} className="text-[#3525cd]" />
-                              : <ToggleLeft  size={16} className="text-[#c7c4d8] hover:text-[#3525cd]" />}
-                          </button>
+                          {/* Quick activate/deactivate — Root Admin only */}
+                          {isRootAdmin && (
+                            <button
+                              onClick={() => toggleMut.mutate({ id: b.id, is_active: !b.is_active })}
+                              disabled={toggleMut.isPending}
+                              className="p-1.5 rounded-lg transition-colors disabled:opacity-40"
+                              title={b.is_active !== false ? 'Deactivate' : 'Activate'}
+                            >
+                              {b.is_active !== false
+                                ? <ToggleRight size={16} className="text-[#3525cd]" />
+                                : <ToggleLeft  size={16} className="text-[#c7c4d8] hover:text-[#3525cd]" />}
+                            </button>
+                          )}
                           <button onClick={() => setEditBranch(b)}
                             className="p-1.5 rounded-lg text-[#464555] hover:bg-[#f0f3ff] hover:text-[#3525cd] transition-colors" title="Edit">
                             <Pencil size={13} />

@@ -830,6 +830,154 @@ function announcementOrgScope(userRole, userOrgId) {
     }],
   ]);
 
+  // ── Root Admin Branch Select — management UX + security (2026-09-24) ──
+  const readFile = (rel) => require('fs').readFileSync(
+    require('path').join(__dirname, rel), 'utf8'
+  );
+
+  await run('17. Branch Select — management UX & security', [
+    ['BranchSelect is behind RootRoute (root-admin-only page)', () => {
+      const src = readFile('../../../client/src/App.jsx');
+      const routeLine = (src.split('\n').find(l => l.includes('/root/branch-select')) || '');
+      assert.ok(routeLine.includes('<RootRoute><BranchSelect /></RootRoute>'),
+        `branch-select must be wrapped in RootRoute (got: ${routeLine.trim()})`);
+    }],
+    ['HR-access endpoints remain rootAdminOnly on the backend', () => {
+      const src = readFile('../modules/branches/branches.routes.js');
+      assert.ok(src.includes("router.get('/user-access-by-branch/:branchId', auth, rootAdminOnly"),
+        'GET user-access-by-branch must be rootAdminOnly');
+      assert.ok(src.includes("router.post('/user-access', auth, rootAdminOnly"),
+        'POST user-access must be rootAdminOnly');
+      assert.ok(src.includes("router.delete('/user-access/:userId/branch/:branchId', auth, rootAdminOnly"),
+        'DELETE user-access branch grant must be rootAdminOnly');
+    }],
+    ['HR grants are scoped to the caller\'s organization', () => {
+      const src = readFile('../modules/branches/branches.routes.js');
+      // Grant path validates the target user AND branch belong to this org
+      const postUserAccess = src.slice(
+        src.indexOf("router.post('/user-access'"),
+        src.indexOf("router.delete('/user-access/:userId/branch/:branchId'")
+      );
+      assert.ok(postUserAccess.includes('organization_id = $2'),
+        'grant must verify the target user belongs to the caller org');
+      assert.ok(postUserAccess.includes('org_id = $2'),
+        'grant must verify the target branch belongs to the caller org');
+      assert.ok(!/req\.body\.org_id|req\.query\.org_id/.test(postUserAccess),
+        'grant must never accept a client-supplied org_id');
+    }],
+    ['Status toggle reuses the existing PUT /branches/:id mechanism', () => {
+      const src = readFile('../../../client/src/pages/BranchSelect.jsx');
+      assert.ok(/apiPut\(`\/branches\/\$\{id\}`, \{ is_active \}\)/.test(src),
+        'Deactivate/Activate must call PUT /branches/:id with is_active only');
+    }],
+    ['BranchSelect never deletes branches or mutates employees', () => {
+      const src = readFile('../../../client/src/pages/BranchSelect.jsx');
+      assert.ok(!/apiDelete\(`\/branches\/\$\{/.test(src),
+        'No branch-delete call (status change only — never delete branch data)');
+      assert.ok(!/apiPut\(`\/employees/.test(src) && !/apiPut\(\/employees/.test(src),
+        'No employee mutation on the branch-select page');
+      assert.ok(!src.includes('branch_id:'),
+        'Must not assign employees to a branch from this page');
+    }],
+    ['Inactive branches are never selectable as a workspace', () => {
+      const src = readFile('../../../client/src/pages/BranchSelect.jsx');
+      assert.ok(src.includes('if (!target || target.is_active === false) return;'),
+        'handleSelect must reject inactive branches');
+    }],
+    ['Manage HR Admins reuses existing branch-access APIs', () => {
+      const src = readFile('../../../client/src/pages/BranchSelect.jsx');
+      assert.ok(src.includes("apiGet('/branches/user-access-by-branch/'"),
+        'Must read current grants via the existing endpoint');
+      assert.ok(src.includes("apiPost('/branches/user-access'"),
+        'Must grant via the existing endpoint');
+      assert.ok(src.includes('apiDelete(`/branches/user-access/${userId}/branch/${branch.id}`)'),
+        'Must revoke via the existing endpoint');
+    }],
+    ['Only eligible admins are listed (role = admin, root_admin excluded)', () => {
+      const src = readFile('../../../client/src/pages/BranchSelect.jsx');
+      assert.ok(src.includes("filter(u => u.role === 'admin')"),
+        'Eligible HR list must be restricted to role=admin');
+    }],
+    ['HR admin count + names come from the existing GET /branches payload', () => {
+      const src = readFile('../../../client/src/pages/BranchSelect.jsx');
+      assert.ok(src.includes('hr_admin_count'), 'Card must display hr_admin_count');
+      assert.ok(src.includes('hr_admin_names'), 'Card must display hr_admin_names');
+      const api = readFile('../modules/branches/branches.routes.js');
+      assert.ok(api.includes('AS hr_admin_count') && api.includes('AS hr_admin_names'),
+        'Backend list endpoint must supply the counts/names');
+    }],
+    ['Activate/Deactivate confirmation states data is preserved', () => {
+      const src = readFile('../../../client/src/pages/BranchSelect.jsx');
+      assert.ok(
+        src.includes('Employees and existing data will not be deleted'),
+        'Deactivate confirmation must explain no data is deleted'
+      );
+    }],
+  ]);
+
+  // ── Branch active/inactive state — Root Admin only (2026-09-24) ──────────
+  // Mirrors the guard in PUT /branches/:id: changing a branch's active state
+  // requires root_admin; editing other fields as a non-root admin is allowed
+  // as long as is_active is unchanged.
+  function canChangeBranchStatus(role, currentActive, nextActive) {
+    if (role !== 'root_admin' && role !== 'admin') return false; // employees never reach here
+    if (Boolean(currentActive) === Boolean(nextActive)) return true; // no status change
+    return role === 'root_admin';
+  }
+
+  await run('18. Branch status change — Root Admin only (backend)', [
+    ['Root Admin can deactivate an active branch', () => {
+      assert.equal(canChangeBranchStatus('root_admin', true, false), true);
+    }],
+    ['Root Admin can activate an inactive branch', () => {
+      assert.equal(canChangeBranchStatus('root_admin', false, true), true);
+    }],
+    ['HR admin cannot deactivate a branch', () => {
+      assert.equal(canChangeBranchStatus('admin', true, false), false);
+    }],
+    ['HR admin cannot activate a branch', () => {
+      assert.equal(canChangeBranchStatus('admin', false, true), false);
+    }],
+    ['HR admin can still edit branch details without changing status', () => {
+      assert.equal(canChangeBranchStatus('admin', true, true), true);
+    }],
+    ['Status guard present on the quick-toggle path', () => {
+      const src = readFile('../modules/branches/branches.routes.js');
+      assert.ok(
+        src.includes('Only a Root Admin can activate or deactivate a branch.'),
+        'PUT /branches/:id must reject non-root-admin status changes'
+      );
+      // The guard must sit before the quick-toggle UPDATE statement
+      const putIdx    = src.indexOf("router.put('/:id'");
+      const quickIdx  = src.indexOf('UPDATE branches SET is_active=$1', putIdx);
+      const guardIdx  = src.indexOf("Only a Root Admin can activate or deactivate", putIdx);
+      assert.ok(guardIdx > -1 && guardIdx < quickIdx,
+        'Root-admin guard must precede the status UPDATE');
+    }],
+    ['Status guard also covers the full edit-form path', () => {
+      const src = readFile('../modules/branches/branches.routes.js');
+      const count = (src.match(/Only a Root Admin can activate or deactivate a branch\./g) || []).length;
+      assert.ok(count >= 2, `Expected guard on both paths, found ${count}`);
+      assert.ok(src.includes('Boolean(current.rows[0].is_active) !== nextActive'),
+        'Full update must compare current vs requested is_active');
+    }],
+    ['Status change stays org-scoped', () => {
+      const src = readFile('../modules/branches/branches.routes.js');
+      const putSrc = src.slice(src.indexOf("router.put('/:id'"), src.indexOf("router.delete('/:id'"));
+      assert.ok(putSrc.includes('org_id=$2') && putSrc.includes('org_id=$7'),
+        'Status/details updates must be scoped to the caller org');
+      assert.ok(!/req\.body\.org_id|req\.query\.org_id/.test(putSrc),
+        'PUT must never accept a client-supplied org_id');
+    }],
+    ['Settings page hides the status toggle from non-root admins', () => {
+      const src = readFile('../../../client/src/pages/Branches.jsx');
+      assert.ok(src.includes('{/* Quick activate/deactivate — Root Admin only */}'),
+        'Quick toggle must be marked root-admin-only');
+      assert.ok(src.includes("disabled={!isRootAdmin}"),
+        'Edit-form status toggle must be disabled for non-root admins');
+    }],
+  ]);
+
   // ── Summary ────────────────────────────────────────────────────────────────
   console.log(`\n${'─'.repeat(60)}`);
   console.log(`Results: ${passed} passed, ${failed} failed`);

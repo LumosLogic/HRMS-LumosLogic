@@ -444,6 +444,9 @@ router.post('/', auth, async (req, res) => {
 });
 
 // PUT /api/branches/:id
+// HR admins may edit branch details (name/code/location/address), but ONLY a
+// Root Admin may change a branch's active/inactive state. Enforced server-side
+// on both the quick-toggle path and the full edit-form path.
 router.put('/:id', auth, async (req, res) => {
   if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin access required.' });
   try {
@@ -451,6 +454,9 @@ router.put('/:id', auth, async (req, res) => {
 
     // Quick status toggle from the list page — only is_active is sent
     if (name === undefined && is_active !== undefined) {
+      if (req.user.role !== 'root_admin') {
+        return res.status(403).json({ error: 'Only a Root Admin can activate or deactivate a branch.' });
+      }
       const result = await pool.query(
         `UPDATE branches SET is_active=$1 WHERE id=$2 AND org_id=$3 RETURNING *`,
         [is_active !== false, req.params.id, req.user.organization_id]
@@ -461,11 +467,25 @@ router.put('/:id', auth, async (req, res) => {
 
     // Full update from edit form — name is required
     if (!name || !name.trim()) return res.status(400).json({ error: 'Branch name is required' });
+
+    // Scope by org first (cross-org edits are impossible), then check whether
+    // this request actually changes the active state.
+    const current = await pool.query(
+      `SELECT is_active FROM branches WHERE id=$1 AND org_id=$2`,
+      [req.params.id, req.user.organization_id]
+    );
+    if (!current.rows.length) return res.status(404).json({ error: 'Branch not found' });
+
+    const nextActive = is_active !== false;
+    if (Boolean(current.rows[0].is_active) !== nextActive && req.user.role !== 'root_admin') {
+      return res.status(403).json({ error: 'Only a Root Admin can activate or deactivate a branch.' });
+    }
+
     const result = await pool.query(
       `UPDATE branches SET name=$1, code=$2, location=$3, address=$4, is_active=$5
        WHERE id=$6 AND org_id=$7 RETURNING *`,
       [name.trim(), code || null, location || null, address || null,
-       is_active !== false, req.params.id, req.user.organization_id]
+       nextActive, req.params.id, req.user.organization_id]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Branch not found' });
     res.json(result.rows[0]);
