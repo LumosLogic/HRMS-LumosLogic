@@ -14,7 +14,7 @@ const { pool } = require('../config/db');
 // ─── In-memory cache ─────────────────────────────────────────────────────────
 // key: `${userId}:${orgId}`   value: { permissions: string[], expiresAt: number }
 const _cache    = new Map();
-const CACHE_TTL_MS  = 5 * 60 * 1000;  // 5 minutes per entry
+const CACHE_TTL_MS  = 60 * 1000;       // 60 seconds — reduced from 5 min for faster revocation
 const CACHE_MAX     = 5000;            // evict oldest when over this size
 const CLEANUP_EVERY = 10 * 60 * 1000; // periodic full sweep every 10 minutes
 

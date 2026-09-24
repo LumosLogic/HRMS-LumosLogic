@@ -727,7 +727,7 @@ router.get('/structure', auth, async (req, res) => {
 // POST /api/payroll/structure
 // NOTE: Inserts into the legacy payroll_structures table. Column names differ from
 // the newer employee_salary_structures table — mapped explicitly below.
-router.post('/structure', auth, hasPermission('payroll', 'manage_structures'), async (req, res) => {
+router.post('/structure', auth, hasPermission('payroll', 'manage_structures'), withBranchContext, async (req, res) => {
   try {
     const oId  = orgId(req);
     const body = req.body;
@@ -741,6 +741,9 @@ router.post('/structure', auth, hasPermission('payroll', 'manage_structures'), a
       const { data: emp } = await db.from('users')
         .select('id').eq('id', parseInt(user_id)).eq('organization_id', oId).maybeSingle();
       if (!emp) return res.status(404).json({ error: 'Employee not found in this organisation' });
+      // Branch isolation: admin must have access to this employee's branch.
+      if (!await canAdminAccessUser(req.branchContext, parseInt(user_id, 10), oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
     }
 
     // Map to the actual payroll_structures column names
@@ -777,16 +780,29 @@ router.post('/structure', auth, hasPermission('payroll', 'manage_structures'), a
 
 // PUT /api/payroll/structure/:id
 // NOTE: Updates the legacy payroll_structures table — column names mapped explicitly.
-router.put('/structure/:id', auth, hasPermission('payroll', 'manage_structures'), async (req, res) => {
+router.put('/structure/:id', auth, hasPermission('payroll', 'manage_structures'), withBranchContext, async (req, res) => {
   try {
     const oId  = orgId(req);
     const b    = req.body;
+
+    // Resolve the target user_id from the body or the existing record, then check branch access.
+    let targetUserId = b.user_id !== undefined ? parseInt(b.user_id, 10) : null;
+    if (targetUserId === null) {
+      const { data: existing } = await db.from('payroll_structures')
+        .select('user_id').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
+      if (!existing) return res.status(404).json({ error: 'Salary structure not found' });
+      targetUserId = existing.user_id;
+    }
 
     if (b.user_id !== undefined) {
       const { data: emp } = await db.from('users')
         .select('id').eq('id', parseInt(b.user_id)).eq('organization_id', oId).maybeSingle();
       if (!emp) return res.status(404).json({ error: 'Employee not found in this organisation' });
     }
+
+    // Branch isolation: admin must have access to this employee's branch.
+    if (!await canAdminAccessUser(req.branchContext, targetUserId, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
 
     // Build update payload using only columns that exist in payroll_structures
     const patch = {};
@@ -822,10 +838,20 @@ router.put('/structure/:id', auth, hasPermission('payroll', 'manage_structures')
 // ─── Payslips ─────────────────────────────────────────────────────────────────
 
 // GET /api/payroll/payslips?userId=&year=
-router.get('/payslips', auth, async (req, res) => {
+router.get('/payslips', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { userId, year } = req.query;
+
+    // When an admin supplies a specific userId, validate same-org and branch access.
+    if (isAdmin(req.user.role) && userId && String(userId) !== String(req.user.id)) {
+      const { data: emp } = await db.from('users')
+        .select('id').eq('id', parseInt(userId, 10)).eq('organization_id', oId).maybeSingle();
+      if (!emp) return res.status(404).json({ error: 'Employee not found in this organization' });
+      if (!await canAdminAccessUser(req.branchContext, parseInt(userId, 10), oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
+
     const targetId = isAdmin(req.user.role) && userId ? userId : req.user.id;
     let q = db.from('payslips')
       .select('*, users!user_id(name, department, position)')
@@ -1397,7 +1423,7 @@ router.get('/payslips/:id/details', auth, hasPermission('payroll', 'view'), asyn
 });
 
 // GET /api/payroll/payslips/:id/pdf — Download payslip as PDF (same format as email attachment)
-router.get('/payslips/:id/pdf', auth, async (req, res) => {
+router.get('/payslips/:id/pdf', auth, hasPermission('payroll', 'view'), async (req, res) => {
   try {
     const oId       = orgId(req);
     const payslipId = parseInt(req.params.id, 10);

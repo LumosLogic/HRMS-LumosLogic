@@ -747,7 +747,9 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       // Employees see only their own leaves — no branch filter needed
       query = query.eq('user_id', req.user.id);
     } else if (userId) {
-      // Specific employee requested — keep as-is (org scope already enforced above)
+      // Admin requested a specific employee — verify org membership and branch access.
+      if (!await canAdminAccessUser(req.branchContext, parseInt(userId, 10), orgId(req)))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
       query = query.eq('user_id', parseInt(userId));
     } else {
       // Admin viewing all leaves — apply branch filter

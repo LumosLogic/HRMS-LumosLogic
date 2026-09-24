@@ -3,6 +3,8 @@ const router  = express.Router();
 const { db }                      = require('../../config/db');
 const { auth, adminOnly, isAdminRole, selfOrAdmin } = require('../../middleware/auth');
 const { orgId }                         = require('../../utils/helpers');
+const { withBranchContext }             = require('../../middleware/branchContext');
+const { canAdminAccessUser }            = require('../../utils/branchFilter');
 
 const SELF_EDITABLE = [
   'bank_name','branch_name','branch_code','account_number','account_holder_name',
@@ -10,11 +12,21 @@ const SELF_EDITABLE = [
 ];
 
 // GET /api/profile/:id/banking
-router.get('/:id/banking', auth, async (req, res) => {
+router.get('/:id/banking', auth, withBranchContext, async (req, res) => {
   try {
     const empId = parseInt(req.params.id);
-    if (!isAdminRole(req.user.role) && parseInt(req.user.id) !== empId)
-      return res.status(403).json({ error: 'Access denied' });
+    if (!isAdminRole(req.user.role)) {
+      // Employee self-access: only own record
+      if (parseInt(req.user.id) !== empId)
+        return res.status(403).json({ error: 'Access denied' });
+    } else if (parseInt(req.user.id) !== empId) {
+      // Admin accessing another employee's banking — verify same org and branch access.
+      const { data: emp } = await db.from('users')
+        .select('id').eq('id', empId).eq('organization_id', orgId(req)).maybeSingle();
+      if (!emp) return res.status(404).json({ error: 'Employee not found' });
+      if (!await canAdminAccessUser(req.branchContext, empId, orgId(req)))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
 
     const { data, error } = await db.from('employee_bank_accounts')
       .select('*').eq('employee_id', empId).eq('organization_id', orgId(req)).eq('is_active', true)

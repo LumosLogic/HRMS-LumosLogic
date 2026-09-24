@@ -39,10 +39,9 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       // Employees see only their own records — branch filter irrelevant
       query = query.eq('user_id', req.user.id);
     } else if (userId && userId !== 'all') {
-      // Admin requested a specific employee — keep as-is; branch validation
-      // happens implicitly because the attendance record is org-scoped.
-      // If the user doesn't belong to the admin's branch, resolveEmployeeIds
-      // won't include them and the specific userId filter makes it moot.
+      // Admin requested a specific employee — verify org membership and branch access.
+      if (!await canAdminAccessUser(req.branchContext, parseInt(userId, 10), orgId(req)))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
       query = query.eq('user_id', parseInt(userId));
     } else {
       // Admin viewing all employees — apply branch filter

@@ -100,7 +100,9 @@ async function resolveEmployeeIds(branchContext, orgId) {
     return result.rows.map(r => Number(r.id));
   } catch (err) {
     console.error('[branchFilter] resolveEmployeeIds error:', err.message);
-    return null; // fail open — better to over-show than break the page
+    // Fail closed: return empty array so a DB error never grants restricted HR users org-wide access.
+    // Root admin always returns null (org-wide) before reaching this point (state 'all' path above).
+    return [];
   }
 }
 

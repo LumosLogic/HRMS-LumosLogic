@@ -189,11 +189,14 @@ router.put('/:id', auth, async (req, res) => {
     if (file_name !== undefined) payload.file_name = file_name;
     if (file_type !== undefined) payload.file_type = file_type;
 
-    let q = db.from('announcements').update(payload).eq('id', req.params.id);
-    // Regular admins are restricted to their own org; root_admin can edit any org's announcement
-    if (req.user.role !== 'root_admin') q = q.eq('organization_id', req.user.organization_id);
-    const { data, error } = await q.select().single();
+    // Always scope by the caller's org — root_admin of Org A must not mutate Org B announcements.
+    const { data, error } = await db.from('announcements')
+      .update(payload)
+      .eq('id', req.params.id)
+      .eq('organization_id', req.user.organization_id)
+      .select().single();
     if (error) throw error;
+    if (!data) return res.status(404).json({ error: 'Announcement not found' });
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -203,10 +206,13 @@ router.delete('/:id', auth, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
 
-    // Fetch the announcement first to get title, org, and file info
-    let fetchQ = db.from('announcements').select('id, title, file_url, organization_id').eq('id', req.params.id);
-    if (req.user.role !== 'root_admin') fetchQ = fetchQ.eq('organization_id', req.user.organization_id);
-    const { data: ann } = await fetchQ.maybeSingle();
+    // Fetch the announcement first to get title, org, and file info.
+    // Always scope by the caller's org — root_admin of Org A must not delete Org B announcements.
+    const { data: ann } = await db.from('announcements')
+      .select('id, title, file_url, organization_id')
+      .eq('id', req.params.id)
+      .eq('organization_id', req.user.organization_id)
+      .maybeSingle();
     if (!ann) return res.status(404).json({ error: 'Announcement not found' });
 
     const oId = ann.organization_id;
