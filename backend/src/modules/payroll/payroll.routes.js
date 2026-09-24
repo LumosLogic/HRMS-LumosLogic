@@ -1423,7 +1423,10 @@ router.get('/payslips/:id/details', auth, hasPermission('payroll', 'view'), asyn
 });
 
 // GET /api/payroll/payslips/:id/pdf — Download payslip as PDF (same format as email attachment)
-router.get('/payslips/:id/pdf', auth, hasPermission('payroll', 'view'), async (req, res) => {
+// Authorization:
+//   Employee  — self-access only; no RBAC permission required (own payslip).
+//   Admin/HR  — requires payroll.view permission + existing branch isolation.
+router.get('/payslips/:id/pdf', auth, async (req, res) => {
   try {
     const oId       = orgId(req);
     const payslipId = parseInt(req.params.id, 10);
@@ -1439,13 +1442,21 @@ router.get('/payslips/:id/pdf', auth, hasPermission('payroll', 'view'), async (r
     if (!rows.length) return res.status(404).json({ error: 'Payslip not found' });
 
     const ps = rows[0];
-    // Non-admin employees may only view their own payslips (unchanged behavior)
+
     if (!isAdmin(req.user.role)) {
+      // Employee path: self-access only — no RBAC permission needed for own payslip.
       if (Number(ps.user_id) !== Number(req.user.id)) return res.status(403).json({ error: 'Access denied' });
-    } else if (ps.user_branch_id != null) {
-      // NR-1 FIX: Admin/HR must have branch access to download this employee's payslip PDF
-      const ok = await validateBranchAccess(req.user.id, oId, req.user.role, ps.user_branch_id);
-      if (!ok) return res.status(403).json({ error: 'You do not have access to this employee\'s branch.' });
+    } else {
+      // Admin/HR path: payroll.view required + branch isolation preserved.
+      const { resolvePermissions, hasPermissionCheck } = require('../../services/permissionService');
+      const perms = await resolvePermissions(req.user.id, oId);
+      if (!hasPermissionCheck(perms, 'payroll', 'view'))
+        return res.status(403).json({ error: 'Permission denied. Required: payroll.view' });
+      // NR-1 FIX: Admin/HR must have branch access to download this employee's payslip PDF.
+      if (ps.user_branch_id != null) {
+        const ok = await validateBranchAccess(req.user.id, oId, req.user.role, ps.user_branch_id);
+        if (!ok) return res.status(403).json({ error: 'You do not have access to this employee\'s branch.' });
+      }
     }
 
     const { generatePayslipPDF } = require('../../services/payrollEmailService');

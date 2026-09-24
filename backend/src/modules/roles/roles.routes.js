@@ -169,6 +169,24 @@ router.put('/user/:userId', auth, hasPermission('roles', 'manage'), async (req, 
       }
     }
 
+    // DEEP-005: Only a Root Admin may assign the root_admin system role.
+    // A user holding only roles.manage (e.g. custom role) must not be able to
+    // escalate another user — or themselves — to Root Admin.
+    if (req.user.role !== 'root_admin' && safeRoleIds.length > 0) {
+      const { rows: rootRoleRows } = await pool.query(
+        `SELECT 1 FROM roles
+          WHERE id = ANY($1::bigint[])
+            AND org_id = $2
+            AND is_system_role = true
+            AND slug = 'root_admin'
+          LIMIT 1`,
+        [safeRoleIds, oId]
+      );
+      if (rootRoleRows.length > 0) {
+        return res.status(403).json({ error: 'Only a Root Admin can assign the Root Admin role.' });
+      }
+    }
+
     // BUG_194: resolve the users.role column value from the assigned system role.
     // This keeps legacy isAdmin() checks and frontend navigation in sync.
     const SLUG_TO_ROLE = { root_admin: 'root_admin', hr_admin: 'admin', employee: 'employee' };

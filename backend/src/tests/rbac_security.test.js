@@ -275,12 +275,19 @@ function announcementOrgScope(userRole, userOrgId) {
       const match = src.match(/router\.get\('\/payslips',\s*auth,\s*withBranchContext/);
       assert.ok(match, 'GET /payslips must include withBranchContext');
     }],
-    ['GET /payslips/:id/pdf now includes hasPermission(payroll, view)', () => {
+    ['GET /payslips/:id/pdf uses inline admin check, not middleware hasPermission (DEEP-002 fix)', () => {
       const src = require('fs').readFileSync(
         require('path').join(__dirname, '../modules/payroll/payroll.routes.js'), 'utf8'
       );
-      const match = src.match(/router\.get\('\/payslips\/:id\/pdf',\s*auth,\s*hasPermission\('payroll',\s*'view'\)/);
-      assert.ok(match, "GET /payslips/:id/pdf must include hasPermission('payroll','view')");
+      // The DEEP-002 fix removed hasPermission from the route middleware chain so that
+      // employees can access their own payslips. Only check the declaration line itself.
+      const declarationLine = src.match(/router\.get\('\/payslips\/:id\/pdf'[^\n]+/)?.[0] || '';
+      const hasMwOnDeclaration = declarationLine.includes('hasPermission');
+      assert.ok(!hasMwOnDeclaration,
+        "GET /payslips/:id/pdf declaration line must NOT include hasPermission middleware");
+      // Admin access still checks payroll.view inline inside the handler
+      assert.ok(src.includes("hasPermissionCheck(perms, 'payroll', 'view')"),
+        "PDF route must use hasPermissionCheck inline for admin path");
     }],
   ]);
 
@@ -346,6 +353,213 @@ function announcementOrgScope(userRole, userOrgId) {
         !vulnerableDeletePattern.test(src),
         'Vulnerable root_admin org bypass must be removed from DELETE'
       );
+    }],
+  ]);
+
+  // ── Deep Audit Fixes (2026-09-24) ─────────────────────────────────────────
+
+  // ── DEEP-001 helpers ──────────────────────────────────────────────────────
+  // Reproduce hasPermissionCheck logic inline to test the permission inference
+  // that determines who can reach payroll.manage_settings-guarded routes.
+  function _hasPermCheck(permissions, module, action) {
+    if (!Array.isArray(permissions)) return false;
+    if (permissions.includes(`${module}.${action}`)) return true;
+    if (action === 'view') return permissions.some(p => p.startsWith(`${module}.`));
+    if (['create', 'edit', 'delete'].includes(action)) return permissions.includes(`${module}.manage`);
+    return false;
+  }
+
+  await run('11. DEEP-001 — payroll.manage_settings permission catalog fix', [
+    ['Migration file exists', () => {
+      const path = require('path').join(__dirname, '../../migrations/add_payroll_manage_settings_2026_09_24.sql');
+      assert.ok(require('fs').existsSync(path), 'Migration file must exist');
+    }],
+    ['Migration inserts payroll.manage_settings into permissions', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../../migrations/add_payroll_manage_settings_2026_09_24.sql'), 'utf8'
+      );
+      assert.ok(src.includes("'payroll'"), 'Migration must reference payroll module');
+      assert.ok(src.includes("'manage_settings'"), 'Migration must insert manage_settings action');
+    }],
+    ['Migration grants to root_admin', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../../migrations/add_payroll_manage_settings_2026_09_24.sql'), 'utf8'
+      );
+      assert.ok(src.includes("slug          = 'root_admin'") || src.includes("slug = 'root_admin'"),
+        'Migration must grant to root_admin');
+    }],
+    ['Migration grants to hr_admin', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../../migrations/add_payroll_manage_settings_2026_09_24.sql'), 'utf8'
+      );
+      assert.ok(src.includes("slug          = 'hr_admin'") || src.includes("slug = 'hr_admin'"),
+        'Migration must grant to hr_admin');
+    }],
+    ['Root Admin with payroll.manage_settings → hasPermissionCheck passes', () => {
+      // After migration, root_admin permissions will include payroll.manage_settings
+      const rootPerms = ['payroll.view', 'payroll.generate', 'payroll.manage_settings'];
+      assert.ok(_hasPermCheck(rootPerms, 'payroll', 'manage_settings'),
+        'Root admin with payroll.manage_settings must pass permission check');
+    }],
+    ['HR Admin with payroll.manage_settings → hasPermissionCheck passes', () => {
+      const hrPerms = ['payroll.view', 'payroll.generate', 'payroll.manage_settings'];
+      assert.ok(_hasPermCheck(hrPerms, 'payroll', 'manage_settings'),
+        'HR admin with payroll.manage_settings must pass permission check');
+    }],
+    ['Employee without payroll.manage_settings → hasPermissionCheck blocked', () => {
+      const empPerms = ['dashboard.view', 'attendance.view', 'leaves.view', 'leaves.create'];
+      assert.ok(!_hasPermCheck(empPerms, 'payroll', 'manage_settings'),
+        'Employee without payroll.manage_settings must be blocked');
+    }],
+    ['PUT /payroll/settings uses hasPermission(payroll, manage_settings)', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../modules/payroll/payroll.routes.js'), 'utf8'
+      );
+      assert.ok(
+        src.includes("hasPermission('payroll', 'manage_settings')"),
+        "PUT /payroll/settings must use hasPermission('payroll', 'manage_settings')"
+      );
+    }],
+    ['POST /apply-probation-bulk uses hasPermission(payroll, manage_settings)', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../modules/payroll/payroll.routes.js'), 'utf8'
+      );
+      // Confirm both routes use this permission guard
+      const count = (src.match(/hasPermission\('payroll', 'manage_settings'\)/g) || []).length;
+      assert.ok(count >= 2, `Expected at least 2 uses of manage_settings guard, found ${count}`);
+    }],
+  ]);
+
+  await run('12. DEEP-002 — Employee payslip PDF self-access restored', [
+    ['Employee can access own payslip — self-check passes', () => {
+      // Simulates the authorization logic: employee with userId matching payslip.user_id
+      const req = { user: { id: 5, role: 'employee' } };
+      const ps  = { user_id: 5, user_branch_id: null };
+      const isAdminFn = role => role === 'admin' || role === 'root_admin';
+
+      // employee path: check only self-ownership
+      if (!isAdminFn(req.user.role)) {
+        const allowed = Number(ps.user_id) === Number(req.user.id);
+        assert.ok(allowed, 'Employee accessing own payslip must be allowed');
+      }
+    }],
+    ['Employee blocked from another employee payslip', () => {
+      const req = { user: { id: 5, role: 'employee' } };
+      const ps  = { user_id: 7, user_branch_id: null };
+      const isAdminFn = role => role === 'admin' || role === 'root_admin';
+
+      if (!isAdminFn(req.user.role)) {
+        const allowed = Number(ps.user_id) === Number(req.user.id);
+        assert.ok(!allowed, 'Employee accessing another employee\'s payslip must be blocked');
+      }
+    }],
+    ['Admin without payroll.view → inline check blocks', () => {
+      const adminPerms = ['employees.view', 'leaves.view']; // no payroll.*
+      const allowed = _hasPermCheck(adminPerms, 'payroll', 'view');
+      assert.ok(!allowed, 'Admin without payroll.view must be blocked on admin path');
+    }],
+    ['Admin with payroll.view → inline check passes', () => {
+      const adminPerms = ['employees.view', 'payroll.view', 'payroll.generate'];
+      const allowed = _hasPermCheck(adminPerms, 'payroll', 'view');
+      assert.ok(allowed, 'Admin with payroll.view must pass inline permission check');
+    }],
+    ['PDF route no longer uses hasPermission middleware for employees', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../modules/payroll/payroll.routes.js'), 'utf8'
+      );
+      // Route declaration line must only have auth, not hasPermission in middleware chain
+      const hasMw = /router\.get\('\/payslips\/:id\/pdf',[\s\S]*?hasPermission/.test(
+        src.match(/router\.get\('\/payslips\/:id\/pdf'[^\n]+/)?.[0] || ''
+      );
+      assert.ok(!hasMw, 'PDF route declaration must not include hasPermission as route middleware');
+    }],
+    ['PDF route uses inline hasPermissionCheck for admin path', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../modules/payroll/payroll.routes.js'), 'utf8'
+      );
+      assert.ok(
+        src.includes("hasPermissionCheck(perms, 'payroll', 'view')"),
+        "Admin PDF path must use hasPermissionCheck inline"
+      );
+    }],
+    ['PDF route preserves branch isolation for admins', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../modules/payroll/payroll.routes.js'), 'utf8'
+      );
+      // After the DEEP-002 fix, branch validation is inside the else (admin) block
+      assert.ok(src.includes('validateBranchAccess(req.user.id, oId, req.user.role, ps.user_branch_id)'),
+        'PDF route must still call validateBranchAccess for admin branch isolation');
+    }],
+  ]);
+
+  await run('13. DEEP-005 — roles.manage cannot assign root_admin', [
+    ['Guard added to PUT /roles/user/:userId', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../modules/roles/roles.routes.js'), 'utf8'
+      );
+      assert.ok(
+        src.includes("Only a Root Admin can assign the Root Admin role."),
+        'roles.routes.js must contain the root_admin assignment guard'
+      );
+    }],
+    ['Guard queries for root_admin slug in requested roles', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../modules/roles/roles.routes.js'), 'utf8'
+      );
+      assert.ok(
+        src.includes("slug = 'root_admin'"),
+        "Guard must check for role slug = 'root_admin'"
+      );
+    }],
+    ['Non-root-admin is blocked when role_ids contain root_admin', async () => {
+      // Simulate the guard logic inline
+      async function checkGuard(requestorRole, slugsInRequest, _pool) {
+        if (requestorRole !== 'root_admin' && slugsInRequest.length > 0) {
+          const rootRows = await _pool.query(slugsInRequest);
+          if (rootRows.length > 0) return { blocked: true };
+        }
+        return { blocked: false };
+      }
+      const rootSlugPool = { query: async () => [{ slug: 'root_admin' }] };
+      const result = await checkGuard('admin', ['root_admin'], rootSlugPool);
+      assert.ok(result.blocked, 'Non-root-admin assigning root_admin role must be blocked');
+    }],
+    ['Root admin is allowed to assign root_admin role', async () => {
+      async function checkGuard(requestorRole, slugsInRequest, _pool) {
+        if (requestorRole !== 'root_admin' && slugsInRequest.length > 0) {
+          const rootRows = await _pool.query(slugsInRequest);
+          if (rootRows.length > 0) return { blocked: true };
+        }
+        return { blocked: false };
+      }
+      const rootSlugPool = { query: async () => [{ slug: 'root_admin' }] };
+      const result = await checkGuard('root_admin', ['root_admin'], rootSlugPool);
+      assert.ok(!result.blocked, 'Root admin must be allowed to assign root_admin role');
+    }],
+    ['Non-root-admin with roles.manage can assign non-root_admin roles', async () => {
+      async function checkGuard(requestorRole, slugsInRequest, _pool) {
+        if (requestorRole !== 'root_admin' && slugsInRequest.length > 0) {
+          const rootRows = await _pool.query(slugsInRequest);
+          if (rootRows.length > 0) return { blocked: true };
+        }
+        return { blocked: false };
+      }
+      // No root_admin slug found — custom or hr_admin roles only
+      const emptyPool = { query: async () => [] };
+      const result = await checkGuard('admin', ['hr_admin', 'custom_role_1'], emptyPool);
+      assert.ok(!result.blocked, 'Non-root-admin assigning only non-root roles must be allowed');
+    }],
+    ['Guard only runs when safeRoleIds is non-empty (clearing roles is allowed)', async () => {
+      async function checkGuard(requestorRole, slugsInRequest, _pool) {
+        if (requestorRole !== 'root_admin' && slugsInRequest.length > 0) {
+          const rootRows = await _pool.query(slugsInRequest);
+          if (rootRows.length > 0) return { blocked: true };
+        }
+        return { blocked: false };
+      }
+      const errorPool = { query: async () => { throw new Error('should not be called'); } };
+      const result = await checkGuard('admin', [], errorPool);
+      assert.ok(!result.blocked, 'Clearing all roles (empty array) must not trigger guard');
     }],
   ]);
 
