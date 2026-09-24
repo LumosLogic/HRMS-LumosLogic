@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Download, BarChart3, Users, FileText, CalendarDays, TrendingUp,
@@ -308,6 +308,7 @@ export default function Reports() {
   const { selectedBranchId, isBranchContextReady } = useBranch();
   const { isAdmin } = useAuth();
   const qc = useQueryClient();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const preselectedUserId = searchParams.get('userId') || '';
   // When navigating from Calendar → View Attendance, month and year are passed as URL params
@@ -713,9 +714,9 @@ export default function Reports() {
           <p className="page-subtitle">Attendance correction, leaves, and employee data for {periodLabel}</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* View Calendar — opens a calendar popup for the selected employee/month */}
-          {active === 'attendance' && selectedEmpId && viewMode === 'monthly' && fullCalendarRows && (
-            <button className="btn btn-outline btn-sm" onClick={() => setCalModalOpen(true)}>
+          {/* View Calendar — opens the org-wide Calendar page (branch-aware, no employee filter). */}
+          {active === 'attendance' && viewMode === 'monthly' && (
+            <button className="btn btn-outline btn-sm" onClick={() => navigate('/root/calendar')}>
               <Calendar size={14} /> View Calendar
             </button>
           )}
