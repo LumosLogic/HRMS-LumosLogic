@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Download, BarChart3, Users, FileText, CalendarDays, TrendingUp,
@@ -14,6 +14,7 @@ import { useAuth } from '@/context/AuthContext';
 import { Modal } from '@/components/ui/Modal';
 import { Avatar } from '@/components/ui/Avatar';
 import { AttCorrectionModal } from '@/components/AttendanceDayModal';
+import { OrgCalendarPanel } from '@/components/OrgCalendarPanel';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 function cn(...classes) { return classes.filter(Boolean).join(' '); }
@@ -308,7 +309,6 @@ export default function Reports() {
   const { selectedBranchId, isBranchContextReady } = useBranch();
   const { isAdmin } = useAuth();
   const qc = useQueryClient();
-  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const preselectedUserId = searchParams.get('userId') || '';
   // When navigating from Calendar → View Attendance, month and year are passed as URL params
@@ -714,9 +714,10 @@ export default function Reports() {
           <p className="page-subtitle">Attendance correction, leaves, and employee data for {periodLabel}</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* View Calendar — opens the org-wide Calendar page (branch-aware, no employee filter). */}
+          {/* View Calendar — opens org-wide calendar overlay inside Reports. */}
+          {/* Always visible in monthly attendance view; never inherits the Reports employee filter. */}
           {active === 'attendance' && viewMode === 'monthly' && (
-            <button className="btn btn-outline btn-sm" onClick={() => navigate('/root/calendar')}>
+            <button className="btn btn-outline btn-sm" onClick={() => setCalModalOpen(true)}>
               <Calendar size={14} /> View Calendar
             </button>
           )}
@@ -1267,17 +1268,37 @@ export default function Reports() {
         />
       )}
 
-      {/* ── VIEW CALENDAR MODAL ──────────────────────────────────────────────── */}
-      {calModalOpen && fullCalendarRows && selectedEmpId && (
-        <ReportsCalendarModal
-          open={calModalOpen}
-          onClose={() => setCalModalOpen(false)}
-          empName={selectedEmpName || empRows.find(e => String(e.id) === selectedEmpId)?.name || ''}
-          year={year}
-          month={month}
-          calendarRows={fullCalendarRows}
-          attStatusStyle={ATT_STATUS_STYLE}
-        />
+      {/* ── ORG-WIDE CALENDAR OVERLAY ────────────────────────────────────────── */}
+      {/* Renders the same shared OrgCalendarPanel used by /root/calendar.       */}
+      {/* Branch context is respected automatically; Reports filters are ignored. */}
+      {calModalOpen && (
+        <div className="fixed inset-0 z-40 bg-white flex flex-col overflow-hidden">
+          {/* Header bar */}
+          <div className="flex items-center justify-between px-5 py-3 border-b border-[#e7eefe] bg-white shadow-sm flex-shrink-0">
+            <div>
+              <h2 className="text-sm font-black text-[#151c27]">Organisation Calendar</h2>
+              <p className="text-xs text-[#777587]">All employees · respects current branch</p>
+            </div>
+            <button
+              className="btn btn-outline btn-sm"
+              onClick={() => setCalModalOpen(false)}>
+              Close
+            </button>
+          </div>
+          {/* Calendar panel — fills the remaining space */}
+          <div className="flex-1 overflow-auto p-4">
+            <OrgCalendarPanel
+              onViewAttendance={(empId, calMonth, calYear) => {
+                // Close the calendar overlay and show that employee's attendance in Reports
+                setCalModalOpen(false);
+                setSelectedEmpId(String(empId));
+                setMonth(calMonth);
+                setYear(calYear);
+                setViewMode('monthly');
+              }}
+            />
+          </div>
+        </div>
       )}
 
     </div>

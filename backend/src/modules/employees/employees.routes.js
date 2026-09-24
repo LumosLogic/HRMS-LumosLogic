@@ -103,8 +103,8 @@ router.get('/', auth, hasPermission('employees', 'view'), withBranchContext, asy
 // ─── Employees: Create ────────────────────────────────────────────────────────
 router.post('/', auth, hasPermission('employees', 'create'), async (req, res) => {
   try {
-    const { name, email, password, role, department, position, avatar_color, date_of_birth } = req.body;
-    if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, password required' });
+    const { name, email, role, department, position, avatar_color, date_of_birth } = req.body;
+    if (!name || !email) return res.status(400).json({ error: 'Name and email are required' });
     // BUG_154: validate email format before uniqueness check
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))
       return res.status(400).json({ error: 'Please enter a valid Company Email address (e.g. name@company.com).' });
@@ -121,11 +121,16 @@ router.post('/', auth, hasPermission('employees', 'create'), async (req, res) =>
       .select('id').eq('organization_id', orgId(req)).ilike('name', name.trim()).maybeSingle();
     if (dupName) return res.status(400).json({ error: 'An employee with this name already exists in your organisation.' });
 
-    const hashed = bcrypt.hashSync(password, 10);
+    // Generate a secure random temporary password server-side.
+    // Never accept a password from the client for new employee creation.
+    const CHARS = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789!@#';
+    const tempPassword = Array.from(crypto.randomBytes(12), b => CHARS[b % CHARS.length]).join('');
+    const hashed = bcrypt.hashSync(tempPassword, 10);
+
     const {
       device_enrollment_id, branch_id, grade, division, sub_division,
       salutation, middle_name, surname, location, pay_cadre,
-      weekly_off_day, work_hours_per_day, designation_id,
+      weekly_off_day, work_hours_per_day, designation_id, employment_type,
     } = req.body;
 
     // Auto-assign the only active branch when none is supplied.
@@ -169,15 +174,16 @@ router.post('/', auth, hasPermission('employees', 'create'), async (req, res) =>
             date_of_birth, force_password_change, organization_id,
             device_enrollment_id, branch_id, grade, division, sub_division,
             salutation, middle_name, surname, location, pay_cadre,
-            weekly_off_day, work_hours_per_day, designation_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
+            weekly_off_day, work_hours_per_day, designation_id, employment_type)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
          RETURNING id, name, email, role, department, position, avatar_color, date_of_birth`,
         [name, email.toLowerCase(), hashed, role||'employee', resolvedDeptName,
          position||'Staff', avatar_color||'#4F46E5', date_of_birth||null, orgId(req),
          device_enrollment_id||null, resolvedBranchId||null, grade||null, division||null,
          sub_division||null, salutation||null, middle_name||null, surname||null,
          location||null, pay_cadre||null, weekly_off_day||null, work_hours_per_day||null,
-         designation_id ? parseInt(designation_id) : null]
+         designation_id ? parseInt(designation_id) : null,
+         employment_type || 'full_time']
       );
       newUser = userRes.rows[0];
 
@@ -212,9 +218,22 @@ router.post('/', auth, hasPermission('employees', 'create'), async (req, res) =>
       ).catch(() => {});
     }
 
-    // Fire-and-forget side effects after COMMIT
+    // Fire-and-forget side effects after COMMIT.
+    // Send account credentials using the server-generated temp password.
+    // The plaintext password is only ever in memory here — never logged, never returned in the API response.
     getOrgContext(orgId(req)).then(({ orgName, orgEmail }) => {
-      sendMail({ to: email, subject: `Welcome to ${orgName || 'the Team'} — Your Account Details`, html: welcomeEmployeeHtml({ name, email, department: resolvedDeptName, position: position||'Staff' }, password, orgName, orgEmail) });
+      const portalUrl = process.env.FRONTEND_URL || 'https://hrms.lumoslogic.com';
+      sendMail({
+        to:      email,
+        subject: `Welcome to ${orgName || 'the Team'} — Your Login Details`,
+        html:    credentialsEmailHtml({
+          employee:    { name, email, department: resolvedDeptName, position: position || 'Staff' },
+          tempPassword,
+          orgName,
+          orgEmail,
+          portalUrl,
+        }),
+      }).catch(() => {}); // non-fatal — employee is already created
     });
     db.from('platform_activity').insert({ event_type: 'member_added', organization_id: orgId(req), description: `Member added: ${name} (${email})`, metadata: { name, email, role: role||'employee', org_id: orgId(req) } }).then(() => {});
 

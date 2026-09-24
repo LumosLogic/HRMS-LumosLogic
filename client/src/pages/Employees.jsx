@@ -366,7 +366,7 @@ function EmployeeProfile({ emp, onBack, onEdit }) {
   const _empStatusCfg = EMP_STATUS_CFG[emp.employee_status] || EMP_STATUS_CFG.active;
   const statusColor   = _empStatusCfg.cls;
   const statusLabel   = _empStatusCfg.label;
-  const fmtEmploymentType = (t) => ({ full_time: 'Full Time', part_time: 'Part Time', contract: 'Contract', intern: 'Intern' }[t] || t || '—');
+  const fmtEmploymentType = (t) => ({ full_time: 'Full Time', part_time: 'Part Time', contract: 'Contract', intern: 'Intern', consultant: 'Consultant', probation: 'Probation' }[t] || t || '—');
   const fmtWorkMode       = (m) => ({ office: 'Office', remote: 'Remote', hybrid: 'Hybrid' }[m] || m || '—');
   const deptLabel = emp.departments?.length > 0
     ? emp.departments.map(d => d.name).join(', ')
@@ -1345,8 +1345,6 @@ function EmployeeFormModal({ open, onClose, employee, onSaved, departments = [],
         if (!/[a-zA-Z]/.test(form.name.trim())) throw new Error('Full Name must contain at least one letter.');
         if (!form.email.trim()) throw new Error('Company Email is required.');
         if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) throw new Error('Company Email must be a valid email address.');
-        if (!form.password) throw new Error('Temporary Password is required.');
-        if (form.password.length < 6) throw new Error('Temporary Password must be at least 6 characters.');
         if (!form.position.trim()) throw new Error('Job Title / Position is required.');
       } else {
         // First Name — required even in edit (display breaks without a name)
@@ -1419,7 +1417,10 @@ function EmployeeFormModal({ open, onClose, employee, onSaved, departments = [],
         ]);
         return result;
       }
-      return apiPost('/employees', form);
+      // Never send a client-supplied password for new employees.
+      // The backend generates a secure temporary password and emails it to the employee.
+      const { password: _ignored, ...addPayload } = form;
+      return apiPost('/employees', addPayload);
     },
     onSuccess: (data) => {
       toast(isEdit ? 'Employee updated!' : 'Employee added! Redirecting to profile…', 'success');
@@ -1775,6 +1776,8 @@ function EmployeeFormModal({ open, onClose, employee, onSaved, departments = [],
                     <option value="part_time">Part Time</option>
                     <option value="contract">Contract</option>
                     <option value="intern">Intern</option>
+                    <option value="consultant">Consultant</option>
+                    <option value="probation">Probation</option>
                   </select>
                 </div>
                 <div>
@@ -2086,11 +2089,13 @@ function EmployeeFormModal({ open, onClose, employee, onSaved, departments = [],
         </div>
 
       ) : (
-        /* ── Add Employee: minimal popup ── */
+        /* ── Add Employee: streamlined form — no manual password entry ── */
         <div className="space-y-4">
           <p className="text-xs text-[#777587] bg-[#f0f3ff] border border-[#e7eefe] rounded-lg px-3 py-2">
-            Fill in the essentials below. After adding, you'll be taken to the employee profile to complete remaining details.
+            Fill in the essentials below. A secure temporary password will be generated automatically and emailed to the employee. After adding, you'll be taken to the employee profile to complete remaining details.
           </p>
+
+          {/* Row 1: Full Name + Company Email */}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="form-label">Full Name <span className="text-rose-500">*</span></label>
@@ -2101,41 +2106,47 @@ function EmployeeFormModal({ open, onClose, employee, onSaved, departments = [],
               <input className="form-control" type="email" placeholder="john@company.com" autoComplete="off" value={form.email} onChange={e => set('email', e.target.value)} required />
             </div>
           </div>
+
+          {/* Row 2: Department(s) multi-select */}
           <div>
-            <label className="form-label">Temporary Password <span className="text-rose-500">*</span></label>
-            <div className="relative">
-              <input className="form-control pr-10" type={showPw ? 'text' : 'password'}
-                placeholder="Min 6 characters" autoComplete="new-password"
-                value={form.password} onChange={e => set('password', e.target.value)} required />
-              <button type="button" onClick={() => setShowPw(s => !s)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-[#777587] hover:text-[#151c27] p-1">
-                {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
-              </button>
-            </div>
+            <label className="form-label">Department(s)</label>
+            {departments.length === 0 ? (
+              <div className="form-control text-[#777587] text-xs py-2">No departments — create from Departments page.</div>
+            ) : (
+              <div className="border border-[#c7c4d8] rounded-xl p-3 max-h-32 overflow-y-auto bg-white grid grid-cols-2 gap-0.5">
+                {departments.map(d => (
+                  <label key={d.id} className="flex items-center gap-2 cursor-pointer hover:bg-[#f0f3ff] rounded px-2 py-1 transition-colors">
+                    <input type="checkbox" className="w-4 h-4 accent-[#3525cd] shrink-0"
+                      checked={form.department_ids.includes(d.id)}
+                      onChange={() => toggleDept(d.id)} />
+                    <span className="text-sm truncate">{d.name}</span>
+                  </label>
+                ))}
+              </div>
+            )}
           </div>
+
+          {/* Row 3: Job Title + Employment Type */}
           <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="form-label">Department <span className="text-rose-500">*</span></label>
-              {departments.length === 0 ? (
-                <div className="form-control text-[#777587] text-xs py-2">No departments — create from Departments page.</div>
-              ) : (
-                <select className="form-control" value={form.department_ids[0] || ''}
-                  onChange={e => {
-                    const id = e.target.value ? parseInt(e.target.value) : null;
-                    const name = departments.find(d => d.id === id)?.name || '';
-                    setForm(f => ({ ...f, department_ids: id ? [id] : [], department: name }));
-                  }}>
-                  <option value="">Select department</option>
-                  {departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}
-                </select>
-              )}
-            </div>
             <div>
               <label className="form-label">Job Title / Position <span className="text-rose-500">*</span></label>
               <input className="form-control" placeholder="e.g. Software Developer"
                 value={form.position} onChange={e => set('position', e.target.value)} />
             </div>
+            <div>
+              <label className="form-label">Employment Type</label>
+              <select className="form-control" value={form.employment_type} onChange={e => set('employment_type', e.target.value)}>
+                <option value="full_time">Full Time</option>
+                <option value="part_time">Part Time</option>
+                <option value="contract">Contract</option>
+                <option value="intern">Intern</option>
+                <option value="consultant">Consultant</option>
+                <option value="probation">Probation</option>
+              </select>
+            </div>
           </div>
+
+          {/* Row 4: Role */}
           <div>
             <label className="form-label">Role <span className="text-rose-500">*</span></label>
             <select className="form-control" value={form.role} onChange={e => set('role', e.target.value)}>
