@@ -285,6 +285,7 @@ export function BranchProvider({ children }) {
         <BranchSetupWizard
           orgName={setupStatus?.orgName}
           defaultBranchName={setupStatus?.defaultBranchName}
+          hasEmployeeData={!!setupStatus?.hasEmployeeData}
           onComplete={handleBranchSetupComplete}
         />
       )}

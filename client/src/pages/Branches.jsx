@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -13,8 +14,9 @@ import { ConfirmModal } from '@/components/ui/ConfirmModal';
 // ─── Branch Create/Edit Modal ─────────────────────────────────────────────────
 
 function BranchModal({ open, onClose, branch }) {
-  const toast  = useToast();
-  const qc     = useQueryClient();
+  const toast           = useToast();
+  const qc              = useQueryClient();
+  const { reloadBranches } = useBranch();
   const isEdit = !!branch;
 
   const empty = { name: '', code: '', location: '', address: '', is_active: true };
@@ -33,7 +35,7 @@ function BranchModal({ open, onClose, branch }) {
     mutationFn: () => isEdit ? apiPut(`/branches/${branch.id}`, form) : apiPost('/branches', form),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['branches'] });
-      qc.invalidateQueries({ queryKey: ['branches-my-access'] });
+      reloadBranches(); // sync the sidebar branch selector (BranchContext uses apiGet, not React Query)
       toast(isEdit ? 'Branch updated!' : 'Branch created!', 'success');
       onClose();
     },
@@ -221,6 +223,7 @@ export default function Branches() {
   const { isAdmin, isRootAdmin } = useAuth();
   const toast = useToast();
   const qc    = useQueryClient();
+  const { reloadBranches } = useBranch();
   const [addOpen,      setAddOpen]      = useState(false);
   const [editBranch,   setEditBranch]   = useState(null);
   const [confirmDel,   setConfirmDel]   = useState(null);
@@ -237,7 +240,7 @@ export default function Branches() {
     onSuccess: () => {
       toast('Branch deleted', 'warning');
       qc.invalidateQueries({ queryKey: ['branches'] });
-      qc.invalidateQueries({ queryKey: ['branches-my-access'] });
+      reloadBranches();
     },
     onError: e => toast(e.message, 'error'),
   });
@@ -247,7 +250,7 @@ export default function Branches() {
     onSuccess: (_, { is_active }) => {
       toast(is_active ? 'Branch activated' : 'Branch deactivated', 'success');
       qc.invalidateQueries({ queryKey: ['branches'] });
-      qc.invalidateQueries({ queryKey: ['branches-my-access'] });
+      reloadBranches();
     },
     onError: e => toast(e.message, 'error'),
   });

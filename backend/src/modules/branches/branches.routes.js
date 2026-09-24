@@ -254,6 +254,13 @@ router.get('/setup-status', auth, rootAdminOnly, async (req, res) => {
     );
     const branchCount = parseInt(branchRes.rows[0]?.cnt ?? 0, 10);
 
+    // Count actual employees (not root_admin/admin) to distinguish new vs existing org
+    const empRes = await pool.query(
+      `SELECT COUNT(*) AS cnt FROM users WHERE organization_id = $1 AND role = 'employee'`,
+      [orgId]
+    );
+    const employeeCount = parseInt(empRes.rows[0]?.cnt ?? 0, 10);
+
     // Fetch org name for the default branch name suggestion
     const orgRes = await pool.query(
       `SELECT name FROM organizations WHERE id = $1`,
@@ -270,6 +277,7 @@ router.get('/setup-status', auth, rootAdminOnly, async (req, res) => {
       branchCount,
       orgName,
       defaultBranchName,
+      hasEmployeeData: employeeCount > 0, // false for brand-new orgs with only a Root Admin
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -345,12 +353,15 @@ router.post('/setup', auth, rootAdminOnly, async (req, res) => {
       );
       branch = branchInsert.rows[0];
 
-      // Assign all org users without a branch_id to this new branch.
-      // This covers employees (and any admins) who have no branch assignment yet.
-      // Admins get org-wide access through hr_branch_access separately — this just
-      // records their home branch so employee-derived filtering works correctly.
+      // Assign employees (role='employee') without a branch_id to this new branch.
+      // Root Admin and HR Admins are intentionally excluded: their branch access is
+      // governed by hr_branch_access (not users.branch_id), and root_admin always
+      // has org-wide access regardless of branch_id.
       const updateRes = await client.query(
-        `UPDATE users SET branch_id = $1 WHERE organization_id = $2 AND branch_id IS NULL`,
+        `UPDATE users SET branch_id = $1
+          WHERE organization_id = $2
+            AND branch_id IS NULL
+            AND role = 'employee'`,
         [branch.id, orgId]
       );
       employeesMigrated = updateRes.rowCount || 0;
