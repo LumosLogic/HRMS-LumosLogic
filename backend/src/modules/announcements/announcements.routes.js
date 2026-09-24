@@ -182,6 +182,22 @@ router.post('/', auth, async (req, res) => {
 router.put('/:id', auth, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
+
+    // Ownership check: non-root-admins can only edit announcements they created.
+    // Root Admin can edit any announcement in their own org.
+    // Legacy announcements (created_by = NULL) are root-admin-only.
+    if (req.user.role !== 'root_admin') {
+      const { data: existing } = await db.from('announcements')
+        .select('id, created_by')
+        .eq('id', req.params.id)
+        .eq('organization_id', req.user.organization_id)
+        .maybeSingle();
+      if (!existing) return res.status(404).json({ error: 'Announcement not found' });
+      if (existing.created_by === null || existing.created_by !== req.user.id) {
+        return res.status(403).json({ error: 'You can only edit announcements you created' });
+      }
+    }
+
     const { title, content, type, priority, target_audience, pinned, expires_at, file_url, file_name, file_type } = req.body;
 
     const payload = { title, content, type, priority, target_audience, pinned: !!pinned, expires_at: expires_at || null };
@@ -206,14 +222,22 @@ router.delete('/:id', auth, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
 
-    // Fetch the announcement first to get title, org, and file info.
+    // Fetch the announcement first to get title, org, file info and creator.
     // Always scope by the caller's org — root_admin of Org A must not delete Org B announcements.
     const { data: ann } = await db.from('announcements')
-      .select('id, title, file_url, organization_id')
+      .select('id, title, file_url, organization_id, created_by')
       .eq('id', req.params.id)
       .eq('organization_id', req.user.organization_id)
       .maybeSingle();
     if (!ann) return res.status(404).json({ error: 'Announcement not found' });
+
+    // Ownership check: non-root-admins can only delete their own announcements.
+    // Legacy NULL creator announcements are root-admin-only.
+    if (req.user.role !== 'root_admin') {
+      if (ann.created_by === null || ann.created_by !== req.user.id) {
+        return res.status(403).json({ error: 'You can only delete announcements you created' });
+      }
+    }
 
     const oId = ann.organization_id;
 

@@ -3,6 +3,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import { apiGet } from '@/lib/api';
 import { useAuth } from './AuthContext';
 import { useFeature, FeatureFlagsLoadedContext } from './FeatureFlagContext';
+import BranchSetupWizard from '@/components/BranchSetupWizard';
 
 export const BranchContext = createContext(null);
 
@@ -199,6 +200,54 @@ export function BranchProvider({ children }) {
     return () => window.removeEventListener('storage', onStorageChange);
   }, []);
 
+  // ── One-time Branch Setup wizard (Root Admin, branches ON, zero branches) ──
+  // Shown when the branches feature is enabled but the organization has no
+  // branches yet (e.g. Platform Admin just enabled the feature). Orgs that
+  // already have branches never see it. The backend /branches/setup-status
+  // endpoint is the authoritative needsSetup check and supplies the org name
+  // and safe default branch name; the wizard itself is completed via the
+  // transactional POST /branches/setup endpoint (Root Admin only).
+  const [setupStatus, setSetupStatus] = useState(null);
+  const setupStatusRequested = useRef(false);
+
+  const needsBranchSetup = !!(
+    user?.role === 'root_admin' &&
+    flagsLoaded &&
+    branchesEnabled &&
+    branchesLoaded &&
+    !isLoading &&
+    accessibleBranches.length === 0
+  );
+
+  useEffect(() => {
+    if (!needsBranchSetup) {
+      setupStatusRequested.current = false;
+      setSetupStatus(null);
+      return;
+    }
+    if (setupStatusRequested.current) return;
+    setupStatusRequested.current = true;
+    apiGet('/branches/setup-status')
+      .then(data => {
+        if (data && data.needsSetup === false) {
+          // Race: branches were created elsewhere — re-sync and skip wizard.
+          setSetupStatus(null);
+          reloadBranches();
+          return;
+        }
+        setSetupStatus(data || {});
+      })
+      .catch(() => { /* setup-status failed — wizard still renders; POST /setup enforces everything server-side */ });
+  }, [needsBranchSetup, reloadBranches]);
+
+  const handleBranchSetupComplete = useCallback(() => {
+    setSetupStatus(null);
+    setupStatusRequested.current = false;
+    // Re-fetch my-access: the new branch now exists, needsBranchSetup flips to
+    // false and the wizard unmounts — no logout/login required.
+    reloadBranches();
+  }, [reloadBranches]);
+
   // Resolved objects
   // Coerce b.id to Number: PostgreSQL BIGINT returns as string via node-postgres.
   const selectedBranch = accessibleBranches.find(b => Number(b.id) === selectedBranchId) || null;
@@ -232,6 +281,13 @@ export function BranchProvider({ children }) {
       reloadBranches,
     }}>
       {children}
+      {needsBranchSetup && (
+        <BranchSetupWizard
+          orgName={setupStatus?.orgName}
+          defaultBranchName={setupStatus?.defaultBranchName}
+          onComplete={handleBranchSetupComplete}
+        />
+      )}
     </BranchContext.Provider>
   );
 }

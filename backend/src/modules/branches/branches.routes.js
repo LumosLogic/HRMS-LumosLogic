@@ -235,6 +235,147 @@ router.delete('/user-access/:userId', auth, rootAdminOnly, async (req, res) => {
   }
 });
 
+// ─── Branch Setup Wizard Endpoints ───────────────────────────────────────────
+// These named routes MUST appear before the generic /:id routes.
+
+/**
+ * GET /api/branches/setup-status
+ * Returns whether the Root Admin needs to complete the Branch Setup wizard.
+ * needsSetup = true when branches feature is enabled but org has zero active branches.
+ */
+router.get('/setup-status', auth, rootAdminOnly, async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+
+    // Count active branches for this org
+    const branchRes = await pool.query(
+      `SELECT COUNT(*) AS cnt FROM branches WHERE org_id = $1 AND is_active = TRUE`,
+      [orgId]
+    );
+    const branchCount = parseInt(branchRes.rows[0]?.cnt ?? 0, 10);
+
+    // Fetch org name for the default branch name suggestion
+    const orgRes = await pool.query(
+      `SELECT name FROM organizations WHERE id = $1`,
+      [orgId]
+    );
+    const orgName = orgRes.rows[0]?.name || '';
+
+    // Derive the suggested default branch name
+    const safePart = orgName.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '') || 'Organization';
+    const defaultBranchName = safePart + '_Branch_Def';
+
+    res.json({
+      needsSetup: branchCount === 0,
+      branchCount,
+      orgName,
+      defaultBranchName,
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/**
+ * POST /api/branches/setup
+ * Performs the one-time branch setup for an organization that has just had
+ * branches enabled but has no branches yet.
+ *
+ * Body: { mode: 'custom' | 'default', branch_name?: string }
+ *
+ * Atomically:
+ *   1. Creates the branch.
+ *   2. Assigns all org users without a branch_id to the new branch.
+ *
+ * Idempotent: if the org already has branches, returns the existing state
+ * (HTTP 200) instead of failing — a retried/reopened wizard cannot create
+ * duplicates. The setup-status endpoint flips needsSetup=false at the same
+ * moment, so the wizard closes on its own.
+ */
+router.post('/setup', auth, rootAdminOnly, async (req, res) => {
+  try {
+    const orgId = req.user.organization_id;
+    const { mode, branch_name } = req.body;
+
+    if (!mode || !['custom', 'default'].includes(mode)) {
+      return res.status(400).json({ error: "mode must be 'custom' or 'default'" });
+    }
+
+    // Idempotency guard: if branches already exist, return the existing state.
+    // Safe repeat — no new branch, no re-assignment, no error surfaced to the UI.
+    const existingRes = await pool.query(
+      `SELECT id, org_id, name, code, location, address, is_active, created_at
+       FROM branches WHERE org_id = $1 AND is_active = TRUE
+       ORDER BY name LIMIT 1`,
+      [orgId]
+    );
+    if (existingRes.rows.length > 0) {
+      return res.status(200).json({
+        success: true,
+        already_configured: true,
+        branch: existingRes.rows[0],
+        employees_migrated: 0,
+      });
+    }
+
+    // Resolve the branch name
+    let finalName;
+    if (mode === 'custom') {
+      const trimmed = (branch_name || '').trim();
+      if (!trimmed) return res.status(400).json({ error: 'Branch name is required for custom mode' });
+      if (trimmed.length < 2) return res.status(400).json({ error: 'Branch name must be at least 2 characters' });
+      if (trimmed.length > 100) return res.status(400).json({ error: 'Branch name must be 100 characters or fewer' });
+      finalName = trimmed;
+    } else {
+      // default: <OrgName>_Branch_Def, sanitized
+      const orgRes = await pool.query(`SELECT name FROM organizations WHERE id = $1`, [orgId]);
+      const orgName = orgRes.rows[0]?.name || 'Organization';
+      const safePart = orgName.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '') || 'Organization';
+      finalName = safePart + '_Branch_Def';
+    }
+
+    const client = await pool.connect();
+    let branch;
+    let employeesMigrated = 0;
+    try {
+      await client.query('BEGIN');
+
+      // Create the branch
+      const branchInsert = await client.query(
+        `INSERT INTO branches (org_id, name, is_active) VALUES ($1, $2, TRUE) RETURNING *`,
+        [orgId, finalName]
+      );
+      branch = branchInsert.rows[0];
+
+      // Assign all org users without a branch_id to this new branch.
+      // This covers employees (and any admins) who have no branch assignment yet.
+      // Admins get org-wide access through hr_branch_access separately — this just
+      // records their home branch so employee-derived filtering works correctly.
+      const updateRes = await client.query(
+        `UPDATE users SET branch_id = $1 WHERE organization_id = $2 AND branch_id IS NULL`,
+        [branch.id, orgId]
+      );
+      employeesMigrated = updateRes.rowCount || 0;
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    res.status(201).json({
+      success: true,
+      branch,
+      employees_migrated: employeesMigrated,
+    });
+  } catch (err) {
+    if (err.code === '23505') {
+      return res.status(400).json({ error: 'A branch with this name already exists in your organization.' });
+    }
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Existing Branch CRUD (/:id must come after all specific named routes) ────
 
 // GET /api/branches — list all branches in org with HR admin assignment counts

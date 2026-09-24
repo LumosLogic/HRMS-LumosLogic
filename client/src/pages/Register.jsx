@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { Building2, User, Mail, Phone, Globe, MessageSquare, CheckCircle2, ArrowRight, Clock, FileText, Users, Briefcase, ChevronDown } from 'lucide-react';
+import { Building2, User, Mail, Phone, Globe, MessageSquare, CheckCircle2, ArrowRight, Clock, FileText, Users, Briefcase, ChevronDown, GitBranch } from 'lucide-react';
 import { apiPost } from '@/lib/api';
 
 const COMPANY_SIZES = [
@@ -82,6 +82,10 @@ function validateAll(form) {
   const pErr = validatePhoneVal(form.phone);
   if (pErr) errs.phone = pErr;
 
+  if (form.has_multiple_branches === null) {
+    errs.has_multiple_branches = 'Please answer this required question.';
+  }
+
   return errs;
 }
 
@@ -89,15 +93,16 @@ export default function Register() {
   const [step, setStep] = useState(1); // 1 = form, 2 = success
 
   const [form, setForm] = useState({
-    company_name: '',
-    name:         '',
-    email:        '',
-    phone:        '',
-    website:      '',
-    message:      '',
-    gst_number:   '',
-    company_size: '',
-    industry:     '',
+    company_name:          '',
+    name:                  '',
+    email:                 '',
+    phone:                 '',
+    website:               '',
+    message:               '',
+    gst_number:            '',
+    company_size:          '',
+    industry:              '',
+    has_multiple_branches: null, // null = unanswered; true = yes; false = no
   });
   const [loading,     setLoading]     = useState(false);
   const [error,       setError]       = useState('');
@@ -163,15 +168,16 @@ export default function Register() {
     setLoading(true);
     try {
       await apiPost('/register-org', {
-        company_name: form.company_name.trim(),
-        name:         form.name.trim(),
-        email:        form.email.trim(),
-        phone:        form.phone.trim()        || undefined,
-        website:      form.website.trim()      || undefined,
-        message:      form.message.trim()      || undefined,
-        gst_number:   form.gst_number.trim()   || undefined,
-        company_size: form.company_size        || undefined,
-        industry:     form.industry            || undefined,
+        company_name:          form.company_name.trim(),
+        name:                  form.name.trim(),
+        email:                 form.email.trim(),
+        phone:                 form.phone.trim()        || undefined,
+        website:               form.website.trim()      || undefined,
+        message:               form.message.trim()      || undefined,
+        gst_number:            form.gst_number.trim()   || undefined,
+        company_size:          form.company_size        || undefined,
+        industry:              form.industry            || undefined,
+        has_multiple_branches: form.has_multiple_branches === true,
       });
       setStep(2);
     } catch (err) {
@@ -396,6 +402,33 @@ export default function Register() {
                   placeholder="Tell us about your company…" value={form.message}
                   onChange={e => setOther('message', e.target.value)} />
               </div>
+            </div>
+
+            {/* Multiple Branches Question */}
+            <div>
+              <label className="form-label flex items-center gap-1.5">
+                <GitBranch size={13} className="text-[#777587]" />
+                Does your organization have multiple branches? <span className="text-rose-500">*</span>
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  { value: true,  label: 'Yes',   desc: 'Multiple offices / locations' },
+                  { value: false, label: 'No',    desc: 'Single workspace' },
+                ].map(opt => (
+                  <button key={String(opt.value)} type="button"
+                    onClick={() => setOther('has_multiple_branches', opt.value)}
+                    className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 text-sm font-bold transition-all
+                      ${form.has_multiple_branches === opt.value
+                        ? 'bg-[#f0f3ff] text-[#3525cd] border-[#3525cd]'
+                        : 'border-[#e7eefe] text-[#464555] hover:border-[#3525cd]/40'}`}>
+                    {opt.label}
+                    <span className="text-[0.68rem] font-normal text-[#777587]">{opt.desc}</span>
+                  </button>
+                ))}
+              </div>
+              {fieldErrors.has_multiple_branches && (
+                <p className="text-[0.72rem] text-rose-600 mt-1">{fieldErrors.has_multiple_branches}</p>
+              )}
             </div>
 
             {error && (

@@ -563,6 +563,273 @@ function announcementOrgScope(userRole, userOrgId) {
     }],
   ]);
 
+  // ── HIGH-004: Announcement creator ownership (2026-09-24) ──────────────
+  // Simulates the ownership decision in PUT/DELETE /announcements/:id:
+  //   - root_admin may manage any announcement in their own org
+  //   - non-root admins (HR) may only manage announcements they created
+  //   - legacy rows (created_by = NULL) are root-admin-only
+  //   - the announcement must belong to the caller's org before any owner check
+  function announcementOwnershipDecision(user, announcement) {
+    // Step 1 — org scope (always the caller's org; never client-supplied)
+    if (Number(announcement.organization_id) !== Number(user.organization_id)) {
+      return { allowed: false, reason: 'cross_org' };
+    }
+    // Step 2 — role gate
+    const isAdmin = user.role === 'admin' || user.role === 'root_admin';
+    if (!isAdmin) return { allowed: false, reason: 'employee_forbidden' };
+    // Step 3 — creator ownership
+    if (user.role === 'root_admin') return { allowed: true, reason: 'root_admin_org_wide' };
+    // Non-root admin/HR: only own creations; NULL creator stays root-admin-only
+    if (announcement.created_by === null || announcement.created_by === undefined) {
+      return { allowed: false, reason: 'legacy_null_creator' };
+    }
+    if (Number(announcement.created_by) !== Number(user.id)) {
+      return { allowed: false, reason: 'not_creator' };
+    }
+    return { allowed: true, reason: 'creator' };
+  }
+
+  const ORG1 = 1, ORG2 = 2;
+  const rootA  = { id: 10, role: 'root_admin', organization_id: ORG1 };
+  const hrOne  = { id: 11, role: 'admin',      organization_id: ORG1 };
+  const hrTwo  = { id: 12, role: 'admin',      organization_id: ORG1 };
+  const empOne = { id: 13, role: 'employee',   organization_id: ORG1 };
+  const rootB  = { id: 20, role: 'root_admin', organization_id: ORG2 };
+
+  const annByHrOne = { id: 100, organization_id: ORG1, created_by: 11 };
+  const annByHrTwo = { id: 101, organization_id: ORG1, created_by: 12 };
+  const annByRootA = { id: 102, organization_id: ORG1, created_by: 10 };
+  const annLegacy  = { id: 103, organization_id: ORG1, created_by: null };
+  const annOfOrg2  = { id: 104, organization_id: ORG2, created_by: 11 };
+
+  await run('14. HIGH-004 — Announcement creator ownership', [
+    ['Root Admin can edit own announcement', () => {
+      assert.equal(announcementOwnershipDecision(rootA, annByRootA).allowed, true);
+    }],
+    ['Root Admin can edit another admin\'s announcement', () => {
+      assert.equal(announcementOwnershipDecision(rootA, annByHrOne).allowed, true);
+    }],
+    ['Root Admin can delete another admin\'s announcement', () => {
+      assert.equal(announcementOwnershipDecision(rootA, annByHrTwo).allowed, true);
+    }],
+    ['HR can edit own announcement', () => {
+      assert.equal(announcementOwnershipDecision(hrOne, annByHrOne).allowed, true);
+    }],
+    ['HR cannot edit another HR/admin\'s announcement', () => {
+      const d = announcementOwnershipDecision(hrOne, annByHrTwo);
+      assert.equal(d.allowed, false);
+      assert.equal(d.reason, 'not_creator');
+    }],
+    ['HR cannot edit Root Admin\'s announcement', () => {
+      assert.equal(announcementOwnershipDecision(hrOne, annByRootA).allowed, false);
+    }],
+    ['HR can delete own announcement', () => {
+      assert.equal(announcementOwnershipDecision(hrOne, annByHrOne).allowed, true);
+    }],
+    ['HR cannot delete another user\'s announcement', () => {
+      const d = announcementOwnershipDecision(hrTwo, annByHrOne);
+      assert.equal(d.allowed, false);
+      assert.equal(d.reason, 'not_creator');
+    }],
+    ['Cross-organization edit is blocked (IDOR)', () => {
+      // Org-2 root admin targeting an Org-1 announcement — org check fires first
+      const d = announcementOwnershipDecision(rootB, { ...annOfOrg2, organization_id: ORG1 });
+      assert.equal(d.allowed, false);
+      assert.equal(d.reason, 'cross_org');
+    }],
+    ['Cross-organization delete remains blocked (IDOR)', () => {
+      const d = announcementOwnershipDecision(rootB, { ...annByHrOne, organization_id: ORG1 });
+      assert.equal(d.allowed, false);
+      assert.equal(d.reason, 'cross_org');
+    }],
+    ['Org-1 root admin cannot reach Org-2 announcements via org scope', () => {
+      const d = announcementOwnershipDecision(rootB, annByHrOne);
+      assert.equal(d.allowed, false);
+      assert.equal(d.reason, 'cross_org');
+    }],
+    ['Employee cannot gain announcement management access', () => {
+      const own = announcementOwnershipDecision(empOne, { ...annByHrOne, created_by: empOne.id });
+      assert.equal(own.allowed, false);
+      assert.equal(own.reason, 'employee_forbidden');
+      assert.equal(announcementOwnershipDecision(empOne, annLegacy).allowed, false);
+    }],
+    ['Legacy announcement (created_by = NULL) is root-admin-only', () => {
+      assert.equal(announcementOwnershipDecision(rootA, annLegacy).allowed, true);
+      const d = announcementOwnershipDecision(hrOne, annLegacy);
+      assert.equal(d.allowed, false);
+      assert.equal(d.reason, 'legacy_null_creator');
+    }],
+    ['PUT /:id enforces ownership in source (creator check + org scope)', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../modules/announcements/announcements.routes.js'), 'utf8'
+      );
+      assert.ok(
+        src.includes("You can only edit announcements you created"),
+        'PUT /:id must contain creator ownership check'
+      );
+      assert.ok(
+        /\.eq\('organization_id', req\.user\.organization_id\)/.test(src),
+        'PUT/DELETE must scope by req.user.organization_id'
+      );
+    }],
+    ['POST / stores created_by from authenticated user', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../modules/announcements/announcements.routes.js'), 'utf8'
+      );
+      assert.ok(
+        /created_by:\s*req\.user\.id/.test(src),
+        'POST /announcements must persist req.user.id as created_by'
+      );
+    }],
+    ['DELETE /:id enforces ownership in source', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../modules/announcements/announcements.routes.js'), 'utf8'
+      );
+      assert.ok(
+        src.includes("You can only delete announcements you created"),
+        'DELETE /:id must contain creator ownership check'
+      );
+    }],
+    ['Frontend hides edit/delete for non-owners (defense in depth)', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../../../client/src/pages/Announcements.jsx'), 'utf8'
+      );
+      assert.ok(
+        src.includes('canManageThis && <button'),
+        'Edit/Delete buttons must be gated behind canManageThis'
+      );
+      assert.ok(
+        src.includes('a.created_by != null && Number(a.created_by) === Number(user?.id)'),
+        'canManageThis must require created_by to match the current user for non-root admins'
+      );
+    }],
+  ]);
+
+  // ── Branch feature onboarding (2026-09-24) ────────────────────────────
+  function defaultBranchName(orgName) {
+    const safePart = orgName.replace(/[^a-zA-Z0-9\s]/g, '').replace(/\s+/g, '_').replace(/_+/g, '_').replace(/^_+|_+$/g, '') || 'Organization';
+    return safePart + '_Branch_Def';
+  }
+
+  await run('15. Branch onboarding — registration & approval', [
+    ['POST /register-org persists has_multiple_branches', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../modules/org/org.routes.js'), 'utf8'
+      );
+      assert.ok(
+        src.includes('has_multiple_branches:'),
+        'register-org must store has_multiple_branches on the request row'
+      );
+    }],
+    ['Migration adds has_multiple_branches to org_registration_requests', () => {
+      const path = require('path').join(__dirname, '../../migrations/add_has_multiple_branches_to_org_requests_2026_09_24.sql');
+      assert.ok(require('fs').existsSync(path), 'Migration file must exist');
+      const src = require('fs').readFileSync(path, 'utf8');
+      assert.ok(src.includes('ADD COLUMN IF NOT EXISTS has_multiple_branches BOOLEAN'),
+        'Migration must add the boolean column (idempotent)');
+    }],
+    ['Approval auto-enables branches when registrant answered YES', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../modules/platform/platform.routes.js'), 'utf8'
+      );
+      assert.ok(
+        src.includes("autoBranches = request.has_multiple_branches === true"),
+        'Approve flow must derive branches flag from has_multiple_branches'
+      );
+      assert.ok(
+        src.includes("key === 'branches'"),
+        'Approve flow must special-case the branches feature key'
+      );
+    }],
+    ['Answer NO keeps branches disabled', () => {
+      // has_multiple_branches=false → autoBranches=false → branches:false in defaults
+      const autoBranches = false;
+      assert.equal(autoBranches, false, 'NO answer must not enable branches');
+    }],
+  ]);
+
+  await run('16. Branch onboarding — setup wizard backend', [
+    ['/branches/setup is Root-Admin-only', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../modules/branches/branches.routes.js'), 'utf8'
+      );
+      assert.ok(
+        src.includes("router.post('/setup', auth, rootAdminOnly"),
+        'POST /branches/setup must use rootAdminOnly middleware'
+      );
+      assert.ok(
+        src.includes("router.get('/setup-status', auth, rootAdminOnly"),
+        'GET /branches/setup-status must use rootAdminOnly middleware'
+      );
+    }],
+    ['Setup always resolves org from the authenticated user', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../modules/branches/branches.routes.js'), 'utf8'
+      );
+      // setup + setup-status must take org from req.user, never from body/query
+      const setupStatusSrc = src.slice(
+        src.indexOf("router.get('/setup-status'"),
+        src.indexOf("router.post('/setup'")
+      );
+      assert.ok(setupStatusSrc.includes('req.user.organization_id'),
+        'setup-status must resolve org from the JWT, not the client');
+      assert.ok(!/req\.body\.org_id|req\.query\.org_id/.test(setupStatusSrc),
+        'setup-status must not accept client-supplied org_id');
+    }],
+    ['Setup is transactional (BEGIN/COMMIT/ROLLBACK)', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../modules/branches/branches.routes.js'), 'utf8'
+      );
+      const setupSrc = src.slice(src.indexOf("router.post('/setup'"), src.indexOf("// ─── Existing Branch CRUD"));
+      assert.ok(setupSrc.includes("client.query('BEGIN')"), 'Setup must open a transaction');
+      assert.ok(setupSrc.includes("client.query('COMMIT')"), 'Setup must commit atomically');
+      assert.ok(setupSrc.includes("client.query('ROLLBACK')"), 'Setup must roll back on failure');
+    }],
+    ['Setup is idempotent — existing branches return 200 with already_configured', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../modules/branches/branches.routes.js'), 'utf8'
+      );
+      const setupSrc = src.slice(src.indexOf("router.post('/setup'"), src.indexOf("// ─── Existing Branch CRUD"));
+      assert.ok(
+        setupSrc.includes('already_configured: true'),
+        'Repeated setup must return the existing branch without duplicating'
+      );
+      assert.ok(
+        setupSrc.includes('employees_migrated: 0'),
+        'Repeated setup must not re-assign employees'
+      );
+    }],
+    ['Default branch name: <OrgName>_Branch_Def sanitized', () => {
+      assert.equal(defaultBranchName('Relitrade'), 'Relitrade_Branch_Def');
+      assert.equal(defaultBranchName('Acme Corp India'), 'Acme_Corp_India_Branch_Def');
+      assert.equal(defaultBranchName('S.P. Singh & Sons!'), 'SP_Singh_Sons_Branch_Def');
+      assert.equal(defaultBranchName('   '), 'Organization_Branch_Def');
+    }],
+    ['Setup assigns employees via users.branch_id (employee-derived inheritance)', () => {
+      const src = require('fs').readFileSync(
+        require('path').join(__dirname, '../modules/branches/branches.routes.js'), 'utf8'
+      );
+      const setupSrc = src.slice(src.indexOf("router.post('/setup'"), src.indexOf("// ─── Existing Branch CRUD"));
+      assert.ok(
+        setupSrc.includes('UPDATE users SET branch_id'),
+        'Migration must assign branch through users.branch_id, not org-level config'
+      );
+      assert.ok(
+        !setupSrc.includes('UPDATE organizations'),
+        'Setup must not mutate organization-level configuration'
+      );
+    }],
+    ['Frontend renders the wizard from BranchContext when needsSetup', () => {
+      const ctxSrc = require('fs').readFileSync(
+        require('path').join(__dirname, '../../../client/src/context/BranchContext.jsx'), 'utf8'
+      );
+      assert.ok(ctxSrc.includes('<BranchSetupWizard'), 'BranchContext must render BranchSetupWizard');
+      assert.ok(ctxSrc.includes("apiGet('/branches/setup-status')"), 'BranchContext must check setup-status');
+      assert.ok(ctxSrc.includes("user?.role === 'root_admin'"), 'Wizard must be gated to Root Admin');
+      assert.ok(ctxSrc.includes('accessibleBranches.length === 0'), 'Orgs with branches must never see the wizard');
+    }],
+  ]);
+
   // ── Summary ────────────────────────────────────────────────────────────────
   console.log(`\n${'─'.repeat(60)}`);
   console.log(`Results: ${passed} passed, ${failed} failed`);

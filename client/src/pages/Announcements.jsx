@@ -365,6 +365,12 @@ function AnnouncementCard({ a, isAdmin, today, onEdit, onDelete, onPreview, onDu
   const isImage = a.file_url && (a.file_type?.startsWith('image/') || /\.(png|jpg|jpeg|webp|gif)$/i.test(a.file_url));
   const toast   = useToast();
   const qc      = useQueryClient();
+  const { user, isRootAdmin } = useAuth();
+
+  // Root Admin can manage any org announcement.
+  // Other admins can only manage announcements they created (non-null created_by matching own id).
+  // Legacy announcements with created_by = null are root-admin-only.
+  const canManageThis = isAdmin && (isRootAdmin || (a.created_by != null && Number(a.created_by) === Number(user?.id)));
   // BUG_094: fade highlight out after 3 seconds
   const [lit, setLit] = useState(!!isHighlighted);
   const [markedRead, setMarkedRead] = useState(false);
@@ -400,10 +406,11 @@ function AnnouncementCard({ a, isAdmin, today, onEdit, onDelete, onPreview, onDu
               </div>
               {isAdmin && (
                 <div className="flex gap-1 flex-shrink-0">
-                  {/* EHN_ANN_007: Duplicate button */}
+                  {/* Duplicate: any admin with create permission can duplicate */}
                   {onDuplicate && <button className="btn btn-ghost btn-icon text-[#777587] hover:text-emerald-600" title="Duplicate announcement" onClick={() => onDuplicate(a)}><Copy size={13} /></button>}
-                  <button className="btn btn-ghost btn-icon text-[#777587] hover:text-[#3525cd]" onClick={() => onEdit(a)}><Pencil size={13} /></button>
-                  <button className="btn btn-ghost btn-icon text-[#777587] hover:text-rose-500" onClick={() => onDelete({ id: a.id, name: a.title })}><Trash2 size={13} /></button>
+                  {/* Edit/Delete: root admin can manage all; others only their own */}
+                  {canManageThis && <button className="btn btn-ghost btn-icon text-[#777587] hover:text-[#3525cd]" onClick={() => onEdit(a)}><Pencil size={13} /></button>}
+                  {canManageThis && <button className="btn btn-ghost btn-icon text-[#777587] hover:text-rose-500" onClick={() => onDelete({ id: a.id, name: a.title })}><Trash2 size={13} /></button>}
                 </div>
               )}
             </div>

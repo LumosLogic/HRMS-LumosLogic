@@ -293,11 +293,16 @@ router.post('/requests/:id/approve', platformAdminAuth, async (req, res) => {
       console.error('[platform] seedSystemRolesForOrg failed for org', org.id, err.message)
     );
 
-    // Seed default feature flags — biometric suite OFF by default on free plan
+    // Seed default feature flags — biometric suite OFF by default on free plan.
+    // If the registrant answered YES to "multiple branches", auto-enable the
+    // branches feature so the Root Admin enters the setup wizard on first login.
+    const autoBranches = request.has_multiple_branches === true;
     const defaultFeatureFlags = ALL_FEATURE_KEYS.map(key => ({
       organization_id: org.id,
       feature_key: key,
-      enabled: !BIOMETRIC_FEATURES.includes(key), // biometric/branches/statutory = false
+      enabled: key === 'branches'
+        ? autoBranches                         // auto-enable when registrant requested it
+        : !BIOMETRIC_FEATURES.includes(key),  // biometric/statutory = false; rest = true
       updated_at: new Date().toISOString(),
     }));
     await db.from('organization_features')

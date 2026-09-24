@@ -23,7 +23,7 @@ const PHONE_RE = /^[+]?[\d\s()\-.]{6,20}$/;
 // ─── Organization Registration (creates pending request, not live org) ────────
 router.post('/register-org', rateLimiter(LIMITS.ORG_REGISTER), async (req, res) => {
   try {
-    const { company_name, name, email, phone, website, message, gst_number, company_size, industry } = req.body;
+    const { company_name, name, email, phone, website, message, gst_number, company_size, industry, has_multiple_branches } = req.body;
     if (!company_name || !name || !email)
       return res.status(400).json({ error: 'Company name, your name, and email are required' });
 
@@ -93,14 +93,15 @@ router.post('/register-org', rateLimiter(LIMITS.ORG_REGISTER), async (req, res) 
 
     const { data: request, error: reqErr } = await db.from('org_registration_requests')
       .insert({
-        company_name: companyTrim, contact_name: nameTrim, email: norm,
-        phone:        phoneTrim    || null,
-        website:      website      || null,
-        message:      message      || null,
-        gst_number:   gstNorm      || null,
-        company_size: company_size || null,
-        industry:     industry     || null,
-        ip_address:   ip,
+        company_name:          companyTrim, contact_name: nameTrim, email: norm,
+        phone:                 phoneTrim    || null,
+        website:               website      || null,
+        message:               message      || null,
+        gst_number:            gstNorm      || null,
+        company_size:          company_size || null,
+        industry:              industry     || null,
+        ip_address:            ip,
+        has_multiple_branches: has_multiple_branches === true || has_multiple_branches === 'true',
       })
       .select().single();
     if (reqErr) throw new Error(reqErr.message);
