@@ -1272,7 +1272,11 @@ export default function Reports() {
       {/* Renders the same shared OrgCalendarPanel used by /root/calendar.       */}
       {/* Branch context is respected automatically; Reports filters are ignored. */}
       {calModalOpen && (
-        <div className="fixed inset-0 z-40 bg-white flex flex-col overflow-hidden">
+        <>
+          {/* Backdrop — clicking it closes the drawer */}
+          <div className="fixed inset-0 z-40 bg-black/20" onClick={() => setCalModalOpen(false)} />
+          {/* Right-side drawer — sits on top of Reports, does not cover the sidebar */}
+          <div className="fixed top-0 right-0 bottom-0 z-50 w-[65%] bg-white flex flex-col shadow-2xl border-l border-[#e7eefe]">
           {/* Header bar */}
           <div className="flex items-center justify-between px-5 py-3 border-b border-[#e7eefe] bg-white shadow-sm flex-shrink-0">
             <div>
@@ -1298,7 +1302,8 @@ export default function Reports() {
               }}
             />
           </div>
-        </div>
+          </div>{/* end drawer */}
+        </>
       )}
 
     </div>
