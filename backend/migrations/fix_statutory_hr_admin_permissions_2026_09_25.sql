@@ -8,13 +8,14 @@
 BEGIN;
 
 -- Ensure statutory permissions exist in the permissions table
-INSERT INTO permissions (module_key, action, description)
+-- (Skipped silently if they already exist from phase3_07_statutory_compliance.sql)
+INSERT INTO permissions (module_key, action, label, description)
 VALUES
-  ('statutory', 'view',   'View compliance dashboard and statutory reports'),
-  ('statutory', 'manage', 'Configure statutory settings and generate reports')
+  ('statutory', 'view',      'View Statutory',      'View compliance dashboard and statutory reports'),
+  ('statutory', 'configure', 'Configure Statutory', 'Configure statutory settings and generate reports')
 ON CONFLICT (module_key, action) DO NOTHING;
 
--- Grant statutory.view to hr_admin system role in ALL orgs
+-- Grant statutory.view + statutory.configure to hr_admin system role in ALL orgs
 INSERT INTO role_permissions (role_id, permission_id)
 SELECT r.id, p.id
 FROM roles r
@@ -22,7 +23,7 @@ CROSS JOIN permissions p
 WHERE r.is_system_role = true
   AND r.slug = 'hr_admin'
   AND p.module_key = 'statutory'
-  AND p.action = 'view'
+  AND p.action IN ('view', 'configure')
 ON CONFLICT DO NOTHING;
 
 -- Record migration
