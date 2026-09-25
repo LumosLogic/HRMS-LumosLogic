@@ -135,8 +135,19 @@ BEGIN
     RAISE EXCEPTION 'ABORT: % payslip(s) have no matching user row. Fix data first.', v_leftover;
   END IF;
 
-  SELECT COUNT(DISTINCT branch_id) INTO v_branches
-  FROM payroll_runs_split_users_20260925 WHERE run_id = c_run_id;
+  -- NOTE: computed from source tables directly — the split-map tables do not
+  -- exist until Step A below (fix for the 'relation does not exist' guard bug).
+  SELECT COUNT(DISTINCT branch_id) INTO v_branches FROM (
+    SELECT u.branch_id
+    FROM payslips ps
+    JOIN users u ON u.id = ps.user_id AND u.organization_id = ps.organization_id
+    WHERE ps.organization_id = c_org_id AND ps.payroll_run_id = c_run_id
+    UNION
+    SELECT u.branch_id
+    FROM payroll_run_employees pre
+    JOIN users u ON u.id = pre.user_id AND u.organization_id = pre.organization_id
+    WHERE pre.organization_id = c_org_id AND pre.payroll_run_id = c_run_id
+  ) src;
   IF v_branches < 2 THEN
     RAISE EXCEPTION 'ABORT: run % spans % branch(es) — single-branch case. Use the simple backfill instead.', c_run_id, v_branches;
   END IF;
@@ -147,7 +158,17 @@ BEGIN
     SELECT 1
     FROM payroll_runs pr
     JOIN (
-      SELECT DISTINCT branch_id FROM payroll_runs_split_users_20260925 WHERE run_id = c_run_id
+      SELECT DISTINCT branch_id FROM (
+        SELECT u.branch_id
+        FROM payslips ps
+        JOIN users u ON u.id = ps.user_id AND u.organization_id = ps.organization_id
+        WHERE ps.organization_id = c_org_id AND ps.payroll_run_id = c_run_id
+        UNION
+        SELECT u.branch_id
+        FROM payroll_run_employees pre
+        JOIN users u ON u.id = pre.user_id AND u.organization_id = pre.organization_id
+        WHERE pre.organization_id = c_org_id AND pre.payroll_run_id = c_run_id
+      ) src
     ) b ON b.branch_id = pr.branch_id
     WHERE pr.organization_id = c_org_id AND pr.month = c_month AND pr.year = c_year
   ) THEN
