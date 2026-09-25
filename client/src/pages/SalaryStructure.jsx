@@ -715,8 +715,14 @@ function downloadSalaryStructuresCSV(employees) {
                   n(e.medical_allowance) + n(e.special_allowance) + n(e.other_allowance);
     const totalDed = n(e.employee_pf) + n(e.employee_esi) + n(e.professional_tax) +
                      n(e.tds) + n(e.retention) + n(e.other_deductions);
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const fmtD = ds => {
+      if (!ds) return '';
+      const d = new Date(String(ds).slice(0, 10) + 'T12:00:00');
+      return isNaN(d.getTime()) ? String(ds) : `${String(d.getDate()).padStart(2,'0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
+    };
     return [
-      e.employee_id || '',
+      e.employee_id || e.id || '',
       e.name || '',
       e.department || '',
       n(e.basic), n(e.hra), n(e.da), n(e.transport_allowance), n(e.medical_allowance),
@@ -725,7 +731,7 @@ function downloadSalaryStructuresCSV(employees) {
       n(e.retention), n(e.other_deductions), totalDed,
       n(e.employer_pf), n(e.employer_esi),
       n(e.ctc) || (gross + n(e.employer_pf) + n(e.employer_esi)),
-      e.effective_from ? String(e.effective_from).split('T')[0] : '',
+      fmtD(e.effective_from),
     ];
   });
 

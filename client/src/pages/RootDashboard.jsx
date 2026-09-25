@@ -74,7 +74,7 @@ const PRIORITY_BADGE = {
 
 const QUICK_ACTIONS = [
   { label: 'Add Employee',   to: '/root/employees?action=add',   icon: <UserPlus size={11} />,     color: 'bg-[#f0f3ff] text-[#3525cd]' },
-  { label: 'Manage Admins', to: '/root/manage-hr',              icon: <ShieldCheck size={11} />,  color: 'bg-purple-50 text-purple-600' },
+  { label: 'Manage HR Admins', to: '/root/manage-hr',              icon: <ShieldCheck size={11} />,  color: 'bg-purple-50 text-purple-600' },
   { label: 'Add Department', to: '/root/departments?action=add', icon: <Building2 size={11} />,    color: 'bg-sky-50 text-sky-600' },
   { label: 'Add Holiday',    to: '/root/holidays?action=add',    icon: <CalendarDays size={11} />, color: 'bg-amber-50 text-amber-600' },
   { label: 'Manage Shifts',  to: '/root/shifts',                 icon: <Clock size={11} />,        color: 'bg-indigo-50 text-indigo-600' },
@@ -1108,9 +1108,9 @@ export default function RootDashboard() {
                       Employee <SortIcon col="name" sort={yearlySort} />
                     </button>
                   </th>
-                  <th className="px-4 py-3 text-left hidden sm:table-cell">
+                  <th className="px-4 py-3 text-left">
                     <button onClick={() => toggleSort('department')}
-                      className="flex items-center gap-1 text-xs font-bold text-[#777587] uppercase tracking-wider hover:text-[#3525cd] transition-colors">
+                      className="flex items-center gap-1 text-xs font-bold text-[#777587] uppercase tracking-wider hover:text-[#3525cd] transition-colors whitespace-nowrap">
                       Department <SortIcon col="department" sort={yearlySort} />
                     </button>
                   </th>
@@ -1126,7 +1126,7 @@ export default function RootDashboard() {
                       Remaining <SortIcon col="remainingDays" sort={yearlySort} />
                     </button>
                   </th>
-                  <th className="px-5 py-3 text-left text-xs font-bold text-[#777587] uppercase tracking-wider w-44 hidden md:table-cell">
+                  <th className="px-5 py-3 text-left text-xs font-bold text-[#777587] uppercase tracking-wider w-44">
                     Progress
                   </th>
                 </tr>
@@ -1154,7 +1154,7 @@ export default function RootDashboard() {
                           </div>
                         </div>
                       </td>
-                      <td className="px-4 py-3 text-xs text-[#464555] hidden sm:table-cell">{emp.department || '—'}</td>
+                      <td className="px-4 py-3 text-xs text-[#464555] whitespace-nowrap">{emp.department || '—'}</td>
                       <td className="px-4 py-3 text-center">
                         <span className="text-sm font-black text-[#151c27]">{emp.usedDays}</span>
                         <span className="text-xs text-[#777587]"> / {emp.totalDays}</span>
@@ -1162,7 +1162,7 @@ export default function RootDashboard() {
                       <td className="px-4 py-3 text-center">
                         <span className={`text-sm font-black ${remColor}`}>{emp.remainingDays}</span>
                       </td>
-                      <td className="px-5 py-3 hidden md:table-cell">
+                      <td className="px-5 py-3">
                         <div className="flex items-center gap-2">
                           <div className="flex-1 bg-[#e7eefe] rounded-full h-1.5 overflow-hidden">
                             <div className={`h-1.5 rounded-full transition-all ${barColor}`} style={{ width: `${pct}%` }} />

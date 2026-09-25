@@ -230,9 +230,14 @@ export function OrgCalendarPanel({ initialDate, initialDayModal = null, initialD
         {mode === 'month' && (
           <button className="btn btn-outline btn-sm" title="Export month attendance"
             onClick={() => {
+              const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+              const fmtD = ds => {
+                const d = new Date(ds + 'T12:00:00');
+                return isNaN(d.getTime()) ? ds : `${String(d.getDate()).padStart(2,'0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
+              };
               const rows = [['Date','Employee','Status','Check In','Check Out']];
               Object.entries(grouped).forEach(([d, recs]) => {
-                recs.forEach(r => rows.push([d, r.name || '', r.status || '', r.check_in || '', r.check_out || '']));
+                recs.forEach(r => rows.push([fmtD(d), r.name || '', r.status || '', r.check_in || '', r.check_out || '']));
               });
               const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
               const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });

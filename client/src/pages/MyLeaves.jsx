@@ -672,16 +672,23 @@ export default function MyLeaves() {
   }
 
   // Export CSV
+  function fmtDateForCSV(dateStr) {
+    if (!dateStr) return '';
+    const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    const d = new Date(String(dateStr).slice(0, 10) + 'T12:00:00');
+    if (isNaN(d.getTime())) return String(dateStr);
+    return `${String(d.getDate()).padStart(2,'0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
+  }
   function exportCSV() {
     const headers = ['Type', 'Status', 'From', 'To', 'Days', 'Applied Date', 'Reason'];
     const rows = sortedLeaves.map(l => {
       const wfh   = isWFHRecord(l);
       const wdays = wfh ? 1 : (l.leave_time === 'half' ? 0.5 : countWorkingDaysInRange(l.start_date, l.end_date));
       const type  = wfh ? 'WFH' : leaveLabel(l.leave_type);
-      const appliedDate = l.created_at ? new Date(l.created_at).toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' }) : '';
+      const appliedDate = l.created_at ? fmtDateForCSV(l.created_at) : '';
       // Escape commas/quotes in reason
       const reason = l.reason ? `"${l.reason.replace(/"/g, '""')}"` : '';
-      return [type, l.status, l.start_date, l.end_date, wdays, appliedDate, reason].join(',');
+      return [type, l.status, fmtDateForCSV(l.start_date), fmtDateForCSV(l.end_date), wdays, appliedDate, reason].join(',');
     });
     const csv = [headers.join(','), ...rows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });

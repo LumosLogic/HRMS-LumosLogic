@@ -31,20 +31,20 @@ const DEPT_COLORS = [
 
 function KpiCard({ icon: Icon, label, value, sub, accent, trend }) {
   return (
-    <div className="bg-white rounded-xl border border-[#e2e0f0] p-5 shadow-sm">
+    <div className="bg-white rounded-xl border border-[#e2e0f0] p-4 sm:p-5 shadow-sm min-w-0">
       <div className="flex items-start justify-between mb-3">
-        <div className={`w-9 h-9 rounded-lg flex items-center justify-center ${accent || 'bg-[#f0f3ff]'}`}>
-          <Icon size={18} className="text-[#3525cd]" />
+        <div className={`w-8 h-8 sm:w-9 sm:h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${accent || 'bg-[#f0f3ff]'}`}>
+          <Icon size={16} className="text-[#3525cd]" />
         </div>
         {trend !== undefined && (
-          <span className={`text-[0.65rem] font-black px-2 py-0.5 rounded-full ${trend >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
+          <span className={`text-[0.6rem] font-black px-1.5 py-0.5 rounded-full ${trend >= 0 ? 'bg-emerald-50 text-emerald-700' : 'bg-rose-50 text-rose-700'}`}>
             {trend >= 0 ? '+' : ''}{trend}%
           </span>
         )}
       </div>
-      <p className="text-[0.65rem] font-black uppercase tracking-widest text-[#777587]">{label}</p>
-      <p className="text-2xl font-black text-[#151c27] mt-1">{value}</p>
-      {sub && <p className="text-[0.7rem] text-[#777587] mt-1">{sub}</p>}
+      <p className="text-[0.6rem] sm:text-[0.65rem] font-black uppercase tracking-widest text-[#777587] break-words">{label}</p>
+      <p className="text-lg sm:text-2xl font-black text-[#151c27] mt-1 break-all">{value}</p>
+      {sub && <p className="text-[0.65rem] text-[#777587] mt-1">{sub}</p>}
     </div>
   );
 }

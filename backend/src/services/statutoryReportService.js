@@ -37,7 +37,7 @@ async function getPFECR({ organizationId, month, year }) {
 
   const { rows } = await pool.query(
     `SELECT
-         u.employee_id,
+         COALESCE(u.employee_id, u.id::TEXT) AS employee_id,
          u.name            AS member_name,
          u.uan_number,
          u.pan_number,
@@ -104,7 +104,7 @@ async function getESIReturn({ organizationId, month, year }) {
 
   const { rows } = await pool.query(
     `SELECT
-         u.employee_id,
+         COALESCE(u.employee_id, u.id::TEXT) AS employee_id,
          u.name         AS employee_name,
          u.esi_number,
          ps.gross_salary,
@@ -149,7 +149,7 @@ async function getPTChallan({ organizationId, month, year }) {
 
   const { rows } = await pool.query(
     `SELECT
-         u.employee_id,
+         COALESCE(u.employee_id, u.id::TEXT) AS employee_id,
          u.name          AS employee_name,
          u.department,
          ps.gross_salary,
@@ -185,14 +185,14 @@ async function getTDSChallan({ organizationId, month, year }) {
 
   const { rows } = await pool.query(
     `SELECT
-         u.employee_id,
+         COALESCE(u.employee_id, u.id::TEXT) AS employee_id,
          u.name          AS employee_name,
          u.pan_number,
          ps.gross_salary,
          ps.tds           AS monthly_tds,
          ps.tds_annual_projected,
          ps.tds_ytd,
-         ps.regime
+         COALESCE(ps.regime, 'old') AS regime
        FROM payslips ps
        JOIN users u ON u.id = ps.user_id
       WHERE ps.organization_id = $1
@@ -214,7 +214,7 @@ async function getTDSChallan({ organizationId, month, year }) {
       monthly_tds:    round2(r.monthly_tds || 0),
       annual_projected: round2(r.tds_annual_projected || 0),
       ytd_tds:        round2(r.tds_ytd || 0),
-      regime:         r.regime || '',
+      regime:         r.regime || 'old',
     })),
     total_tds: round2(total),
   };
@@ -230,7 +230,7 @@ async function getForm16Dataset({ organizationId, financialYear }) {
 
   const { rows } = await pool.query(
     `SELECT
-         u.employee_id,
+         COALESCE(u.employee_id, u.id::TEXT) AS employee_id,
          u.name          AS employee_name,
          u.pan_number,
          u.department,
@@ -252,7 +252,7 @@ async function getForm16Dataset({ organizationId, financialYear }) {
               (ps.year = $2 AND ps.month::int >= 4) OR
               (ps.year = $3 AND ps.month::int <= 3)
             )
-      GROUP BY u.employee_id, u.name, u.pan_number, u.department, u.position
+      GROUP BY u.id, u.employee_id, u.name, u.pan_number, u.department, u.position
       ORDER BY u.name`,
     [oId, startYear, endYear]
   );
@@ -272,7 +272,7 @@ async function getForm16Dataset({ organizationId, financialYear }) {
     annual_deductions: round2(r.annual_deductions),
     annual_net:     round2(r.annual_net),
     projected_tax:  round2(r.projected_tax),
-    regime:         r.regime || '',
+    regime:         r.regime || 'old',
   }));
 }
 

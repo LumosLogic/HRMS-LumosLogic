@@ -314,9 +314,10 @@ export default function Reports() {
   // When navigating from Calendar → View Attendance, month and year are passed as URL params
   const preselectedMonth = parseInt(searchParams.get('month')) || null;
   const preselectedYear  = parseInt(searchParams.get('year'))  || null;
+  const preselectedSection = searchParams.get('section') || null;
 
   // ── Filters & UI state ────────────────────────────────────────────────────────
-  const [active,          setActive]          = useState('attendance');
+  const [active,          setActive]          = useState(preselectedSection || 'attendance');
   const [viewMode,        setViewMode]        = useState('monthly');
   const [year,            setYear]            = useState(preselectedYear  || now.getFullYear());
   const [month,           setMonth]           = useState(preselectedMonth || now.getMonth() + 1);
@@ -590,7 +591,10 @@ export default function Reports() {
     } else if (statusFilter) {
       rows = rows.filter(r => r.status === statusFilter);
     }
-    if (leaveTypeFilter) rows = rows.filter(r => r.leave_type === leaveTypeFilter);
+    if (leaveTypeFilter) {
+      const types = leaveTypeFilter.split(',').filter(Boolean);
+      if (types.length > 0) rows = rows.filter(r => types.includes(r.leave_type));
+    }
     return sortRows(rows, sort);
   }, [effectiveLeaveRows, deptFilter, statusFilter, leaveTypeFilter, sort]);
 
@@ -829,10 +833,18 @@ export default function Reports() {
                 <option value="rejected">Rejected</option>
                 <option value="cancelled">Cancelled</option>
               </select>
-              <select value={leaveTypeFilter} onChange={e => setLeaveTypeFilter(e.target.value)}
-                className="form-control w-auto text-xs py-1.5">
-                <option value="">All Leave Types</option>
-                {LEAVE_TYPES.map(t => <option key={t} value={t}>{t}</option>)}
+              <select
+                multiple
+                size={Math.min(LEAVE_TYPES.length + 1, 5)}
+                value={leaveTypeFilter ? leaveTypeFilter.split(',') : []}
+                onChange={e => {
+                  const vals = Array.from(e.target.selectedOptions, o => o.value);
+                  setLeaveTypeFilter(vals.join(','));
+                }}
+                title="Hold Ctrl/Cmd to select multiple types"
+                className="form-control w-auto text-xs"
+              >
+                {LEAVE_TYPES.map(t => <option key={t} value={t} className="capitalize">{t}</option>)}
               </select>
             </>
           )}

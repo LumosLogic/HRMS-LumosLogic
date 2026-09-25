@@ -265,10 +265,10 @@ router.get('/dashboard', auth, rootAdminOnly, withBranchContext, async (req, res
         .eq('organization_id', oid),
     ]);
 
-    // BUG_117: separate active vs all employees; exclude resigned/terminated from active count
+    // BUG_117: separate active vs all employees; exclude resigned/terminated/inactive from active count
     const allEmployees = allEmployeesRaw || [];
     const activeEmployees = allEmployees.filter(e =>
-      e.role !== 'admin' && !['resigned', 'terminated'].includes(e.employee_status)
+      e.role !== 'admin' && !['resigned', 'terminated', 'inactive'].includes(e.employee_status)
     );
     const totalEmployees = activeEmployees.length;
 

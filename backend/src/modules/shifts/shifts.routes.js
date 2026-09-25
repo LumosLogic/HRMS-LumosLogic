@@ -171,7 +171,20 @@ router.post('/assignments/range', auth, withBranchContext, hasPermission('shifts
       return res.json({ conflicts, created: 0, needs_confirmation: true });
     }
 
-    // ── Upsert all rows ───────────────────────────────────────────────────────
+    // ── Delete any existing assignments for these employees on these dates ────
+    // This ensures a clean shift transition: employee is removed from their old
+    // shift before being placed in the new one, regardless of DB constraint type.
+    if (safeEmpIds.length > 0 && validDates.length > 0) {
+      const { error: delErr } = await db
+        .from('shift_assignments')
+        .delete()
+        .eq('organization_id', oId)
+        .in('user_id', safeEmpIds)
+        .in('date', validDates);
+      if (delErr) throw delErr;
+    }
+
+    // ── Insert new shift rows ─────────────────────────────────────────────────
     const rows = [];
     validDates.forEach(date =>
       safeEmpIds.forEach(userId =>
@@ -181,7 +194,7 @@ router.post('/assignments/range', auth, withBranchContext, hasPermission('shifts
 
     const { data, error } = await db
       .from('shift_assignments')
-      .upsert(rows, { onConflict: 'user_id,date,organization_id' })
+      .insert(rows)
       .select();
     if (error) throw error;
 

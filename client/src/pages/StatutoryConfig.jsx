@@ -78,9 +78,10 @@ export default function StatutoryConfig() {
   const toast = useToast();
   const qc    = useQueryClient();
 
-  const { data: raw, isLoading } = useQuery({
+  const { data: raw, isLoading, isError, error } = useQuery({
     queryKey: ['statutory-config'],
     queryFn:  () => apiGet('/statutory/config'),
+    retry: false,
   });
 
   // Local state per section
@@ -129,6 +130,29 @@ export default function StatutoryConfig() {
     await fn();
     setSaving(s => ({ ...s, [key]: false }));
   };
+
+  if (isError) {
+    const msg = error?.message || '';
+    const isPermission = msg.includes('permission') || msg.includes('403');
+    return (
+      <div className="space-y-5">
+        <div className="page-header"><div className="page-title">Statutory Compliance Config</div></div>
+        <div className="flex flex-col items-center justify-center py-20 text-center">
+          <div className="w-12 h-12 rounded-xl bg-amber-50 flex items-center justify-center mb-4">
+            <span className="text-amber-600 text-2xl">⚠️</span>
+          </div>
+          <p className="text-lg font-black text-[#151c27] mb-2">
+            {isPermission ? 'Access Restricted' : 'Page Failed to Load'}
+          </p>
+          <p className="text-sm text-[#777587] max-w-sm">
+            {isPermission
+              ? 'You do not have permission to access Statutory Configuration. Please ask your Root Admin to grant you the required access.'
+              : 'Failed to load statutory configuration. Please refresh the page.'}
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   if (isLoading || !pf) {
     return (

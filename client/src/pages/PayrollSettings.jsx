@@ -580,7 +580,7 @@ export default function PayrollSettings() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className={`space-y-5${dirty ? ' pb-20' : ''}`}>
       {/* Header */}
       <div className="page-header">
         <div>

@@ -304,7 +304,7 @@ function WorkSchedulePanel({ schedule, isAdmin, onSaved }) {
                   {mutation.isPending ? <><span className="spinner w-4 h-4" /> Saving…</> : 'Save Work Schedule'}
                 </button>
                 {/* EHN_SETTING_004: Link to Holiday Calendar */}
-                <a href="/root/holidays" className="btn btn-outline flex items-center gap-1.5 text-xs">
+                <a href={isRootAdmin ? '/root/holidays' : '/holidays'} className="btn btn-outline flex items-center gap-1.5 text-xs">
                   <CalendarDays size={13} />View Holiday Calendar
                 </a>
               </div>
@@ -1301,7 +1301,7 @@ function firstVisible(role) {
 
 // ─── Main Settings Page ───────────────────────────────────────────────────────
 export default function Settings() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, isRootAdmin } = useAuth();
   const role = user?.role || 'employee';
 
   const { data, isLoading, refetch } = useQuery({

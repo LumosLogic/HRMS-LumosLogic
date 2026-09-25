@@ -307,10 +307,22 @@ function ReceiptViewer({ url, onClose }) {
             <span className="font-black text-sm text-[#151c27]">Receipt</span>
           </div>
           <div className="flex items-center gap-2">
-            <a href={url} download target="_blank" rel="noopener noreferrer"
+            <button
+              onClick={async () => {
+                try {
+                  const res = await fetch(url);
+                  const blob = await res.blob();
+                  const blobUrl = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = blobUrl;
+                  a.download = 'receipt';
+                  a.click();
+                  URL.revokeObjectURL(blobUrl);
+                } catch { window.open(url, '_blank'); }
+              }}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#c7c4d8] text-xs font-bold text-[#464555] hover:bg-[#f0f3ff] hover:border-[#3525cd] transition-all">
               <Download size={13} /> Download
-            </a>
+            </button>
             <button onClick={onClose}
               className="p-1.5 rounded-lg text-[#777587] hover:text-[#151c27] hover:bg-[#f0f3ff] transition-colors">
               <XIcon size={16} />
@@ -496,7 +508,7 @@ export default function ExpensesPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-3 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
         {[
           { label: 'Total Claims',    value: fmt(totalAmt),    color: 'from-[#f0f3ff] to-[#e7eefe]',    top: '#3525cd', text: 'text-[#3525cd]' },
           { label: 'Pending',         value: fmt(pendingAmt),  color: 'from-amber-50 to-amber-100',      top: '#F59E0B', text: 'text-amber-700' },

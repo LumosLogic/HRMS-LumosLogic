@@ -2216,7 +2216,10 @@ function AccountSection() {
           currentUrl={user?.avatar_url || null}
           initials={initials(name || user?.name || '')}
           color={color}
-          onUploaded={url => saveAuth(token, { ...user, avatar_url: url })}
+          onUploaded={url => {
+            saveAuth(token, { ...user, avatar_url: url });
+            queryClient.invalidateQueries({ queryKey: ['profile-overview', user?.id] });
+          }}
         />
         <div className="mb-4">
           <label className="form-label mb-2">Avatar Color</label>

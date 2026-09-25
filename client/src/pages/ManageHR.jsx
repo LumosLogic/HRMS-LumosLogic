@@ -17,7 +17,7 @@ function HRFormModal({ open, onClose, editing }) {
   const [form, setForm] = useState(editing || INITIAL);
   const [showPw, setShowPw] = useState(false);
 
-  React.useEffect(() => { setForm(editing ? { ...editing, password: '' } : INITIAL); }, [editing]);
+  React.useEffect(() => { if (open) setForm(editing ? { ...editing, password: '' } : INITIAL); }, [editing, open]);
 
   const save = useMutation({
     mutationFn: () => {
@@ -72,7 +72,7 @@ function HRFormModal({ open, onClose, editing }) {
           </div>
           <div className="col-span-2">
             <label className="form-label">Official Email</label>
-            <input className="form-control" type="email" value={form.email} onChange={e => set('email', e.target.value)} placeholder="hr@company.com" />
+            <input className="form-control" type="email" autoComplete="new-password" value={form.email} onChange={e => set('email', e.target.value)} placeholder="hr@company.com" />
           </div>
           <div className="col-span-2">
             <label className="form-label">{editing ? 'New Password (leave blank to keep)' : 'Password'}</label>

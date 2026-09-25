@@ -336,10 +336,20 @@ function PreviewModal({ doc, onClose }) {
             <p className="font-black text-[#151c27] text-sm truncate">{doc.name || doc.file_name}</p>
             <p className="text-xs text-[#777587]">{fmtBytes(doc.file_size)} · {type}</p>
           </div>
-          <a href={url} download target="_blank" rel="noopener noreferrer"
+          <button
+            onClick={async () => {
+              try {
+                const r = await fetch(url);
+                const blob = await r.blob();
+                const blobUrl = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = blobUrl; a.download = 'document'; a.click();
+                URL.revokeObjectURL(blobUrl);
+              } catch { window.open(url, '_blank'); }
+            }}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-[#3525cd] bg-[#f0f3ff] hover:bg-[#e7eefe] transition-colors">
             <Download size={12} /> Download
-          </a>
+          </button>
           <button onClick={onClose} className="p-2 rounded-lg text-[#777587] hover:bg-[#f0f3ff] transition-colors"><X size={18} /></button>
         </div>
         <div className="flex-1 overflow-auto bg-[#f9f9ff] flex items-center justify-center p-4">
@@ -1369,14 +1379,9 @@ function EmployeeRequirementsTab() {
 
   return (
     <div>
-      <div className="flex items-center justify-between mb-5">
-        <div>
-          <p className="text-sm font-black text-[#151c27]">Document Requirements</p>
-          <p className="text-xs text-[#777587]">Define documents employees must upload for compliance.</p>
-        </div>
-        <button className="btn btn-primary" onClick={() => setModal('create')}>
-          <Plus size={14} /> Create Requirement
-        </button>
+      <div className="mb-5">
+        <p className="text-sm font-black text-[#151c27]">Document Requirements</p>
+        <p className="text-xs text-[#777587]">Define documents employees must upload for compliance.</p>
       </div>
 
       {isLoading ? (
@@ -1390,6 +1395,7 @@ function EmployeeRequirementsTab() {
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-[#c7c4d8] overflow-hidden">
+          <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-[#f9f9ff] border-b border-[#c7c4d8]">
               <tr>
@@ -1455,6 +1461,7 @@ function EmployeeRequirementsTab() {
               })}
             </tbody>
           </table>
+          </div>
         </div>
       )}
 
@@ -1564,7 +1571,19 @@ function ReviewModal({ submission, onClose, onReviewed }) {
                 {canPreview(submission.file_type) && (
                   <button onClick={() => setPreview(true)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-[#3525cd] bg-[#f0f3ff] hover:bg-[#e7eefe] transition-colors whitespace-nowrap"><Eye size={12} /> Preview</button>
                 )}
-                <a href={submission.file_url} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-[#777587] border border-[#c7c4d8] hover:bg-[#f9f9ff] transition-colors whitespace-nowrap"><Download size={12} /> Download</a>
+                <button
+                  onClick={async () => {
+                    const fileUrl = submission.file_url;
+                    try {
+                      const r = await fetch(fileUrl);
+                      const blob = await r.blob();
+                      const blobUrl = URL.createObjectURL(blob);
+                      const a = document.createElement('a');
+                      a.href = blobUrl; a.download = 'document'; a.click();
+                      URL.revokeObjectURL(blobUrl);
+                    } catch { window.open(fileUrl, '_blank'); }
+                  }}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-[#777587] border border-[#c7c4d8] hover:bg-[#f9f9ff] transition-colors whitespace-nowrap"><Download size={12} /> Download</button>
               </div>
             </div>
             {submission.expiry_date && (
@@ -2222,9 +2241,12 @@ function EmployeeUploadModal({ requirement, onClose, onUploaded }) {
     setFile(f);
   }
 
+  const todayStr = new Date().toISOString().split('T')[0];
+
   async function handleSubmit() {
     if (!file) { toast('Please select a file', 'error'); return; }
     if (requirement.expiry_required && !expiryDate) { toast('Expiry date is required for this document', 'error'); return; }
+    if (expiryDate && expiryDate < todayStr) { toast('Expiry date cannot be in the past. Please select today or a future date.', 'error'); return; }
     setUploading(true);
     try {
       const token = localStorage.getItem('lt_token');
@@ -2302,7 +2324,8 @@ function EmployeeUploadModal({ requirement, onClose, onUploaded }) {
           {requirement.expiry_required && (
             <div>
               <label className="form-label">Expiry Date <span className="text-rose-500">*</span></label>
-              <input type="date" className="form-control" value={expiryDate} onChange={e => setExpiry(e.target.value)} />
+              <input type="date" className="form-control" value={expiryDate} min={todayStr} onChange={e => setExpiry(e.target.value)} />
+              {expiryDate && expiryDate < todayStr && <p className="text-[0.65rem] text-rose-500 mt-1">Expiry date cannot be in the past.</p>}
             </div>
           )}
         </div>
@@ -2442,7 +2465,7 @@ function EmployeeDocumentsDashboard() {
       {totalRequired > 0 && (
         <div className="bg-white rounded-xl border border-[#c7c4d8] p-5 mb-5">
           <div className="flex items-center gap-4 flex-wrap">
-            <div className="flex-1 grid grid-cols-2 sm:grid-cols-5 gap-3">
+            <div className="flex-1 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
               {[
                 { num: totalRequired, label: 'Total Required', cls: 'text-[#151c27]', bg: 'bg-[#f0f3ff]', icon: <ClipboardList size={16} className="text-[#3525cd]" /> },
                 { num: approved,      label: 'Approved',       cls: 'text-emerald-700', bg: 'bg-emerald-50', icon: <CheckCircle size={16} className="text-emerald-600" /> },

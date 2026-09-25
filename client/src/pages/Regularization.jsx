@@ -811,6 +811,14 @@ function fmtUpdated(dateStr) {
   }
 }
 
+function fmtDateForCSV(dateStr) {
+  if (!dateStr) return '';
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const d = new Date(String(dateStr).slice(0, 10) + 'T12:00:00');
+  if (isNaN(d.getTime())) return String(dateStr);
+  return `${String(d.getDate()).padStart(2,'0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
+}
+
 function exportCSV(rows) {
   const headers = ['Date', 'Requester', 'Department', 'Req Check-in', 'Req Check-out', 'Actual Check-in', 'Actual Check-out', 'Reason', 'Status', 'Submitted', 'Reviewer Notes'];
   const escape = v => {
@@ -822,7 +830,7 @@ function exportCSV(rows) {
   const lines = [
     headers.join(','),
     ...rows.map(r => [
-      r.date,
+      fmtDateForCSV(r.date),
       r.user_name || '',
       r.user_department || '',
       r.requested_check_in || '',
@@ -831,7 +839,7 @@ function exportCSV(rows) {
       r.actual_check_out || '',
       r.reason || '',
       r.status || '',
-      r.created_at ? new Date(r.created_at).toLocaleDateString('en-IN') : '',
+      r.created_at ? fmtDateForCSV(r.created_at) : '',
       r.reviewer_notes || '',
     ].map(escape).join(',')),
   ];
@@ -987,7 +995,7 @@ export default function Regularization() {
     });
 
     return list;
-  }, [requests, filter, searchQuery, dateFrom, dateTo, sortBy, employeeId]);
+  }, [requests, filter, typeFilter, searchQuery, dateFrom, dateTo, sortBy, employeeId]);
 
   const clearAllFilters = () => {
     setFilter('all');
@@ -1360,7 +1368,7 @@ export default function Regularization() {
           })}
 
           {/* EHN_REG_004: Pagination controls */}
-          {totalPages > 1 && (
+          {filtered.length > 0 && (
             <div className="flex items-center justify-between mt-4 pt-3 border-t border-[#f0f3ff]">
               <div className="flex items-center gap-2">
                 <span className="text-xs text-[#777587]">Rows per page</span>

@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useSearchParams, useNavigate } from 'react-router-dom';
+import { useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { Plus, Pencil, Trash2, Building2, Users, ChevronRight } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
+import { useAuth } from '@/context/AuthContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { useBranch } from '@/context/BranchContext';
 import { Modal } from '@/components/ui/Modal';
@@ -77,7 +78,10 @@ export default function Departments() {
   const toast    = useToast();
   const qc       = useQueryClient();
   const navigate = useNavigate();
+  const location = useLocation();
+  const { isRootAdmin } = useAuth();
   const { selectedBranchId } = useBranch();
+  const employeesPath = location.pathname.startsWith('/root/') ? '/root/employees' : '/employees';
   const [searchParams, setSearchParams] = useSearchParams();
   const [addOpen,       setAddOpen]      = useState(false);
   const [editDept,      setEditDept]     = useState(null);
@@ -100,6 +104,8 @@ export default function Departments() {
 
   // Total members across all depts (from junction table counts)
   const totalAssigned = depts.reduce((s, d) => s + (d.member_count || 0), 0);
+  // Active employees only (exclude resigned, terminated, inactive)
+  const activeEmployees = employees.filter(e => !['resigned', 'terminated', 'inactive'].includes(e.employee_status));
 
   const delMut = useMutation({
     mutationFn: id => apiDelete(`/departments/${id}`),
@@ -124,8 +130,8 @@ export default function Departments() {
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-8">
         {[
           { label: 'Total Departments',    value: depts.length,                                          color: 'from-[#f0f3ff] to-[#e7eefe]',   top: '#3525cd', text: 'text-[#3525cd]',  filter: 'all',       onClick: () => setDeptStatFilter('all') },
-          { label: 'With Department Head', value: depts.filter(d => d.head_user_id || d.users).length,   color: 'from-emerald-50 to-emerald-100', top: '#10B981', text: 'text-emerald-700', filter: 'with_head',  onClick: () => setDeptStatFilter(f => f === 'with_head' ? 'all' : 'with_head') },
-          { label: 'Total Employees',      value: employees.length,                                       color: 'from-amber-50 to-amber-100',     top: '#F59E0B', text: 'text-amber-700',  filter: null,         onClick: () => navigate('/employees') },
+          { label: 'With Department Head', value: depts.filter(d => !!d.head_user_id).length,              color: 'from-emerald-50 to-emerald-100', top: '#10B981', text: 'text-emerald-700', filter: 'with_head',  onClick: () => setDeptStatFilter(f => f === 'with_head' ? 'all' : 'with_head') },
+          { label: 'Total Employees',      value: activeEmployees.length,                                 color: 'from-amber-50 to-amber-100',     top: '#F59E0B', text: 'text-amber-700',  filter: null,         onClick: () => navigate(employeesPath) },
           { label: 'Assigned Members',     value: totalAssigned,                                          color: 'from-[#f0f3ff] to-[#e7eefe]',   top: '#712ae2', text: 'text-[#712ae2]', filter: 'assigned',   onClick: () => setDeptStatFilter(f => f === 'assigned' ? 'all' : 'assigned') },
         ].map(s => (
           /* ENH_DEPT_006: clickable stat cards */
@@ -151,7 +157,7 @@ export default function Departments() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {depts.filter(d => {
-            if (deptStatFilter === 'with_head') return !!(d.head_user_id || d.users);
+            if (deptStatFilter === 'with_head') return !!d.head_user_id;
             if (deptStatFilter === 'assigned') {
               const empCount = d.member_count > 0 ? d.member_count : employees.filter(e => e.department === d.name).length;
               return empCount > 0;

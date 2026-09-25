@@ -80,8 +80,19 @@ export default function LeavePolicies() {
   const [savedPolicies, setSavedPolicies] = useState([]);
   useEffect(() => { if (data.length) setSavedPolicies(data); }, [data]);
 
+  // Normalize any empty-string number fields to 0 before saving
+  function normalizePolicies(ps) {
+    return ps.map(p => ({
+      ...p,
+      annual_quota:        Number(p.annual_quota        ?? 0) || 0,
+      min_notice_days:     Number(p.min_notice_days     ?? 0) || 0,
+      max_consecutive_days:Number(p.max_consecutive_days?? 0) || 0,
+      max_carry_forward:   Number(p.max_carry_forward   ?? 0) || 0,
+    }));
+  }
+
   const saveMut = useMutation({
-    mutationFn: () => apiPost('/leave-policies', { policies }),
+    mutationFn: () => apiPost('/leave-policies', { policies: normalizePolicies(policies) }),
     onSuccess: () => { toast('Leave policies saved!', 'success'); setDirty(false); setSavedPolicies(policies); qc.invalidateQueries({ queryKey: ['leave-policies'] }); },
     onError: e => toast(e.message, 'error'),
   });
@@ -89,7 +100,8 @@ export default function LeavePolicies() {
   function handleSave() {
     // BUG_146: validate annual_quota >= 0
     for (const p of policies) {
-      if (p.annual_quota < 0 || !Number.isInteger(p.annual_quota)) {
+      const quota = Number(p.annual_quota ?? 0);
+      if (quota < 0 || !Number.isInteger(quota)) {
         toast(`Annual quota for "${p.label}" must be a non-negative whole number.`, 'error');
         return;
       }
@@ -97,7 +109,7 @@ export default function LeavePolicies() {
     // BUG_149: warn if any quota is being reduced mid-year
     const reduced = policies.filter(p => {
       const saved = savedPolicies.find(s => s.leave_type === p.leave_type);
-      return saved && p.annual_quota < saved.annual_quota;
+      return saved && Number(p.annual_quota ?? 0) < saved.annual_quota;
     });
     if (reduced.length > 0) {
       const names = reduced.map(p => p.label).join(', ');
@@ -165,7 +177,7 @@ export default function LeavePolicies() {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
         {policies.map((p, i) => (
           <div key={p.leave_type} className={`card p-5 ${bulkEdit && bulkSelected.has(i) ? 'ring-2 ring-amber-400' : ''}`}>
-            <div className="flex items-center gap-3 mb-4">
+            <div className="flex items-center gap-3 mb-4 flex-wrap">
               {/* EHN_LP_002: Checkbox in bulk edit mode */}
               {bulkEdit && (
                 <input type="checkbox" className="w-4 h-4 accent-amber-500" checked={bulkSelected.has(i)}
@@ -177,7 +189,7 @@ export default function LeavePolicies() {
                 <div className="text-xs text-[#777587] capitalize">{p.leave_type.replace('_', ' ')}</div>
               </div>
               {/* EHN_LP_004: Clone button */}
-              <div className="ml-auto flex items-center gap-1.5">
+              <div className="ml-auto flex items-center gap-1.5 flex-wrap">
                 {/* EHN_LP_001: History button */}
                 <button className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-[#777587] border border-[#c7c4d8] hover:text-[#3525cd] hover:border-[#3525cd] hover:bg-[#f0f3ff] transition-colors"
                   title="View change history" onClick={() => setHistoryModal({ leave_type: p.leave_type, label: p.label })}>
@@ -200,21 +212,24 @@ export default function LeavePolicies() {
             <div className="grid grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="form-label">Annual Quota (days)</label>
-                <input type="number" className="form-control" min={0} value={p.annual_quota}
-                  onChange={e => update(i, 'annual_quota', Number(e.target.value))} />
+                <input type="number" className="form-control" min={0} value={p.annual_quota ?? ''}
+                  onChange={e => update(i, 'annual_quota', e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value, 10) || 0))}
+                  onBlur={e => { if (e.target.value === '') update(i, 'annual_quota', 0); }} />
               </div>
               <div>
                 <label className="form-label">Min Notice Days</label>
-                <input type="number" className="form-control" min={0} value={p.min_notice_days || 0}
-                  onChange={e => update(i, 'min_notice_days', Number(e.target.value))} />
+                <input type="number" className="form-control" min={0} value={p.min_notice_days ?? ''}
+                  onChange={e => update(i, 'min_notice_days', e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value, 10) || 0))}
+                  onBlur={e => { if (e.target.value === '') update(i, 'min_notice_days', 0); }} />
               </div>
             </div>
 
             <div className="grid grid-cols-2 gap-4 mb-4">
               <div>
                 <label className="form-label">Max Consecutive Days <span className="text-[#777587]">(0=unlimited)</span></label>
-                <input type="number" className="form-control" min={0} value={p.max_consecutive_days || 0}
-                  onChange={e => update(i, 'max_consecutive_days', Number(e.target.value))} />
+                <input type="number" className="form-control" min={0} value={p.max_consecutive_days ?? ''}
+                  onChange={e => update(i, 'max_consecutive_days', e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value, 10) || 0))}
+                  onBlur={e => { if (e.target.value === '') update(i, 'max_consecutive_days', 0); }} />
               </div>
               <div className="flex flex-col gap-2 pt-5">
                 <label className="flex items-center gap-2 cursor-pointer text-sm">
@@ -258,8 +273,9 @@ export default function LeavePolicies() {
               {p.carry_forward && (
                 <div>
                   <label className="form-label">Max Carry Forward Days</label>
-                  <input type="number" className="form-control" min={0} value={p.max_carry_forward || 0}
-                    onChange={e => update(i, 'max_carry_forward', Number(e.target.value))} />
+                  <input type="number" className="form-control" min={0} value={p.max_carry_forward ?? ''}
+                    onChange={e => update(i, 'max_carry_forward', e.target.value === '' ? '' : Math.max(0, parseInt(e.target.value, 10) || 0))}
+                    onBlur={e => { if (e.target.value === '') update(i, 'max_carry_forward', 0); }} />
                 </div>
               )}
               <div>

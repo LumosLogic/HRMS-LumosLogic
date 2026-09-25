@@ -7,11 +7,25 @@ const { getOrgPolicy } = require('../../utils/orgPolicy');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { resolveEmployeeIds, getFilterState, getBranchUserSQLFilter } = require('../../utils/branchFilter');
 
+const CSV_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function fmtDateForCSV(ds) {
+  if (!ds) return '';
+  const s = String(ds).slice(0, 10);
+  const d = new Date(s + 'T12:00:00');
+  if (isNaN(d.getTime())) return s;
+  return `${String(d.getDate()).padStart(2,'0')}-${CSV_MONTHS[d.getMonth()]}-${d.getFullYear()}`;
+}
+
 function toCSV(rows, cols) {
   const header = cols.map(c => c.label).join(',');
   const lines  = rows.map(r => cols.map(c => {
-    const v = r[c.key] ?? '';
-    return typeof v === 'string' && v.includes(',') ? `"${v}"` : v;
+    let v = r[c.key] ?? '';
+    // Format ISO date strings as DD-MMM-YYYY so Excel won't auto-convert them
+    if (c.isDate && v && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) {
+      v = fmtDateForCSV(v);
+    }
+    const s = String(v);
+    return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
   }).join(','));
   return [header, ...lines].join('\n');
 }
@@ -264,7 +278,7 @@ router.get('/attendance', auth, withBranchContext, async (req, res) => {
       const csv = toCSV(rows, [
         { key: 'name', label: 'Employee' },
         { key: 'department', label: 'Department' },
-        { key: 'date', label: 'Date' },
+        { key: 'date', label: 'Date', isDate: true },
         { key: 'status', label: 'Status' },
         { key: 'check_in', label: 'First In' },
         { key: 'check_out', label: 'Last Out' },
@@ -306,7 +320,7 @@ router.get('/leaves', auth, withBranchContext, async (req, res) => {
     }
 
     let q = db.from('leaves')
-      .select('*, users!leaves_user_id_fkey(name, department), approver:users!leaves_approved_by_fkey(name)')
+      .select('*, users!leaves_user_id_fkey(id, name, department), approver:users!leaves_approved_by_fkey(name)')
       .eq('organization_id', oId)
       .order('start_date', { ascending: false });
     if (year && month) {
@@ -337,8 +351,8 @@ router.get('/leaves', auth, withBranchContext, async (req, res) => {
         { key: 'name', label: 'Employee' },
         { key: 'department', label: 'Department' },
         { key: 'leave_type', label: 'Leave Type' },
-        { key: 'start_date', label: 'From' },
-        { key: 'end_date', label: 'To' },
+        { key: 'start_date', label: 'From', isDate: true },
+        { key: 'end_date', label: 'To', isDate: true },
         { key: 'leave_time', label: 'Duration' },
         { key: 'status', label: 'Status' },
         { key: 'reason', label: 'Reason' },
@@ -425,7 +439,7 @@ router.get('/employees', auth, adminOnly, withBranchContext, async (req, res) =>
     const rows = (result.rows || []).map(r => ({
       ...r,
       employment_type:   r.employment_type ? r.employment_type.replace(/-/g, '_').toLowerCase() : null,
-      employment_status: r.employee_status || null,
+      employment_status: r.employee_status || 'active',
     }));
 
     if (format === 'csv') {
@@ -436,7 +450,7 @@ router.get('/employees', auth, adminOnly, withBranchContext, async (req, res) =>
         { key: 'position',          label: 'Position' },
         { key: 'employment_type',   label: 'Type' },
         { key: 'employment_status', label: 'Status' },
-        { key: 'date_of_joining',   label: 'Joining Date' },
+        { key: 'date_of_joining',   label: 'Joining Date', isDate: true },
       ]);
       res.setHeader('Content-Type', 'text/csv');
       res.setHeader('Content-Disposition', 'attachment; filename="employee_list.csv"');

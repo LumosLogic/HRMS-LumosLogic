@@ -185,9 +185,9 @@ router.post('/checkout', auth, async (req, res) => {
       ? shift.early_exit_threshold_enabled
       : (settings.early_exit_threshold_enabled ?? true);
     const is_early_exit = earlyExitEnabled && (toMinutes(timeStr) < toMinutes(earlyExitThreshold));
-    // Half/full day thresholds: shift-specific → org default
-    const halfDayHours = parseFloat(shift?.half_day_hours ?? settings.half_day_hours ?? 4.5);
-    const fullDayHours = parseFloat(shift?.full_day_hours ?? settings.full_day_hours ?? 8);
+    // Half/full day thresholds: shift-specific → org full_day_hours → org work_hours_per_day → fallback
+    const halfDayHours = parseFloat(shift?.half_day_hours ?? settings.half_day_hours ?? settings.half_day_threshold ?? 4.5);
+    const fullDayHours = parseFloat(shift?.full_day_hours ?? settings.full_day_hours ?? settings.work_hours_per_day ?? 8);
     let status;
     if (effectiveHours < halfDayHours) {
       status = 'half_day';

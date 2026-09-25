@@ -115,6 +115,10 @@ export default function PayrollReports() {
       if (month) qs.month = month;
       if (year)  qs.year  = year;
       const blob = await apiDownload(activeReport.endpoint, qs);
+      if (!blob || blob.size === 0) {
+        toast('No data available to export for the selected period.', 'warning');
+        return;
+      }
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement('a');
       a.href     = url;
@@ -122,9 +126,10 @@ export default function PayrollReports() {
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 200);
     } catch (e) {
-      toast(e.message, 'error');
+      const msg = e.message || 'Export failed. Please try again.';
+      toast(msg.includes('permission') ? 'You do not have permission to export payroll reports.' : msg, 'error');
     }
   }
 

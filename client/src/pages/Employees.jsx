@@ -2317,11 +2317,28 @@ function DrawerLeaveBalance({ empId }) {
   );
 }
 
+function fmtDateForCSV(dateStr) {
+  if (!dateStr) return '';
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const d = new Date(String(dateStr).slice(0, 10) + 'T12:00:00');
+  if (isNaN(d.getTime())) return String(dateStr);
+  return `${String(d.getDate()).padStart(2,'0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
+}
+
 function exportEmployeesCSV(rows, filename = 'employees.csv') {
   const headers = 'Name,Email,Department,Position,Employment Type,Status,Work Mode,Joining Date';
   const lines = rows.map(e =>
-    [e.name, e.email, e.department, e.position, e.employment_type, e.employee_status, e.work_mode, e.joining_date]
-      .map(v => `"${(v || '').replace(/"/g, '""')}"`)
+    [
+      e.name,
+      e.email,
+      e.department,
+      e.position,
+      e.employment_type,
+      e.employee_status || 'active',
+      e.work_mode,
+      fmtDateForCSV(e.joining_date),
+    ]
+      .map(v => `"${(v || '').toString().replace(/"/g, '""')}"`)
       .join(',')
   );
   const csv = [headers, ...lines].join('\n');
@@ -2528,8 +2545,8 @@ export default function Employees() {
   // ── Filtered + sorted list ────────────────────────────────────────────────
   const filtered = useMemo(() => {
     let rows = employees;
-    if (search) {
-      const q = search.toLowerCase();
+    if (search && search.trim()) {
+      const q = search.trim().toLowerCase();
       rows = rows.filter(e =>
         e.name?.toLowerCase().includes(q) ||
         e.email?.toLowerCase().includes(q) ||

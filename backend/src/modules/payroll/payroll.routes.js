@@ -1319,10 +1319,12 @@ router.get('/runs', auth, hasPermission('payroll', 'view'), withBranchContext, a
     let branchWhere = '';
     if (branchState.type === 'specific') {
       params.push(branchState.branchId);
-      branchWhere = `AND pr.branch_id = $${params.length}`;
+      // Include org-wide runs (branch_id IS NULL) alongside branch-specific runs.
+      // NULL runs were created before branch feature was enabled — they must remain visible.
+      branchWhere = `AND (pr.branch_id = $${params.length} OR pr.branch_id IS NULL)`;
     } else if (branchState.type === 'multi') {
       params.push(branchState.branchIds);
-      branchWhere = `AND pr.branch_id = ANY($${params.length}::bigint[])`;
+      branchWhere = `AND (pr.branch_id = ANY($${params.length}::bigint[]) OR pr.branch_id IS NULL)`;
     }
     // 'all' → branchWhere stays '' (no additional filter — root admin sees everything)
 
@@ -2052,12 +2054,12 @@ router.get('/dashboard', auth, hasPermission('payroll', 'view'), withBranchConte
 
     kpi.avgSalary = kpi.employeesPaid > 0 ? kpi.totalNet / kpi.employeesPaid : 0;
 
-    // Pending runs — branch-filtered
+    // Pending runs — branch-filtered (include org-wide NULL runs)
     const pendingParams = [oId, month, year];
     let pendingBranchClause = '';
     if (bIds !== null) {
       pendingParams.push(bIds);
-      pendingBranchClause = `AND branch_id = ANY($${pendingParams.length}::bigint[])`;
+      pendingBranchClause = `AND (branch_id = ANY($${pendingParams.length}::bigint[]) OR branch_id IS NULL)`;
     }
     const { rows: pending } = await pool.query(
       `SELECT COUNT(*)::int AS count FROM payroll_runs
@@ -2070,12 +2072,12 @@ router.get('/dashboard', auth, hasPermission('payroll', 'view'), withBranchConte
     );
     kpi.pendingRuns = pending[0]?.count || 0;
 
-    // Adjustment totals — branch-filtered through payroll_runs
+    // Adjustment totals — branch-filtered through payroll_runs (include org-wide NULL runs)
     const adjParams = [oId, month, year];
     let adjBranchClause = '';
     if (bIds !== null) {
       adjParams.push(bIds);
-      adjBranchClause = `AND pr.branch_id = ANY($${adjParams.length}::bigint[])`;
+      adjBranchClause = `AND (pr.branch_id = ANY($${adjParams.length}::bigint[]) OR pr.branch_id IS NULL)`;
     }
     const { rows: adjAgg } = await pool.query(
       `SELECT

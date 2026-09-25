@@ -861,15 +861,22 @@ router.post('/', auth, async (req, res) => {
     if (!start_date || !end_date) return res.status(400).json({ error: 'Start and end dates required' });
     if (start_date > end_date)    return res.status(400).json({ error: 'Start date must be before end date' });
 
-    if (leave_time !== 'wfh' && leave_type !== 'wfh') {
-      const settings = await getSettings(orgId(req));
-      const checkDates = buildWorkingDates(start_date, end_date, settings);
+    // Holiday validation only applies to employee-submitted leaves (not admin on-behalf).
+    // Admins may legitimately create leaves on holidays (e.g., compensatory leave).
+    const isSubmittedByAdmin = isAdminRole(req.user.role) && user_id && parseInt(user_id) !== req.user.id;
+    if (leave_time !== 'wfh' && leave_type !== 'wfh' && !isSubmittedByAdmin) {
+      const settings     = await getSettings(orgId(req));
+      const holidayDates = await fetchHolidaySet(orgId(req), start_date, end_date);
+      const checkDates   = buildWorkingDates(start_date, end_date, settings, holidayDates);
       if (checkDates.length === 0) {
         const isSingle = start_date === end_date;
+        const isHoliday = isSingle && holidayDates.has(start_date);
         return res.status(400).json({
-          error: isSingle
-            ? 'The selected date is a weekend or public holiday. Please choose a working day.'
-            : 'The selected date range contains no working days (all dates fall on weekends or public holidays).',
+          error: isHoliday
+            ? `${start_date} is a public holiday. Leave cannot be applied on a holiday.`
+            : isSingle
+              ? 'The selected date is a weekend. Please choose a working day.'
+              : 'The selected date range contains no working days (all dates fall on weekends or public holidays).',
         });
       }
     }

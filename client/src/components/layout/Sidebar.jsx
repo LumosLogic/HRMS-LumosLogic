@@ -1,4 +1,4 @@
-import React, { useContext, useState } from 'react';
+import React, { useContext, useState, useEffect, useRef } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import {
   LayoutDashboard, Calendar, FileText, Users, Settings, LogOut, UserCircle,
@@ -258,7 +258,18 @@ function FinanceSection({ onClose, isAdmin, isRootAdmin, prefix = '', hasPermiss
 // ── Sidebar ──────────────────────────────────────────────────────────────────
 export function Sidebar({ onClose, prefix = '', onMenuClick, onSearchOpen }) {
   const { user, logout, isAdmin, isRootAdmin, hasPermission, permissions } = useAuth();
-  const navigate = useNavigate();
+  const navigate  = useNavigate();
+  const location  = useLocation();
+  const navRef    = useRef(null);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (!navRef.current) return;
+      const activeLink = navRef.current.querySelector('a[aria-current="page"]');
+      if (activeLink) activeLink.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }, 100);
+    return () => clearTimeout(timer);
+  }, [location.pathname]);
 
   const { data: countData } = useQuery({
     queryKey: ['notif-count'],
@@ -310,7 +321,7 @@ export function Sidebar({ onClose, prefix = '', onMenuClick, onSearchOpen }) {
       <BranchSelector />
 
       {/* Nav */}
-      <nav className="flex-1 p-3 overflow-y-auto space-y-1">
+      <nav ref={navRef} className="flex-1 p-3 overflow-y-auto space-y-1">
         <div id="tour-nav-overview">
           <NavSection title="Overview" items={OVERVIEW_ITEMS} {...sharedProps} />
         </div>

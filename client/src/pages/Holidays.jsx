@@ -291,9 +291,9 @@ export default function HolidaysPage() {
                           <div className="font-black text-[#151c27] truncate">{h.name}</div>
                           {h.description && <div className="text-xs text-[#777587] mt-0.5 truncate">{h.description}</div>}
                         </div>
-                        <div className="flex items-center gap-2 flex-shrink-0">
+                        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
                           <span className={`badge ${cfg.bg} ${cfg.text} ${cfg.border} flex items-center gap-1 border`}>
-                            {cfg.icon}{cfg.label}
+                            {cfg.icon}<span className="hidden sm:inline">{cfg.label}</span>
                           </span>
                           <button className="btn btn-ghost btn-icon text-[#777587] hover:text-[#3525cd]" onClick={() => setEditH(h)}><Pencil size={13} /></button>
                           <button className="btn btn-ghost btn-icon text-[#777587] hover:text-rose-500" onClick={() => setConfirmDel({ id: h.id, name: h.name })}><Trash2 size={13} /></button>

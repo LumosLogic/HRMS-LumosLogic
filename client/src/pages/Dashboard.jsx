@@ -592,7 +592,7 @@ function LeaveBalanceSection({ analytics, navigate }) {
     <div className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm overflow-hidden">
       <div className="flex items-center justify-between px-5 py-4 border-b border-[#e7eefe]">
         <h2 className="text-sm font-black text-[#151c27]">Leave Balance Overview</h2>
-        <button onClick={() => navigate('/reports')}
+        <button onClick={() => navigate('/reports?section=leaves')}
           className="text-xs font-bold text-[#3525cd] hover:text-[#4f46e5] px-2 py-1 rounded-lg hover:bg-[#f0f3ff] transition-colors">
           View report
         </button>

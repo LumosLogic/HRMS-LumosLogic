@@ -2,8 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Settings2, Plus, Trash2, ChevronUp, ChevronDown, Save,
-  AlertCircle, CheckCircle2, GripVertical, Info,
+  AlertCircle, CheckCircle2, GripVertical, Info, ArrowLeft,
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { apiGet, apiPut } from '@/lib/api';
 import { useToast } from '@/context/ToastContext';
 
@@ -125,8 +126,9 @@ function LevelRow({ level, index, total, usedTypes = new Set(), onChange, onDele
 }
 
 export default function LeaveWorkflowSettings() {
-  const toast = useToast();
-  const qc    = useQueryClient();
+  const toast    = useToast();
+  const qc       = useQueryClient();
+  const navigate = useNavigate();
 
   const { data: workflow, isLoading, isError } = useQuery({
     queryKey: ['leave-workflow-config'],
@@ -235,6 +237,10 @@ export default function LeaveWorkflowSettings() {
     <div className="max-w-3xl mx-auto space-y-6 pb-16">
       {/* Header */}
       <div>
+        <button onClick={() => navigate(-1)}
+          className="flex items-center gap-1.5 text-xs font-semibold text-[#777587] hover:text-[#3525cd] mb-3 transition-colors">
+          <ArrowLeft size={14} /> Back
+        </button>
         <div className="flex items-center gap-2.5 mb-1">
           <div className="w-9 h-9 rounded-xl bg-[#3525cd]/10 flex items-center justify-center">
             <Settings2 size={18} className="text-[#3525cd]" />

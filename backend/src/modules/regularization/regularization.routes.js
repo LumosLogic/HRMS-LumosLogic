@@ -223,9 +223,47 @@ router.put('/:id/review', auth, hasPermission('attendance', 'approve_regularizat
 
     if (status === 'approved') {
       if (reg.type === 'early_leave') {
-        // Early leave requests are policy/approval records only.
-        // Do NOT modify attendance records, checkout time, or working hours.
-        // The payroll engine reads actual attendance status from biometric data.
+        // Auto-checkout the employee only if:
+        //   1. The early leave is for today
+        //   2. The approved exit time has already passed (current IST time >= exit time)
+        //   3. The employee is currently checked in but not yet checked out
+        // This prevents pre-setting checkout times before the employee actually leaves.
+        if (reg.requested_early_exit_time && reg.date === new Date().toISOString().split('T')[0]) {
+          const parts = new Intl.DateTimeFormat('en-GB', {
+            timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false,
+          }).formatToParts(new Date());
+          const nowIST = `${parts.find(p => p.type === 'hour').value.padStart(2,'0')}:${parts.find(p => p.type === 'minute').value.padStart(2,'0')}`;
+          const [nowH, nowM] = nowIST.split(':').map(Number);
+          const [exitH, exitM] = reg.requested_early_exit_time.split(':').map(Number);
+          const nowMins  = nowH * 60 + nowM;
+          const exitMins = exitH * 60 + exitM;
+
+          if (nowMins >= exitMins) {
+            const attRes2 = await client.query(
+              `SELECT * FROM attendance WHERE user_id = $1 AND date = $2 AND organization_id = $3`,
+              [reg.user_id, reg.date, oId]
+            );
+            const existingAtt2 = attRes2.rows[0] || null;
+
+            if (existingAtt2 && existingAtt2.check_in && !existingAtt2.check_out) {
+              const exitTime = reg.requested_early_exit_time;
+              const [h1, m1] = existingAtt2.check_in.split(':').map(Number);
+              const totalMins = exitMins - (h1 * 60 + m1);
+              if (totalMins > 0) {
+                const breakMins = existingAtt2.total_break_minutes || 0;
+                const effectiveMins = Math.max(0, totalMins - breakMins);
+                const grossHours = Math.round((totalMins / 60) * 100) / 100;
+                const workHours  = Math.round((effectiveMins / 60) * 100) / 100;
+                await client.query(
+                  `UPDATE attendance
+                   SET check_out = $1, gross_hours = $2, work_hours = $3, status = 'early_leave', is_early_exit = TRUE
+                   WHERE user_id = $4 AND date = $5 AND organization_id = $6`,
+                  [exitTime, grossHours, workHours, reg.user_id, reg.date, oId]
+                );
+              }
+            }
+          }
+        }
       } else {
         // check_time: apply the corrected attendance times
         // 2. Fetch existing attendance (inside transaction so we see latest state)

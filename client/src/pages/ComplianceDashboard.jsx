@@ -62,10 +62,20 @@ export default function ComplianceDashboard() {
       });
       if (!res.ok) {
         const d = await res.json().catch(() => ({}));
-        toast(d.error || 'Download failed', 'error');
+        if (res.status === 403) {
+          toast('You do not have permission to download this report. Please contact your administrator.', 'error');
+        } else if (res.status === 400) {
+          toast(d.error || `No ${label} data found for the selected period. Ensure payroll has been generated for ${MONTHS[month - 1]} ${year}.`, 'warning');
+        } else {
+          toast(d.error || `Failed to generate ${label} report. Please try again or contact support.`, 'error');
+        }
         return;
       }
       const blob = await res.blob();
+      if (!blob || blob.size === 0) {
+        toast(`No ${label} data found for ${MONTHS[month - 1]} ${year}. Generate payroll first to produce statutory reports.`, 'warning');
+        return;
+      }
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
@@ -73,15 +83,16 @@ export default function ComplianceDashboard() {
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      setTimeout(() => URL.revokeObjectURL(url), 200);
     } catch (e) {
-      toast('Download failed: ' + e.message, 'error');
+      toast(`Download failed. Please check your connection and try again.`, 'error');
     }
   }
 
-  const { data, isLoading } = useQuery({
+  const { data, isLoading, isError, error } = useQuery({
     queryKey: ['compliance-summary', month, year],
     queryFn:  () => apiGet('/statutory/compliance-summary', { month, year }),
+    retry: false,
   });
 
   const { data: returns = [] } = useQuery({
@@ -99,6 +110,27 @@ export default function ComplianceDashboard() {
         <div className="page-header"><div className="page-title">Compliance Dashboard</div></div>
         <div className="flex items-center justify-center py-20">
           <div className="w-6 h-6 border-2 border-[#3525cd]/30 border-t-[#3525cd] rounded-full animate-spin" />
+        </div>
+      </div>
+    );
+  }
+
+  if (isError) {
+    const msg = error?.message || '';
+    const isPermission = msg.includes('permission') || msg.includes('403');
+    return (
+      <div className="space-y-5">
+        <div className="page-header"><div className="page-title">Compliance Dashboard</div></div>
+        <div className="flex flex-col items-center justify-center py-20 text-center">
+          <AlertTriangle size={40} className="text-amber-500 mb-4" />
+          <p className="text-lg font-black text-[#151c27] mb-2">
+            {isPermission ? 'Access Restricted' : 'Failed to Load Dashboard'}
+          </p>
+          <p className="text-sm text-[#777587] max-w-sm">
+            {isPermission
+              ? 'You do not have permission to view the Compliance Dashboard. Please ask your Root Admin to grant you statutory access.'
+              : 'An error occurred while loading compliance data. Please refresh the page or contact support if the issue persists.'}
+          </p>
         </div>
       </div>
     );
