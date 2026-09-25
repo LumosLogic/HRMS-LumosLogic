@@ -13,8 +13,9 @@ function round2(v) { return Math.round((Number(v) || 0) * 100) / 100; }
 // ── Payroll Summary ───────────────────────────────────────────────────────────
 // One row per payroll run for the requested month/year.
 // branchIds: null = org-wide, [] = no access (caller must guard), [...] = filter these branches.
-// Org-wide runs (branch_id IS NULL) are always included alongside branch-specific runs so that
-// payroll generated before the branch feature was enabled remains visible in any branch view.
+// STRICT filtering: a branch view shows only runs tagged with that branch (branch_id = <id>).
+// Legacy NULL-branch runs must be backfilled via backfill_payroll_run_branch_ids_2026_09_25.sql
+// — otherwise they only appear in the "All Branches" view.
 async function getPayrollSummary({ organizationId, month, year, branchIds = null }) {
   const oId = Number(organizationId);
   if (Array.isArray(branchIds) && branchIds.length === 0) return [];
@@ -23,7 +24,7 @@ async function getPayrollSummary({ organizationId, month, year, branchIds = null
   let branchClause = '';
   if (branchIds !== null) {
     params.push(branchIds);
-    branchClause = `AND (pr.branch_id = ANY($${params.length}::bigint[]) OR pr.branch_id IS NULL)`;
+    branchClause = `AND pr.branch_id = ANY($${params.length}::bigint[])`;
   }
 
   const { rows } = await pool.query(
@@ -246,7 +247,7 @@ async function getMonthlyTrend({ organizationId, months = 6, branchIds = null })
   let branchClause = '';
   if (branchIds !== null) {
     params.push(branchIds);
-    branchClause = `AND (pr.branch_id = ANY($${params.length}::bigint[]) OR pr.branch_id IS NULL)`;
+    branchClause = `AND pr.branch_id = ANY($${params.length}::bigint[])`;
   }
   params.push(months);
 
