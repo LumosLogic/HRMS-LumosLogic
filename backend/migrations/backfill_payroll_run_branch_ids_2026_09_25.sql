@@ -58,6 +58,12 @@ ORDER BY pr.organization_id, pr.year DESC, pr.month DESC;
 -- single branch. Employees with branch_id IS NULL are ignored by COUNT/ MIN
 -- (NULLs are not counted), so a run mixing one branch + legacy no-branch
 -- employees is still tagged that branch — best-guess, matches reality.
+--
+-- CONFLICT GUARD: skip runs that would collide with an existing branch-specific
+-- run for the same (organization, branch, month, year) — the unique constraint
+-- uq_payroll_run_branch would reject the whole batch otherwise. Skipped runs
+-- stay NULL (visible only in "All Branches") and are reported in Step 2b for
+-- manual resolution.
 UPDATE payroll_runs pr
 SET    branch_id = agg.branch_id
 FROM (
@@ -73,7 +79,52 @@ FROM (
 ) agg
 WHERE pr.branch_id IS NULL
   AND pr.organization_id = agg.organization_id
-  AND pr.id = agg.payroll_run_id;
+  AND pr.id = agg.payroll_run_id
+  AND NOT EXISTS (
+        SELECT 1
+        FROM payroll_runs dup
+        WHERE dup.organization_id = agg.organization_id
+          AND dup.branch_id       = agg.branch_id
+          AND dup.month           = pr.month
+          AND dup.year            = pr.year
+          AND dup.id             != pr.id
+      );
+
+-- ── Step 2b: Report conflicting runs that were SKIPPED (output only) ─────────
+-- These legacy NULL runs cover a branch+month that ALREADY has a dedicated
+-- branch-specific run. They were NOT tagged (would duplicate). Review this
+-- list: the legacy run is stale data and typically should be voided/deleted
+-- after confirming the branch-specific run holds the correct payslips.
+SELECT pr.id            AS skipped_run_id,
+       pr.organization_id,
+       agg.branch_id    AS derived_branch_id,
+       pr.month,
+       pr.year,
+       pr.status,
+       pr.employee_count,
+       dup.id           AS existing_branch_run_id,
+       dup.status       AS existing_branch_run_status
+FROM payroll_runs pr
+JOIN (
+  SELECT ps.organization_id,
+         ps.payroll_run_id,
+         MIN(u.branch_id)::bigint AS branch_id
+  FROM payslips ps
+  JOIN users u ON u.id = ps.user_id
+              AND u.organization_id = ps.organization_id
+  WHERE u.branch_id IS NOT NULL
+  GROUP BY ps.organization_id, ps.payroll_run_id
+  HAVING COUNT(DISTINCT u.branch_id) = 1
+) agg ON agg.organization_id = pr.organization_id
+     AND agg.payroll_run_id   = pr.id
+JOIN payroll_runs dup
+  ON  dup.organization_id = agg.organization_id
+  AND dup.branch_id       = agg.branch_id
+  AND dup.month           = pr.month
+  AND dup.year            = pr.year
+  AND dup.id             != pr.id
+WHERE pr.branch_id IS NULL
+ORDER BY pr.organization_id, pr.year DESC, pr.month DESC;
 
 -- ── Step 3: Record migration ─────────────────────────────────────────────────
 INSERT INTO schema_migrations(version, description)
