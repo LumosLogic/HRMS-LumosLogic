@@ -149,6 +149,7 @@ function ComingSoonPanel({ group, label, icon: Icon, description }) {
 
 // ── 1. Work Schedule (shift-aware) ────────────────────────────────────────────
 function WorkSchedulePanel({ schedule, isAdmin, onSaved }) {
+  const { isRootAdmin } = useAuth();
   const toast = useToast();
   const qc    = useQueryClient();
 
