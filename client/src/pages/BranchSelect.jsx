@@ -150,8 +150,9 @@ function ManageHrAdminsModal({ open, onClose, branch }) {
   // Eligible HR admins (role = admin) in this organization
   const { data: hrUsers = [], isLoading: hrLoading } = useQuery({
     queryKey: ['hr-admins-for-branch-access'],
-    queryFn:  () => apiGet('/employees', { role: 'admin' }),
+    queryFn:  () => apiGet('/employees', { include_inactive: 'false' }),
     enabled:  open,
+    staleTime: 0,
     select:   d => (Array.isArray(d) ? d : []).filter(u => u.role === 'admin'),
   });
 
