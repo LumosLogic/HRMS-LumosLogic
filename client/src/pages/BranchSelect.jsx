@@ -148,11 +148,13 @@ function ManageHrAdminsModal({ open, onClose, branch }) {
   const qc    = useQueryClient();
 
   // Eligible HR admins (role = admin) in this organization
+  // queryKey includes branch?.id so each branch modal gets a fresh fetch
   const { data: hrUsers = [], isLoading: hrLoading } = useQuery({
-    queryKey: ['hr-admins-for-branch-access'],
-    queryFn:  () => apiGet('/employees', { include_inactive: 'false' }),
-    enabled:  open,
+    queryKey: ['hr-admins-for-branch-access', branch?.id],
+    queryFn:  () => apiGet('/employees'),
+    enabled:  open && !!branch?.id,
     staleTime: 0,
+    gcTime: 0,
     select:   d => (Array.isArray(d) ? d : []).filter(u => u.role === 'admin'),
   });
 
