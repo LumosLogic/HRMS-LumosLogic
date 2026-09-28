@@ -665,6 +665,30 @@ router.get('/:id/members', auth, hasPermission('roles', 'view'), async (req, res
   }
 });
 
+// BUG_194/243: keep users.role in sync whenever a system role is added/removed
+// via the per-role member endpoints (mirrors PUT /api/roles/user/:userId).
+const SLUG_TO_ROLE = { root_admin: 'root_admin', hr_admin: 'admin', employee: 'employee' };
+// dept_head is still users.role='employee'; access comes from departments.head_user_id
+async function syncUserRoleFromRoles(client, userId, oId) {
+  const { rows } = await client.query(
+    `SELECT slug FROM user_roles ur
+       JOIN roles r ON r.id = ur.role_id
+      WHERE ur.user_id = $1 AND ur.org_id = $2 AND r.is_system_role = true`,
+    [userId, oId]
+  );
+  let newUserRole = null;
+  for (const r of rows) {
+    const mapped = SLUG_TO_ROLE[r.slug];
+    if (mapped && (mapped === 'root_admin' || (mapped === 'admin' && newUserRole !== 'root_admin')))
+      newUserRole = mapped;
+  }
+  if (!newUserRole) newUserRole = 'employee';
+  await client.query(
+    `UPDATE users SET role = $1 WHERE id = $2 AND organization_id = $3`,
+    [newUserRole, userId, oId]
+  );
+}
+
 // ─── 11. POST /api/roles/:id/members — add a user to a role ──────────────────
 router.post('/:id/members', auth, hasPermission('roles', 'manage'), async (req, res) => {
   try {
@@ -678,7 +702,7 @@ router.post('/:id/members', auth, hasPermission('roles', 'manage'), async (req, 
     // Verify role belongs to this org
     const { data: role } = await db
       .from('roles')
-      .select('id, name')
+      .select('id, name, slug, is_system_role')
       .eq('id', roleId)
       .eq('org_id', oId)
       .maybeSingle();
@@ -688,28 +712,46 @@ router.post('/:id/members', auth, hasPermission('roles', 'manage'), async (req, 
     // Verify target user belongs to this org
     const { data: user } = await db
       .from('users')
-      .select('id, name, email')
+      .select('id, name, email, role')
       .eq('id', userId)
       .eq('organization_id', oId)
       .maybeSingle();
 
     if (!user) return res.status(404).json({ error: 'User not found in this organization' });
 
-    const { data, error } = await db
-      .from('user_roles')
-      .insert({ user_id: userId, role_id: roleId, org_id: oId, assigned_by: req.user.id })
-      .select()
-      .single();
+    // DEEP-005: only a Root Admin may grant the Root Admin system role
+    if (req.user.role !== 'root_admin' && role.slug === 'root_admin' && role.is_system_role) {
+      return res.status(403).json({ error: 'Only a Root Admin can assign the Root Admin role.' });
+    }
 
-    if (error) {
-      if (error.code === '23505') {
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const ins = await client.query(
+        `INSERT INTO user_roles (user_id, role_id, org_id, assigned_by)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (user_id, role_id, org_id) DO NOTHING
+         RETURNING *`,
+        [userId, roleId, oId, req.user.id]
+      );
+      if (!ins.rows.length) {
+        await client.query('ROLLBACK');
         return res.status(400).json({ error: `${user.name} already has the "${role.name}" role` });
       }
-      throw error;
+      // BUG_194/243: promote users.role so the member actually gains the role
+      await syncUserRoleFromRoles(client, userId, oId);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
     }
 
     clearUserCache(userId, oId);
-    res.json(data);
+    const { markRoleChanged } = require('../../middleware/auth');
+    markRoleChanged(userId); // force re-login so the JWT picks up the new role
+    res.json({ user_id: userId, role_id: roleId, org_id: oId, assigned_by: req.user.id });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -738,16 +780,26 @@ router.delete('/:id/members/:userId', auth, hasPermission('roles', 'manage'), as
       }
     }
 
-    const { error } = await db
-      .from('user_roles')
-      .delete()
-      .eq('role_id', roleId)
-      .eq('user_id', userId)
-      .eq('org_id', oId);    // multi-tenant guard on delete
-
-    if (error) throw error;
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      await client.query(
+        `DELETE FROM user_roles WHERE role_id = $1 AND user_id = $2 AND org_id = $3`,
+        [roleId, userId, oId]
+      );
+      // BUG_194/243: demote users.role if the removed system role was authoritative
+      await syncUserRoleFromRoles(client, userId, oId);
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      throw err;
+    } finally {
+      client.release();
+    }
 
     clearUserCache(userId, oId);
+    const { markRoleChanged } = require('../../middleware/auth');
+    markRoleChanged(userId);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

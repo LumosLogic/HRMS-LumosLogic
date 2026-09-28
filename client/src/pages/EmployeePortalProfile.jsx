@@ -2624,14 +2624,16 @@ function TabContent({ tab, empId }) {
 function ProfileCompletionBar({ empId }) {
   const { data } = useQuery({ queryKey: ['profile-overview', empId], queryFn: () => apiGet(`/profile/${empId}/overview`), enabled: !!empId });
   const { data: per } = useQuery({ queryKey: ['profile-personal', empId], queryFn: () => apiGet(`/profile/${empId}/personal`), enabled: !!empId });
-  const { data: docs = [] } = useQuery({ queryKey: ['employee-documents', empId], queryFn: () => apiGet(`/profile/${empId}/documents`), enabled: !!empId });
+  // BUG_230: /profile/:id/documents endpoint doesn't exist — use the documents module endpoint instead
+  const { data: docs = [] } = useQuery({ queryKey: ['employee-documents', empId], queryFn: () => apiGet(`/documents`), enabled: !!empId });
   const { data: contacts = [] } = useQuery({ queryKey: ['emergency-contacts', empId], queryFn: () => apiGet(`/profile/${empId}/emergency-contacts`), enabled: !!empId });
   if (!data) return null;
   const sections = [
     { label: 'Basic Info',       pct: data.name && data.phone ? 100 : 50,                    color: 'bg-[#3525cd]' },
     { label: 'Personal',         pct: per?.date_of_birth && per?.gender ? 100 : (per?.date_of_birth || per?.gender ? 50 : 0), color: 'bg-emerald-500' },
     { label: 'Address',          pct: per?.current_address_line1 ? 100 : 0,                   color: 'bg-amber-500' },
-    { label: 'Professional',     pct: data.department && data.position ? 100 : 50,             color: 'bg-purple-500' },
+    // BUG_230: use department OR position (not AND) so filling either marks this section complete
+    { label: 'Professional',     pct: (data.department || data.position) ? 100 : 0,           color: 'bg-purple-500' },
     { label: 'Documents',        pct: (Array.isArray(docs) ? docs.length : 0) > 0 ? 100 : 0, color: 'bg-sky-500' },
     { label: 'Emergency Contact',pct: (Array.isArray(contacts) ? contacts.length : 0) > 0 ? 100 : 0, color: 'bg-rose-500' },
   ];
@@ -2664,14 +2666,16 @@ function ProfileCompletionBar({ empId }) {
 // ENH_PROFILE_008: Profile section search
 function ProfileSectionSearch({ onTabChange }) {
   const [query, setQuery] = useState('');
+  // BUG_228: SECTION_MAP must use the same tab keys as the TABS constant
   const SECTION_MAP = [
-    { keywords: ['overview','summary','basic'], tab: 'overview', label: 'Overview' },
-    { keywords: ['personal','address','contact','phone','email','date of birth','gender'], tab: 'personal', label: 'Personal & Contact' },
-    { keywords: ['skills','education','work history','experience','qualification'], tab: 'skills', label: 'Skills & Experience' },
-    { keywords: ['documents','id','aadhaar','pan','passport'], tab: 'documents', label: 'Documents' },
-    { keywords: ['emergency','family','nominee','dependent'], tab: 'family', label: 'Family & Emergency' },
-    { keywords: ['bank','salary','account','ifsc'], tab: 'banking', label: 'Banking' },
-    { keywords: ['statutory','pf','esi','tax','tds'], tab: 'statutory', label: 'Statutory' },
+    { keywords: ['overview','summary','basic','profile'], tab: 'overview', label: 'Overview' },
+    { keywords: ['personal','address','contact','phone','email','date of birth','gender','blood group','marital'], tab: 'personal', label: 'Personal' },
+    { keywords: ['professional','skills','education','work history','experience','qualification','department','position','designation','family','emergency','nominee','dependent'], tab: 'professional', label: 'Professional' },
+    { keywords: ['documents','id','aadhaar','pan','passport','certificate','upload'], tab: 'documents', label: 'Documents' },
+    { keywords: ['work','attendance','leave','balance','assets','reports','regularization'], tab: 'work', label: 'Work' },
+    { keywords: ['payroll','bank','salary','account','ifsc','statutory','pf','esi','tax','tds','bonus','ctc','nominees'], tab: 'payroll', label: 'Payroll' },
+    { keywords: ['performance','goals','review','rating','feedback'], tab: 'performance', label: 'Performance' },
+    { keywords: ['account','login','security','password','role'], tab: 'account', label: 'Account' },
   ];
   const matched = query.trim()
     ? SECTION_MAP.filter(s => s.keywords.some(k => k.includes(query.toLowerCase()) || s.label.toLowerCase().includes(query.toLowerCase())))

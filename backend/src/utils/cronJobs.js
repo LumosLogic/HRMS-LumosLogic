@@ -345,4 +345,58 @@ async function runResignationExpiry() {
   }
 }
 
-module.exports = { scheduleDailyAt, runDailyNotifications, runAutoMarkAbsent, runProbationExpiryCheck, runResignationExpiry };
+// ── Scheduled announcements publisher — runs every 5 minutes ─────────────────
+// BUG_242: announcements with a future scheduled_at stay hidden until their
+// publish time. This job fans out the deferred in-app notifications once the
+// time is reached. Visibility itself is enforced in announcements.routes.js.
+async function runScheduledAnnouncementPublisher() {
+  try {
+    const nowIso = new Date().toISOString();
+    const { data: due } = await db.from('announcements')
+      .select('id, organization_id, title, content, published_notified')
+      .not('scheduled_at', 'is', null)
+      .lte('scheduled_at', nowIso);
+    if (!due?.length) return;
+
+    for (const ann of due) {
+      if (ann.published_notified) continue; // already fanned out
+      const oId = ann.organization_id;
+      const { data: users } = await db.from('users').select('id').eq('organization_id', oId);
+      if (users?.length) {
+        await db.from('notifications').insert(users.map(u => ({
+          user_id:         u.id,
+          title:           `📢 ${ann.title}`,
+          message:         ann.content && ann.content.length > 100 ? ann.content.substring(0, 100) + '…' : (ann.content || ''),
+          type:            'announcement',
+          reference_id:    ann.id,
+          reference_type:  'announcement',
+          organization_id: oId,
+        })));
+      }
+      await db.from('announcements')
+        .update({ published_notified: true })
+        .eq('id', ann.id)
+        .eq('organization_id', oId);
+      console.log(`[ScheduledAnnouncement] Published "${ann.title}" (id=${ann.id})`);
+    }
+  } catch (err) {
+    console.error('[ScheduledAnnouncement] Error:', err.message);
+  }
+}
+
+function scheduleEveryMinutes(min, fn) {
+  async function tick() {
+    try { await fn(); } catch (e) { console.error(e.message); }
+  }
+  setInterval(tick, min * 60 * 1000);
+}
+
+module.exports = {
+  scheduleDailyAt,
+  scheduleEveryMinutes,
+  runDailyNotifications,
+  runAutoMarkAbsent,
+  runProbationExpiryCheck,
+  runResignationExpiry,
+  runScheduledAnnouncementPublisher,
+};

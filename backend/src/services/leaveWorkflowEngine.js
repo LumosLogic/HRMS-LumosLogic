@@ -151,7 +151,11 @@ function canUserApproveLevel(level, userId, userRole, currentApproverId) {
     case 'specific_user':
       // BUG_168: PostgreSQL bigint columns come back as strings from the pg driver.
       // Use Number() coercion so "5" === 5 doesn't silently fail.
-      return currentApproverId != null && Number(currentApproverId) === Number(userId);
+      // BUG_169: when no specific approver was resolved at init time (currentApproverId is null),
+      // the leave would get permanently stuck. Fall back to allowing any HR/Root admin
+      // so the workflow can always move forward.
+      if (currentApproverId == null) return ['admin', 'root_admin'].includes(userRole);
+      return Number(currentApproverId) === Number(userId);
     case 'hr_admin':
       return ['admin', 'root_admin'].includes(userRole);
     case 'root_admin':

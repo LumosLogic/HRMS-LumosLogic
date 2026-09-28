@@ -32,7 +32,7 @@ function BranchModal({ open, onClose, branch }) {
   } : empty);
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
-  const [nameErr, setNameErr] = useState('');
+  const [errors, setErrors] = useState({});
 
   const mut = useMutation({
     mutationFn: () => isEdit ? apiPut(`/branches/${branch.id}`, form) : apiPost('/branches', form),
@@ -45,13 +45,28 @@ function BranchModal({ open, onClose, branch }) {
     onError: e => toast(e.message, 'error'),
   });
 
-  // BUG_063: Client-side validation
+  // BUG_063: Full client-side validation for all fields
   function handleSubmit() {
-    const name = form.name.trim();
-    if (!name) { setNameErr('Branch name is required.'); return; }
-    if (name.length < 2) { setNameErr('Branch name must be at least 2 characters.'); return; }
-    if (name.length > 100) { setNameErr('Branch name cannot exceed 100 characters.'); return; }
-    setNameErr('');
+    const errs = {};
+    const name = (form.name || '').trim();
+    if (!name) errs.name = 'Branch name is required.';
+    else if (name.length < 2) errs.name = 'Branch name must be at least 2 characters.';
+    else if (name.length > 100) errs.name = 'Branch name cannot exceed 100 characters.';
+    else if (/[<>"'`]/.test(name)) errs.name = 'Branch name contains invalid characters.';
+
+    const code = (form.code || '').trim();
+    if (code && code.length > 20) errs.code = 'Branch code cannot exceed 20 characters.';
+    else if (code && !/^[a-zA-Z0-9\-_/]+$/.test(code)) errs.code = 'Branch code may only contain letters, numbers, hyphens, underscores, or slashes.';
+
+    const location = (form.location || '').trim();
+    if (location && location.length > 100) errs.location = 'Location cannot exceed 100 characters.';
+    else if (location && /[<>"'`]/.test(location)) errs.location = 'Location contains invalid characters.';
+
+    const address = (form.address || '').trim();
+    if (address && address.length > 500) errs.address = 'Address cannot exceed 500 characters.';
+
+    if (Object.keys(errs).length) { setErrors(errs); return; }
+    setErrors({});
     mut.mutate();
   }
 
@@ -60,7 +75,7 @@ function BranchModal({ open, onClose, branch }) {
       footer={
         <div className="flex justify-end gap-3">
           <button className="btn btn-outline" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={handleSubmit} disabled={mut.isPending || !form.name}>
+          <button className="btn btn-primary" onClick={handleSubmit} disabled={mut.isPending || !form.name?.trim()}>
             {mut.isPending ? <><span className="spinner w-4 h-4" />Saving…</> : isEdit ? 'Save Changes' : 'Create Branch'}
           </button>
         </div>
@@ -69,21 +84,24 @@ function BranchModal({ open, onClose, branch }) {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="form-label">Branch Name <span className="text-rose-500">*</span></label>
-            <input className={`form-control ${nameErr ? 'border-rose-400' : ''}`} placeholder="e.g. Head Office" value={form.name} onChange={e => { set('name', e.target.value); if (nameErr) setNameErr(''); }} />
-            {nameErr && <p className="text-xs text-rose-600 mt-1">{nameErr}</p>}
+            <input className={`form-control ${errors.name ? 'border-rose-400' : ''}`} placeholder="e.g. Head Office" value={form.name} onChange={e => { set('name', e.target.value); if (errors.name) setErrors(p => ({ ...p, name: '' })); }} />
+            {errors.name && <p className="text-xs text-rose-600 mt-1">{errors.name}</p>}
           </div>
           <div>
             <label className="form-label">Branch Code</label>
-            <input className="form-control" placeholder="e.g. HO-01" value={form.code} onChange={e => set('code', e.target.value)} />
+            <input className={`form-control ${errors.code ? 'border-rose-400' : ''}`} placeholder="e.g. HO-01" value={form.code} onChange={e => { set('code', e.target.value); if (errors.code) setErrors(p => ({ ...p, code: '' })); }} />
+            {errors.code && <p className="text-xs text-rose-600 mt-1">{errors.code}</p>}
           </div>
         </div>
         <div>
           <label className="form-label">Location / City</label>
-          <input className="form-control" placeholder="e.g. Mumbai" value={form.location} onChange={e => set('location', e.target.value)} />
+          <input className={`form-control ${errors.location ? 'border-rose-400' : ''}`} placeholder="e.g. Mumbai" value={form.location} onChange={e => { set('location', e.target.value); if (errors.location) setErrors(p => ({ ...p, location: '' })); }} />
+          {errors.location && <p className="text-xs text-rose-600 mt-1">{errors.location}</p>}
         </div>
         <div>
           <label className="form-label">Address</label>
-          <textarea className="form-control" rows={2} placeholder="Full address…" value={form.address} onChange={e => set('address', e.target.value)} />
+          <textarea className={`form-control ${errors.address ? 'border-rose-400' : ''}`} rows={2} placeholder="Full address…" value={form.address} onChange={e => { set('address', e.target.value); if (errors.address) setErrors(p => ({ ...p, address: '' })); }} />
+          {errors.address && <p className="text-xs text-rose-600 mt-1">{errors.address}</p>}
         </div>
         <div className="flex items-center justify-between p-3 rounded-xl border border-[#c7c4d8] bg-[#f8f9fe]">
           <div>

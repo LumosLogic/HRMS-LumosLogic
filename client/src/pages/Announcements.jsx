@@ -257,8 +257,8 @@ export default function AnnouncementsPage() {
   });
 
   const today    = new Date().toISOString().split('T')[0];
-  // BUG_179: expired = expires_at <= today (expires ON the date, not after it)
-  const isExpired = (a) => a.expires_at && a.expires_at <= today;
+  // BUG_179 + BUG_232: expired = expires_at < today — same-day expiry stays Active all day
+  const isExpired = (a) => a.expires_at && a.expires_at < today;
   const filtered = filter === 'all' ? announcements : announcements.filter(a => a.type === filter);
   const pinned   = filtered.filter(a => a.pinned && !isExpired(a));
   const regular  = filtered.filter(a => !a.pinned || isExpired(a));
@@ -361,7 +361,7 @@ export default function AnnouncementsPage() {
 
 function AnnouncementCard({ a, isAdmin, today, onEdit, onDelete, onPreview, onDuplicate, isHighlighted }) {
   const cfg     = TYPE_CFG[a.type] || TYPE_CFG.general;
-  const expired = a.expires_at && a.expires_at <= today;
+  const expired = a.expires_at && a.expires_at < today;
   const isImage = a.file_url && (a.file_type?.startsWith('image/') || /\.(png|jpg|jpeg|webp|gif)$/i.test(a.file_url));
   const toast   = useToast();
   const qc      = useQueryClient();
@@ -373,7 +373,7 @@ function AnnouncementCard({ a, isAdmin, today, onEdit, onDelete, onPreview, onDu
   const canManageThis = isAdmin && (isRootAdmin || (a.created_by != null && Number(a.created_by) === Number(user?.id)));
   // BUG_094: fade highlight out after 3 seconds
   const [lit, setLit] = useState(!!isHighlighted);
-  const [markedRead, setMarkedRead] = useState(false);
+  const [markedRead, setMarkedRead] = useState(!!a.is_read_by_me);
   useEffect(() => {
     if (!isHighlighted) return;
     setLit(true);
@@ -384,12 +384,16 @@ function AnnouncementCard({ a, isAdmin, today, onEdit, onDelete, onPreview, onDu
   // EHN_ANN_003: Mark as Read mutation
   const markReadMut = useMutation({
     mutationFn: () => apiPost(`/announcements/${a.id}/read`, {}),
-    onSuccess: () => { setMarkedRead(true); toast('Marked as read', 'success'); },
+    onSuccess: () => { setMarkedRead(true); },
     onError: e => toast(e.message, 'error'),
   });
 
+  // BUG_240: clicking anywhere on an unread announcement auto-marks it Read —
+  // no separate "Mark as Read" click required.
+
   return (
-    <div id={`ann-${a.id}`} className={`card overflow-hidden hover:shadow-card-hover transition-all duration-200 ${expired ? 'opacity-60' : ''} ${lit ? 'ring-4 ring-[#3525cd] ring-offset-2 bg-[#f0f3ff] border-[#3525cd]/40' : ''}`}>
+    <div id={`ann-${a.id}`} className={`card overflow-hidden hover:shadow-card-hover transition-all duration-200 ${expired ? 'opacity-60' : ''} ${lit ? 'ring-4 ring-[#3525cd] ring-offset-2 bg-[#f0f3ff] border-[#3525cd]/40' : ''}`}
+      onClick={() => { if (!isAdmin && !markedRead) markReadMut.mutate(); }}>
       <div className="h-1 w-full" style={{ background: cfg.strip }} />
       <div className="p-5">
         <div className="flex items-start gap-3">
@@ -444,13 +448,13 @@ function AnnouncementCard({ a, isAdmin, today, onEdit, onDelete, onPreview, onDu
               <span>·</span>
               <span>{timeAgo(a.created_at)}</span>
               {a.expires_at && <><span>·</span><span>Expires {a.expires_at}</span></>}
-              {a.scheduled_at && <><span>·</span><span className="text-amber-600 font-semibold">Scheduled: {new Date(a.scheduled_at).toLocaleDateString('en-IN', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' })}</span></>}
-              {/* EHN_ANN_003: Mark as Read for employees */}
+              {a.scheduled_at && <><span>·</span><span className="text-amber-600 font-semibold">Scheduled: {new Date(a.scheduled_at).toLocaleString('en-IN', { day:'numeric', month:'short', hour:'2-digit', minute:'2-digit' })}</span></>}
+              {/* EHN_ANN_003 + BUG_240: mark-as-read happens automatically on click;
+                  keep a subtle hint for unread items */}
               {!isAdmin && !markedRead && (
-                <button onClick={() => markReadMut.mutate()}
-                  className="ml-auto flex items-center gap-1 text-xs font-semibold text-emerald-600 hover:text-emerald-700 transition-colors">
-                  <CheckCircle2 size={12} />Mark as Read
-                </button>
+                <span className="ml-auto flex items-center gap-1 text-xs font-semibold text-emerald-600">
+                  <CheckCircle2 size={12} />Unread — click to mark read
+                </span>
               )}
               {!isAdmin && markedRead && (
                 <span className="ml-auto flex items-center gap-1 text-xs font-semibold text-emerald-600"><CheckCircle2 size={12} />Read</span>

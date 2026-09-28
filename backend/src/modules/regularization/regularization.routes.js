@@ -69,16 +69,27 @@ router.get('/usage', auth, async (req, res) => {
     const daysInMonth = new Date(year, month, 0).getDate();
     const end   = `${year}-${pad(month)}-${pad(daysInMonth)}`;
 
-    // Count biometric-detected early_leave days and late-arriving days this month
+    // BUG_244: the allowance counts APPROVED early-leave requests this month —
+    // not attendance rows stamped 'early_leave'. Attendance stamping only happens
+    // when the request is approved on the same day as the exit, so counting
+    // attendance rows under-reported the usage (always showed 0/3).
+    const apprRes = await pool.query(
+      `SELECT COUNT(*) AS approved_early_leaves
+         FROM attendance_regularization
+        WHERE user_id = $1 AND organization_id = $2
+          AND type = 'early_leave' AND status = 'approved'
+          AND date >= $3 AND date <= $4`,
+      [uid, oId, start, end]
+    );
+    const early_leave_days = parseInt(apprRes.rows[0]?.approved_early_leaves || 0);
+
+    // Late-arriving days still come from attendance (independent quota, informational)
     const attRes = await pool.query(
-      `SELECT
-         COUNT(*) FILTER (WHERE status = 'early_leave')                   AS early_leave_days,
-         COUNT(*) FILTER (WHERE is_late = TRUE AND status = 'present')    AS late_days
+      `SELECT COUNT(*) FILTER (WHERE is_late = TRUE AND status = 'present') AS late_days
        FROM attendance
        WHERE user_id = $1 AND organization_id = $2 AND date >= $3 AND date <= $4`,
       [uid, oId, start, end]
     );
-    const early_leave_days = parseInt(attRes.rows[0]?.early_leave_days || 0);
     const late_days        = parseInt(attRes.rows[0]?.late_days        || 0);
     const combined_count   = early_leave_days + late_days;
 
@@ -125,6 +136,36 @@ router.post('/', auth, async (req, res) => {
       return res.status(400).json({ error: 'Invalid request type' });
     if (type === 'early_leave' && !requested_early_exit_time)
       return res.status(400).json({ error: 'requested_early_exit_time is required for early leave requests' });
+
+    // BUG_244: block new early-leave requests once the monthly allowance is used up
+    if (type === 'early_leave') {
+      const nowD  = new Date();
+      const m     = parseInt(nowD.getMonth() + 1);
+      const y     = nowD.getFullYear();
+      const pad   = n => String(n).padStart(2, '0');
+      const s     = `${y}-${pad(m)}-01`;
+      const e     = `${y}-${pad(m)}-${pad(new Date(y, m, 0).getDate())}`;
+      const cntRes = await pool.query(
+        `SELECT COUNT(*) AS c
+           FROM attendance_regularization
+          WHERE user_id = $1 AND organization_id = $2
+            AND type = 'early_leave' AND status = 'approved'
+            AND date >= $3 AND date <= $4`,
+        [req.user.id, oId, s, e]
+      );
+      const schedRes = await pool.query(
+        `SELECT COALESCE(max_early_leave_count, 3) AS max_allowance
+           FROM work_schedule WHERE organization_id = $1 LIMIT 1`,
+        [oId]
+      );
+      const used = parseInt(cntRes.rows[0]?.c || 0);
+      const maxAllowance = parseInt(schedRes.rows[0]?.max_allowance || 3);
+      if (used >= maxAllowance) {
+        return res.status(409).json({
+          error: `Early leave allowance exhausted for this month (${used}/${maxAllowance} used). Additional early departures will be treated as Half Day — please apply for Half Day leave instead.`,
+        });
+      }
+    }
 
     const { data, error } = await db.from('attendance_regularization')
       .insert({
@@ -224,11 +265,13 @@ router.put('/:id/review', auth, hasPermission('attendance', 'approve_regularizat
     if (status === 'approved') {
       if (reg.type === 'early_leave') {
         // Auto-checkout the employee only if:
-        //   1. The early leave is for today
-        //   2. The approved exit time has already passed (current IST time >= exit time)
-        //   3. The employee is currently checked in but not yet checked out
-        // This prevents pre-setting checkout times before the employee actually leaves.
-        if (reg.requested_early_exit_time && reg.date === new Date().toISOString().split('T')[0]) {
+        //   1. The approved exit time has already passed (for today: current IST >= exit time;
+        //      for past dates the day is over so the condition holds)
+        //   2. The employee has an attendance row with a check-in but no check-out
+        // BUG_244: past-date approvals now also stamp attendance so the monthly
+        // early-exit record is complete instead of only same-day approvals.
+        if (reg.requested_early_exit_time) {
+          const isToday = reg.date === new Date().toISOString().split('T')[0];
           const parts = new Intl.DateTimeFormat('en-GB', {
             timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false,
           }).formatToParts(new Date());
@@ -238,7 +281,9 @@ router.put('/:id/review', auth, hasPermission('attendance', 'approve_regularizat
           const nowMins  = nowH * 60 + nowM;
           const exitMins = exitH * 60 + exitM;
 
-          if (nowMins >= exitMins) {
+          // Past dates: the workday is over, so the exit time has definitively passed.
+          // Today: only stamp once the current IST time has actually reached the exit time.
+          if (!isToday || nowMins >= exitMins) {
             const attRes2 = await client.query(
               `SELECT * FROM attendance WHERE user_id = $1 AND date = $2 AND organization_id = $3`,
               [reg.user_id, reg.date, oId]

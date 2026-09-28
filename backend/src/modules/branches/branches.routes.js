@@ -2,6 +2,7 @@ const express = require('express');
 const router  = express.Router();
 const { pool } = require('../../config/db-pg-adapter');
 const { auth, rootAdminOnly } = require('../../middleware/auth');
+const { hasPermission } = require('../../middleware/permissions');
 const { getAccessibleBranches } = require('../../services/branchService');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
@@ -423,8 +424,9 @@ router.get('/', auth, async (req, res) => {
   }
 });
 
-// POST /api/branches — BUG_064: allow admins by role as fallback if RBAC not yet seeded
-router.post('/', auth, async (req, res) => {
+// POST /api/branches — BUG_064: gate with hasPermission so the button can be hidden in the UI
+// when the user doesn't have branches.create; run fix_branches_hr_permissions.sql first.
+router.post('/', auth, hasPermission('branches', 'create'), async (req, res) => {
   if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin access required to create branches.' });
   try {
     const { name, code, location, address, is_active } = req.body;
@@ -447,7 +449,7 @@ router.post('/', auth, async (req, res) => {
 // HR admins may edit branch details (name/code/location/address), but ONLY a
 // Root Admin may change a branch's active/inactive state. Enforced server-side
 // on both the quick-toggle path and the full edit-form path.
-router.put('/:id', auth, async (req, res) => {
+router.put('/:id', auth, hasPermission('branches', 'manage'), async (req, res) => {
   if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin access required.' });
   try {
     const { name, code, location, address, is_active } = req.body;

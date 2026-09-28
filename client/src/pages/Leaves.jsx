@@ -491,7 +491,9 @@ function LeaveCard({ leave: l, isAdmin, user, onApprove, onReject, onRevert, onC
     return Number(l.current_approver_id) === Number(user?.id);
   })();
   return (
-    <div id={`leave-${l.id}`} className={`card px-4 py-3.5 flex items-start gap-3.5 hover:border-[#3525cd] hover:shadow-card-hover hover:translate-x-0.5 transition-all duration-150 ${sc.border || ''} ${lit ? 'bg-[#f0f3ff] ring-4 ring-[#3525cd] ring-offset-2 border-[#3525cd]/40' : (sc.bg || '')}`}>
+    <div id={`leave-${l.id}`} className={`card px-4 py-3.5 hover:border-[#3525cd] hover:shadow-card-hover hover:translate-x-0.5 transition-all duration-150 ${sc.border || ''} ${lit ? 'bg-[#f0f3ff] ring-4 ring-[#3525cd] ring-offset-2 border-[#3525cd]/40' : (sc.bg || '')}`}>
+      {/* BUG_234: flex-row header + full-width comment thread below — comments no longer squeeze the details */}
+      <div className="flex items-start gap-3.5">
       <Avatar name={l.name} color={l.avatar_color} size={36} />
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
@@ -634,9 +636,9 @@ function LeaveCard({ leave: l, isAdmin, user, onApprove, onReject, onRevert, onC
       </div>
 
       <div className="flex items-center gap-1.5 shrink-0">
-        {/* ENH_LEAVES_004: Comment thread toggle */}
+        {/* ENH_LEAVES_004 + BUG_236: consistent comment-count formatting */}
         <button className="btn btn-outline btn-sm text-xs py-1 px-2 flex items-center gap-1" onClick={() => setShowComments(c => !c)}>
-          💬 {comments.length > 0 ? comments.length : ''}Comments
+          💬 {comments.length > 0 ? `${comments.length} ` : ''}Comments
         </button>
         {(isAdmin || l.status !== 'approved') && (
           <button className="btn btn-outline btn-sm text-xs py-1 px-2" onClick={onEdit}><Edit size={12} /> Edit</button>
@@ -644,6 +646,7 @@ function LeaveCard({ leave: l, isAdmin, user, onApprove, onReject, onRevert, onC
         {isAdmin && (
           <button className="btn btn-danger btn-sm text-xs py-1 px-2" onClick={onDelete}><Trash2 size={12} /></button>
         )}
+      </div>
       </div>
 
       {/* ENH_LEAVES_004: Comment thread */}
@@ -655,8 +658,18 @@ function LeaveCard({ leave: l, isAdmin, user, onApprove, onReject, onRevert, onC
             <div className="space-y-2 max-h-32 overflow-y-auto">
               {comments.map(c => (
                 <div key={c.id} className="bg-[#f9f9ff] border border-[#f0f3ff] rounded-lg px-3 py-1.5">
-                  <div className="flex items-center gap-2 mb-0.5">
+                  <div className="flex items-center gap-2 mb-0.5 flex-wrap">
                     <span className="text-xs font-bold text-[#151c27]">{c.commenter_name || 'User'}</span>
+                    {/* BUG_235: show the author's role/designation next to their name */}
+                    {c.commenter_position
+                      ? <span className="text-[0.6rem] font-semibold text-[#777587]">{c.commenter_position}</span>
+                      : c.commenter_role === 'root_admin'
+                        ? <span className="text-[0.6rem] font-semibold text-rose-600">Root Admin</span>
+                        : c.commenter_role === 'admin'
+                          ? <span className="text-[0.6rem] font-semibold text-[#3525cd]">HR Admin</span>
+                          : c.commenter_role === 'employee'
+                            ? <span className="text-[0.6rem] font-semibold text-emerald-600">Employee</span>
+                            : null}
                     <span className="text-[0.6rem] text-[#9ca3af]">{new Date(c.created_at).toLocaleDateString('en-IN', { day:'numeric', month:'short' })}</span>
                   </div>
                   <p className="text-xs text-[#464555]">{c.comment}</p>
@@ -1023,7 +1036,8 @@ export function ApplyLeaveModal({ employees, isAdmin, allLeaves, policies, onClo
                           <div className="mt-2 p-3 rounded-xl bg-[#f0f3ff] border border-[#c7c4d8] space-y-1 text-xs">
                             <div className="flex items-center gap-2">
                               <span className="text-[#777587]">Selected Range:</span>
-                              <span className="font-semibold text-[#151c27]">{f.start} – {f.end}</span>
+                              {/* BUG_245: display dates in the standard "Sep 15, 2026" format */}
+                              <span className="font-semibold text-[#151c27]">{fmtDate(f.start)} – {fmtDate(f.end)}</span>
                             </div>
                             <div className="flex items-center gap-2">
                               <span className="text-[#777587]">Total calendar days:</span>

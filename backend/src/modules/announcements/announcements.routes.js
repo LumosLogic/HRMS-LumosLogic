@@ -46,22 +46,33 @@ router.get('/', auth, async (req, res) => {
     const rows = data || [];
     if (rows.length === 0) return res.json([]);
 
-    const creatorIds = [...new Set(rows.map(r => r.created_by).filter(Boolean))];
+    const nowIso = new Date().toISOString();
+    // BUG_242: scheduled announcements are hidden from everyone (except via the
+    // admin edit path) until their scheduled time is reached.
+    const visibleRows = isAdmin(req.user.role)
+      ? rows
+      : rows.filter(r => !r.scheduled_at || new Date(r.scheduled_at) <= new Date(nowIso));
+
+    const creatorIds = [...new Set(visibleRows.map(r => r.created_by).filter(Boolean))];
     let creatorMap = {};
     if (creatorIds.length) {
       const { data: creators } = await db.from('users').select('id, name').in('id', creatorIds);
       (creators || []).forEach(u => { creatorMap[u.id] = u.name; });
     }
 
-    // An announcement is expired when today >= expires_at (i.e. expires_at < today OR expires_at === today)
-    const isExpired = (r) => r.expires_at && r.expires_at <= today;
+    // BUG_232: an announcement expires the DAY AFTER its expires_at —
+    // an expiry date of today is still active/visible for the whole day.
+    // (Previously `expires_at <= today` marked same-day expiry as Expired.)
+    const isExpired = (r) => r.expires_at && r.expires_at < today;
 
     // Filter expired for non-admins
-    const filtered = isAdmin(req.user.role) ? rows : rows.filter(r => !isExpired(r));
+    const filtered = isAdmin(req.user.role)
+      ? visibleRows
+      : visibleRows.filter(r => !isExpired(r));
 
     // BUG_179: auto-unpin expired announcements so they never appear in the Pinned section.
     // Also persist the unpin to the DB so the fix survives page reloads and ordering is correct.
-    const expiredPinnedIds = rows.filter(r => r.pinned && isExpired(r)).map(r => r.id);
+    const expiredPinnedIds = visibleRows.filter(r => r.pinned && isExpired(r)).map(r => r.id);
     if (expiredPinnedIds.length) {
       db.from('announcements').update({ pinned: false })
         .in('id', expiredPinnedIds)
@@ -69,10 +80,22 @@ router.get('/', auth, async (req, res) => {
         .then(() => {}).catch(() => {});
     }
 
+    // EHN_ANN_003 + BUG_240: tell the client which announcements the current
+    // user has already read so the UI can show unread state accurately.
+    let readSet = {};
+    if (!isAdmin(req.user.role)) {
+      const { data: reads } = await db.from('announcement_reads')
+        .select('announcement_id')
+        .eq('user_id', req.user.id)
+        .in('announcement_id', filtered.map(r => r.id));
+      (reads || []).forEach(r => { readSet[r.announcement_id] = true; });
+    }
+
     res.json(filtered.map(r => ({
       ...r,
       creator_name: creatorMap[r.created_by] || 'Admin',
       pinned: r.pinned && !isExpired(r),
+      is_read_by_me: isAdmin ? true : !!readSet[r.id],
     })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -104,7 +127,7 @@ router.post('/', auth, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = resolveOrgId(req);
-    const { title, content, type, priority, target_audience, pinned, expires_at, file_url, file_name, file_type } = req.body;
+    const { title, content, type, priority, target_audience, pinned, expires_at, scheduled_at, file_url, file_name, file_type } = req.body;
     if (!title || !content) return res.status(400).json({ error: 'title and content required' });
     // BUG_088: enforce field length limits at API level
     if (title.trim().length > 100) return res.status(400).json({ error: 'Title must be 100 characters or fewer.' });
@@ -129,6 +152,7 @@ router.post('/', auth, async (req, res) => {
       target_audience: safeAudience,
       pinned: !!pinned,
       expires_at: expires_at || null,
+      scheduled_at: scheduled_at || null,
       created_by: req.user.id,
       organization_id: oId,
     };
@@ -140,6 +164,13 @@ router.post('/', auth, async (req, res) => {
       .insert(payload)
       .select().single();
     if (error) throw error;
+
+    // BUG_242: a scheduled announcement must not notify anyone until it goes
+    // live at its scheduled time — skip in-app + email fan-out here.
+    const isScheduled = !!payload.scheduled_at && new Date(payload.scheduled_at) > new Date();
+    if (isScheduled) {
+      return res.json(data);
+    }
 
     const { data: users } = await db.from('users').select('id, email, name, role').eq('organization_id', oId);
     if (users?.length) {

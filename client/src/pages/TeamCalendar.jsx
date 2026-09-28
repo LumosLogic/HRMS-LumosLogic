@@ -293,6 +293,21 @@ export default function TeamCalendar() {
     staleTime: 60000,
   });
 
+  // BUG_072: fetch attendance records for the month so absent employees show on the calendar
+  const { data: monthAttendance = [] } = useQuery({
+    queryKey: ['team-attendance', year, month, selectedBranchId],
+    queryFn:  () => apiGet('/attendance', { year, month }).catch(() => []),
+    staleTime: 60000,
+  });
+  // Build a map: { 'YYYY-MM-DD': [{ user_id, name, avatar_color, status }] }
+  const absentMap = {};
+  for (const rec of monthAttendance) {
+    if (rec.status === 'absent') {
+      if (!absentMap[rec.date]) absentMap[rec.date] = [];
+      absentMap[rec.date].push({ user_id: rec.user_id, name: rec.name, avatar_color: rec.avatar_color });
+    }
+  }
+
   const { data: holidays = [] } = useQuery({
     queryKey: ['holidays', year],
     queryFn:  () => apiGet('/holidays', { year }),
@@ -758,6 +773,25 @@ export default function TeamCalendar() {
                         {dayLeaves.length >= 3 && (
                           <div className="text-[0.6rem] text-[#9ca3af] pl-1 leading-tight">
                             {dayLeaves.length} out
+                          </div>
+                        )}
+
+                        {/* BUG_072: Absent employees (auto-marked by nightly cron) */}
+                        {(absentMap[ds] || []).slice(0, 2).map(a => (
+                          <div key={`absent-${a.user_id}`} title={`${a.name} — Absent`}
+                            className="flex items-center gap-1 rounded px-1.5 py-0.5 text-[0.72rem] font-semibold truncate"
+                            style={{ background: '#fff1f2', color: '#be123c', border: '1px solid #fecdd3' }}>
+                            <div className="w-4 h-4 rounded-full flex-shrink-0 flex items-center justify-center text-[0.55rem] font-black text-white"
+                              style={{ background: a.avatar_color || '#be123c' }}>
+                              {a.name ? a.name.charAt(0).toUpperCase() : 'A'}
+                            </div>
+                            <span className="truncate">{a.name?.split(' ')[0]}</span>
+                            <span className="ml-auto text-[0.55rem] font-bold opacity-70">ABS</span>
+                          </div>
+                        ))}
+                        {(absentMap[ds] || []).length > 2 && (
+                          <div className="text-[0.6rem] text-rose-400 pl-1 leading-tight">
+                            +{(absentMap[ds] || []).length - 2} absent
                           </div>
                         )}
                       </div>

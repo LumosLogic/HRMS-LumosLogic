@@ -226,9 +226,16 @@ router.get('/:id/comments', auth, async (req, res) => {
     const rows = data || [];
     if (!rows.length) return res.json([]);
     const uIds = [...new Set(rows.map(r => r.user_id).filter(Boolean))];
-    const { data: users } = await db.from('users').select('id, name, avatar_color').in('id', uIds);
+    // BUG_235: include role/position so the UI can show the author's capacity
+    const { data: users } = await db.from('users').select('id, name, avatar_color, role, position').in('id', uIds);
     const uMap = {}; (users || []).forEach(u => { uMap[u.id] = u; });
-    res.json(rows.map(r => ({ ...r, commenter_name: uMap[r.user_id]?.name || 'Unknown', commenter_avatar_color: uMap[r.user_id]?.avatar_color || '' })));
+    res.json(rows.map(r => ({
+      ...r,
+      commenter_name: uMap[r.user_id]?.name || 'Unknown',
+      commenter_avatar_color: uMap[r.user_id]?.avatar_color || '',
+      commenter_role: uMap[r.user_id]?.role || '',
+      commenter_position: uMap[r.user_id]?.position || '',
+    })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

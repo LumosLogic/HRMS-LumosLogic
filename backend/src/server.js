@@ -11,7 +11,7 @@ const { featureGate }  = require('./middleware/featureFlag');
 const { rateLimiter, LIMITS } = require('./middleware/rateLimiter');
 const { maintenanceMiddleware } = require('./middleware/maintenanceMode');
 const { biometricSnGuard, biometricAuditLog } = require('./middleware/biometricSecurity');
-const { scheduleDailyAt, runDailyNotifications, runAutoMarkAbsent, runProbationExpiryCheck, runResignationExpiry } = require('./utils/cronJobs');
+const { scheduleDailyAt, scheduleEveryMinutes, runDailyNotifications, runAutoMarkAbsent, runProbationExpiryCheck, runResignationExpiry, runScheduledAnnouncementPublisher } = require('./utils/cronJobs');
 const payrollScheduler          = require('./services/payrollScheduler');
 const attendanceEmailScheduler  = require('./services/attendanceEmailScheduler');
 
@@ -113,7 +113,7 @@ app.use((req, res, next) => {
   if (!origin || ALLOWED_ORIGINS.includes(origin)) {
     if (origin) res.setHeader('Access-Control-Allow-Origin', origin);
     res.setHeader('Access-Control-Allow-Methods', 'GET,POST,PUT,PATCH,DELETE,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Branch-Id');
   }
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
@@ -264,6 +264,9 @@ async function runStartupMigrations() {
     `CREATE INDEX IF NOT EXISTS idx_auto_sync_config_org ON biometric_auto_sync_config(org_id)`,
     // Mark auto-triggered jobs in the existing historical sync table
     `ALTER TABLE biometric_historical_sync_jobs ADD COLUMN IF NOT EXISTS auto_triggered BOOLEAN DEFAULT false`,
+    // BUG_242: scheduled announcements — publish-time gating + one-shot notify flag
+    `ALTER TABLE announcements ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ DEFAULT NULL`,
+    `ALTER TABLE announcements ADD COLUMN IF NOT EXISTS published_notified BOOLEAN NOT NULL DEFAULT false`,
   ];
   for (const sql of migrations) {
     await pool.query(sql).catch(e => console.warn('[startup-migration] skipped:', e.message));
@@ -284,6 +287,8 @@ async function start() {
     scheduleDailyAt(0, 5, runProbationExpiryCheck);
     // Resignation expiry: transition resigned→inactive after last_working_day at 00:10 daily
     scheduleDailyAt(0, 10, runResignationExpiry);
+    // BUG_242: publish scheduled announcements whose time has arrived (every 5 min)
+    scheduleEveryMinutes(5, runScheduledAnnouncementPublisher);
     payrollScheduler.start();
     // Automatic EasyWDMS → HRMS biometric sync (per-org configurable schedule)
     biometricAutoScheduler.start().catch(err =>

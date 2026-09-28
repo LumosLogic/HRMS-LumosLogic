@@ -15,8 +15,12 @@ if (VAPID_PUBLIC && VAPID_PRIVATE) {
 
 async function sendPushToUsers(userIds, payload) {
   if (!VAPID_PUBLIC || !VAPID_PRIVATE) return 0;
-  let query = db.from('push_subscriptions').select('user_id, endpoint, subscription');
-  if (userIds && userIds.length > 0) query = query.in('user_id', userIds);
+  // BUG_135 hardening: an empty target list must never fan out to ALL
+  // subscriptions org-wide — treat it as a no-op.
+  if (!Array.isArray(userIds) || userIds.length === 0) return 0;
+  const query = db.from('push_subscriptions')
+    .select('user_id, endpoint, subscription')
+    .in('user_id', userIds);
   const { data: subs } = await query;
   if (!subs?.length) return 0;
   const payloadStr = JSON.stringify(payload);

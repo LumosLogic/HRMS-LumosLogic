@@ -40,9 +40,18 @@ router.post('/', auth, hasPermission('settings', 'manage'), async (req, res) => 
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+
+    // BUG_238: snapshot previous policies so the replace-all can be audited
+    const { rows: beforeRows } = await client.query(
+      `SELECT * FROM leave_policies WHERE organization_id = $1`, [oId]
+    );
+    const beforeByType = {};
+    beforeRows.forEach(r => { beforeByType[r.leave_type] = r; });
+
     await client.query('DELETE FROM leave_policies WHERE organization_id = $1', [oId]);
 
     const inserted = [];
+    const auditRows = [];
     for (const p of policies) {
       const { leave_type, label, annual_quota, carry_forward, max_carry_forward, paid, active } = p;
       const result = await client.query(
@@ -54,6 +63,36 @@ router.post('/', auth, hasPermission('settings', 'manage'), async (req, res) => 
          !!carry_forward, Number(max_carry_forward) || 0, paid !== false, active !== false]
       );
       inserted.push(result.rows[0]);
+
+      // BUG_238: diff against the previous row (if any)
+      const prev = beforeByType[leave_type];
+      const next = result.rows[0];
+      const AUDITABLE = ['annual_quota', 'carry_forward', 'max_carry_forward', 'paid', 'active', 'label'];
+      for (const k of AUDITABLE) {
+        const oldV = prev ? prev[k] : null;
+        if (prev && String(oldV) === String(next[k])) continue;
+        if (!prev && k !== 'annual_quota') continue; // seed-insert noise
+        auditRows.push({
+          organization_id: oId,
+          leave_type,
+          field_changed:   k,
+          old_value:       oldV === null || oldV === undefined ? null : String(oldV),
+          new_value:       next[k] === null || next[k] === undefined ? null : String(next[k]),
+          changed_by:      req.user.id,
+          changed_by_name: req.user.name || '',
+        });
+      }
+    }
+
+    if (auditRows.length) {
+      for (const a of auditRows) {
+        await client.query(
+          `INSERT INTO leave_policy_audit_log
+             (organization_id, leave_type, field_changed, old_value, new_value, changed_by, changed_by_name)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+          [a.organization_id, a.leave_type, a.field_changed, a.old_value, a.new_value, a.changed_by, a.changed_by_name]
+        );
+      }
     }
 
     await client.query('COMMIT');
@@ -72,10 +111,34 @@ router.put('/:id', auth, hasPermission('settings', 'manage'), async (req, res) =
     const oId = req.user.organization_id;
     const fields = req.body;
     delete fields.id; delete fields.organization_id; delete fields.created_at;
+
+    // BUG_238: capture the previous row so we can record per-field changes
+    const { data: before } = await db.from('leave_policies')
+      .select('*').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
+    if (!before) return res.status(404).json({ error: 'Leave policy not found' });
+
     const { data, error } = await db.from('leave_policies')
       .update(fields).eq('id', req.params.id).eq('organization_id', oId)
       .select().single();
     if (error) throw error;
+
+    // BUG_238: write one audit row per changed field so History shows what
+    // changed, the old/new values, who changed it and when.
+    const AUDITABLE = ['annual_quota', 'carry_forward', 'max_carry_forward', 'paid', 'active', 'label'];
+    const changes = Object.keys(fields)
+      .filter(k => AUDITABLE.includes(k) && String(fields[k]) !== String(before[k]));
+    if (changes.length) {
+      await db.from('leave_policy_audit_log').insert(changes.map(k => ({
+        organization_id: oId,
+        leave_type:      before.leave_type,
+        field_changed:   k,
+        old_value:       before[k] === null || before[k] === undefined ? null : String(before[k]),
+        new_value:       fields[k] === null || fields[k] === undefined ? null : String(fields[k]),
+        changed_by:      req.user.id,
+        changed_by_name: req.user.name || '',
+      })));
+    }
+
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

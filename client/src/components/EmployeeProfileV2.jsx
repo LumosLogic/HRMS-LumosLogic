@@ -183,7 +183,9 @@ function PersonalTab({ empId, isAdmin }) {
 
   const openBasic   = () => { setForm({ ...personal }); setEditSection('basic'); };
   const openAddress = () => { setForm({ ...personal }); setEditSection('address'); };
-  const openHealth  = () => { setForm({ ...health });   setEditSection('health'); };
+  // BUG_199: pre-seed the Health edit form with the Basic Info blood group so a
+  // fresh health record starts consistent with what Basic Information shows.
+  const openHealth  = () => { setForm({ blood_group: personal.blood_group || '', ...health });   setEditSection('health'); };
   const cancelEdit  = () => setEditSection(null);
   const openEc     = (rec = {}) => { setForm({ contact_name: rec.contact_name || '', relationship: rec.relationship || '', mobile_number: rec.mobile_number || '', alternate_number: rec.alternate_number || '', email: rec.email || '', address: rec.address || '', is_primary: rec.is_primary || false }); setEcModal(rec); };
   const openFamily = (rec = {}) => { setForm({ relationship: rec.relationship||'', name: rec.name||'', date_of_birth: rec.date_of_birth||'', gender: rec.gender||'', occupation: rec.occupation||'', contact_number: rec.contact_number||'', dependent: rec.dependent||false }); setFamilyModal(rec); };
@@ -386,7 +388,9 @@ function PersonalTab({ empId, isAdmin }) {
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6">
-            <InfoRow label="Blood Group" value={health.blood_group} />
+            {/* BUG_199: fall back to the Basic Information blood group (users table)
+                when the Health record has no value — one source of truth for display */}
+            <InfoRow label="Blood Group" value={health.blood_group || personal.blood_group} />
             <InfoRow label="Allergies" value={health.allergies} />
             <InfoRow label="Medical Conditions" value={health.medical_conditions} />
             <InfoRow label="Disabilities" value={health.disabilities} />
@@ -517,6 +521,60 @@ function PersonalTab({ empId, isAdmin }) {
           </div>
         </div>
       </Modal>
+    </div>
+  );
+}
+
+// BUG_222: checkbox-chip multi-select for departments — replaces the native
+// multi-size <select> listbox that rendered with poor formatting.
+function DeptMultiSelect({ departments = [], value = [], onChange }) {
+  const [open, setOpen] = useState(false);
+  const wrapRef = useRef(null);
+  useEffect(() => {
+    function onDocClick(e) {
+      if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false);
+    }
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, []);
+
+  const toggle = (id) => {
+    const next = value.includes(id) ? value.filter(v => v !== id) : [...value, id];
+    onChange(next);
+  };
+
+  const selectedNames = departments.filter(d => value.includes(d.id)).map(d => d.name);
+
+  return (
+    <div ref={wrapRef} className="relative">
+      <label className="form-label">Department(s)</label>
+      <button type="button" onClick={() => setOpen(o => !o)}
+        className="form-control text-left flex items-center justify-between gap-2">
+        <span className={`truncate ${selectedNames.length ? '' : 'text-[#9ca3af]'}`}>
+          {selectedNames.length ? selectedNames.join(', ') : 'Select departments…'}
+        </span>
+        <ChevronDown size={13} className={`text-[#777587] flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {value.length > 0 && (
+        <div className="flex flex-wrap gap-1 mt-1.5">
+          {selectedNames.map(name => (
+            <span key={name} className="inline-flex items-center gap-1 text-[0.62rem] font-bold px-2 py-0.5 rounded-full bg-[#f0f3ff] text-[#3525cd] border border-[#c7c4d8]">
+              {name}
+            </span>
+          ))}
+        </div>
+      )}
+      {open && (
+        <div className="absolute z-30 mt-1 w-full max-h-48 overflow-y-auto bg-white border border-[#c7c4d8] rounded-xl shadow-lg p-1.5">
+          {departments.length === 0 && <p className="text-xs text-[#9ca3af] px-2 py-1.5">No departments configured</p>}
+          {departments.map(d => (
+            <label key={d.id} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[#f0f3ff] cursor-pointer text-sm">
+              <input type="checkbox" className="accent-[#3525cd]" checked={value.includes(d.id)} onChange={() => toggle(d.id)} />
+              <span className="text-[#464555]">{d.name}</span>
+            </label>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -686,13 +744,10 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
         {empDetailsEditing ? (
           <div>
             <div className="grid grid-cols-2 gap-3">
-              <div><label className="form-label">Employee ID</label><input className="form-control" value={form.employee_id||''} onChange={e=>set('employee_id',e.target.value)}/></div>
-              <div><label className="form-label">Department(s)</label>
-                <select className="form-control" multiple size={3} value={form.department_ids||[]} onChange={e=>set('department_ids',Array.from(e.target.selectedOptions,o=>Number(o.value)))}>
-                  {departments.map(d=><option key={d.id} value={d.id}>{d.name}</option>)}
-                </select>
-                <p className="text-[0.65rem] text-[#777587] mt-0.5">Hold Ctrl/Cmd to select multiple</p>
-              </div>
+              {/* BUG_225: Employee ID is a system-generated unique identifier — read-only */}
+              <div><label className="form-label">Employee ID</label><input className="form-control bg-[#f9f9ff] text-[#777587] cursor-not-allowed" value={form.employee_id||''} readOnly disabled/></div>
+              {/* BUG_222: checkbox-chip multi-select instead of the native listbox */}
+              <DeptMultiSelect departments={departments} value={form.department_ids||[]} onChange={ids=>set('department_ids',ids)} />
               <div><label className="form-label">Position / Title</label><input className="form-control" value={form.position||''} onChange={e=>set('position',e.target.value)}/></div>
               <div><label className="form-label">Grade</label><input className="form-control" value={form.grade||''} onChange={e=>set('grade',e.target.value)}/></div>
               <div><label className="form-label">Pay Cadre</label><input className="form-control" value={form.pay_cadre||''} onChange={e=>set('pay_cadre',e.target.value)}/></div>
@@ -740,7 +795,11 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
             </div>
             <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-[#f0f3ff]">
               <button className="btn btn-outline" onClick={() => setEmpDetailsEditing(false)}>Cancel</button>
-              <button className="btn btn-primary" onClick={() => empDetailsMut.mutate(form)} disabled={empDetailsMut.isPending}>
+              <button className="btn btn-primary" onClick={() => {
+                // BUG_224/225: exclude employee_id (read-only, system-generated) from the save payload
+                const { employee_id: _eid, ...saveable } = form;
+                empDetailsMut.mutate(saveable);
+              }} disabled={empDetailsMut.isPending}>
                 {empDetailsMut.isPending ? <><Loader2 size={13} className="animate-spin mr-1" />Saving…</> : <><Save size={13} className="mr-1" />Save</>}
               </button>
             </div>
@@ -1418,13 +1477,15 @@ function CompensationTab({ empId, isAdmin, onEdit, emp }) {
             if (form.percentage_share !== '' && form.percentage_share != null) {
               if (isNaN(share) || share <= 0 || share > 100) { errs.push('Share % must be between 1 and 100.'); }
               else {
-                // BUG_207: correct current total — exclude editing nominee's own share
-                const currentTotal = nominees
-                  .filter(n => n.id !== nomModal?.id)
-                  .reduce((s, n) => s + (parseFloat(n.percentage_share) || 0), 0);
-                const newTotal = currentTotal + share;
+                // BUG_207: round the current total to avoid float noise like "020%" or "19.999999%"
+                const currentTotal = Math.round(
+                  nominees
+                    .filter(n => n.id !== nomModal?.id)
+                    .reduce((s, n) => s + (parseFloat(n.percentage_share) || 0), 0) * 100
+                ) / 100;
+                const newTotal = Math.round((currentTotal + share) * 100) / 100;
                 if (newTotal > 100) {
-                  errs.push(`Total nominee share would exceed 100% (current: ${currentTotal}%, adding: ${share}%)`);
+                  errs.push(`Total nominee share would exceed 100% (current: ${currentTotal}%, adding: ${share}% — total would be ${newTotal}%).`);
                 }
               }
             }
@@ -1447,7 +1508,7 @@ function CompensationTab({ empId, isAdmin, onEdit, emp }) {
 
 // ─── Section: Compliance Tab ──────────────────────────────────────────────────
 
-function ComplianceTab({ empId, onEdit, emp }) {
+function ComplianceTab({ empId, isAdmin, onEdit, emp }) {
   const toast = useToast();
   const qc = useQueryClient();
   const [docModal,    setDocModal]    = useState(null);
@@ -1566,7 +1627,7 @@ function ComplianceTab({ empId, onEdit, emp }) {
 
       {/* Statutory — inline editing */}
       <SectionCard title="Statutory Information" icon={Shield}
-        action={!statEditing && <AdminBtn onClick={() => openStat(statutory)} />}>
+        action={isAdmin && !statEditing && <AdminBtn onClick={() => openStat(statutory)} />}>
         {statEditing ? (
           <div>
             <div className="grid grid-cols-2 gap-3">
@@ -1919,10 +1980,6 @@ function WorkTab({ empId, isAdmin, emp }) {
     queryKey: ['emp-assets', empId],
     queryFn: () => apiGet('/assets', { userId: empId }),
   });
-  const { data: docs = [] } = useQuery({
-    queryKey: ['emp-docs', empId],
-    queryFn: () => apiGet('/documents', { userId: empId }),
-  });
 
   return (
     <div className="space-y-5">
@@ -1943,22 +2000,8 @@ function WorkTab({ empId, isAdmin, emp }) {
         )}
       </SectionCard>
 
-      {/* Documents */}
-      <SectionCard title="Documents" icon={FileText}>
-        {docs.length === 0 ? <EmptyState icon={FileText} text="No documents uploaded" /> : (
-          <div className="space-y-2">
-            {docs.map(d => (
-              <div key={d.id} className="flex items-center justify-between py-2.5 border-b border-[#f0f3ff] last:border-0">
-                <div>
-                  <p className="text-sm font-semibold text-[#151c27]">{d.name}</p>
-                  <p className="text-xs text-[#777587]">{d.category}</p>
-                </div>
-                {d.file_url && <a href={d.file_url} target="_blank" rel="noreferrer" className="p-1.5 rounded hover:bg-[#f0f3ff] text-[#3525cd]"><Download size={14}/></a>}
-              </div>
-            ))}
-          </div>
-        )}
-      </SectionCard>
+      {/* BUG_223: Documents section removed from the Work tab — documents are
+          managed on the dedicated Documents tab / Documents module. */}
 
       <div className="grid grid-cols-2 gap-3">
         <button
@@ -2854,7 +2897,7 @@ export default function EmployeeProfileV2({ emp, onBack, onEdit }) {
             {currentTab === 'professional' && <ProfessionalTab             empId={emp.id} isAdmin={isAdmin} onEdit={onEdit} emp={emp} />}
             {currentTab === 'education'    && <EducationTab                empId={emp.id} isAdmin={isAdmin} />}
             {currentTab === 'compensation' && <CompensationTab             empId={emp.id} isAdmin={isAdmin} onEdit={onEdit} emp={emp} />}
-            {currentTab === 'compliance'   && <ComplianceTab               empId={emp.id} onEdit={onEdit} emp={emp} />}
+            {currentTab === 'compliance'   && <ComplianceTab               empId={emp.id} isAdmin={isAdmin} onEdit={onEdit} emp={emp} />}
             {currentTab === 'work'         && <WorkTab                     empId={emp.id} isAdmin={isAdmin} emp={emp} />}
             {currentTab === 'documents'    && <DocumentRequirementsSection empId={emp.id} isAdmin={isAdmin} />}
             {currentTab === 'performance'  && <PerformanceTab              empId={emp.id} isAdmin={isAdmin} />}

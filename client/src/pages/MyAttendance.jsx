@@ -525,6 +525,8 @@ export default function MyAttendance() {
 
   // Export CSV handler
   function handleExport() {
+    // BUG_229: never export an empty CSV — nothing to download when filters match 0 records
+    if (filteredRecords.length === 0) return;
     exportCSV(filteredRecords, MONTH_NAMES[month - 1], year);
   }
 
@@ -555,7 +557,9 @@ export default function MyAttendance() {
 
         <button
           onClick={handleExport}
-          className="flex items-center gap-2 bg-white border border-[#c7c4d8] hover:border-[#3525cd] hover:bg-[#f0f3ff] text-[#464555] hover:text-[#3525cd] text-xs font-semibold px-4 py-2 rounded-xl transition-all shadow-sm"
+          disabled={filteredRecords.length === 0}
+          title={filteredRecords.length === 0 ? 'No data available to export' : 'Download attendance as CSV'}
+          className="flex items-center gap-2 bg-white border border-[#c7c4d8] hover:border-[#3525cd] hover:bg-[#f0f3ff] text-[#464555] hover:text-[#3525cd] text-xs font-semibold px-4 py-2 rounded-xl transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-[#c7c4d8] disabled:hover:bg-white disabled:hover:text-[#464555]"
         >
           <Download size={14} />
           Export CSV

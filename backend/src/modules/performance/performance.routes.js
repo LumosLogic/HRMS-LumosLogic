@@ -5,6 +5,15 @@ const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
+const cloudinary = require('cloudinary').v2;
+const multer     = require('multer');
+
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key:    process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+const perfUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
@@ -284,6 +293,38 @@ router.get('/goals/:id/attachments', auth, async (req, res) => {
     const { data, error } = await db.from('goal_attachments').select('*').eq('goal_id', req.params.id).order('created_at', { ascending: false });
     if (error) throw error;
     res.json(data || []);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── BUG_239: Upload a goal attachment (admin/manager only) ──────────────────
+router.post('/goals/:id/attachments', auth, perfUpload.single('file'), async (req, res) => {
+  try {
+    const oId = req.user.organization_id;
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    const { data: goal } = await db.from('performance_goals')
+      .select('user_id').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
+    if (!goal) return res.status(404).json({ error: 'Goal not found' });
+    if (!isAdmin(req.user.role) && goal.user_id !== req.user.id)
+      return res.status(403).json({ error: 'Access denied' });
+
+    const result = await new Promise((resolve, reject) => {
+      cloudinary.uploader.upload_stream(
+        { folder: `hrms/${oId}/performance`, resource_type: 'auto' },
+        (err, r) => err ? reject(err) : resolve(r)
+      ).end(req.file.buffer);
+    });
+
+    const { data, error } = await db.from('goal_attachments').insert({
+      goal_id:         req.params.id,
+      organization_id: oId,
+      file_url:        result.secure_url,
+      file_name:       req.file.originalname,
+      file_type:       req.file.mimetype,
+      file_size:       req.file.size,
+      uploaded_by:     req.user.id,
+    }).select().single();
+    if (error) throw error;
+    res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

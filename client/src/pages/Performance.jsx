@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useSearchParams } from 'react-router-dom';
-import { Plus, Target, Star, TrendingUp, Pencil, Trash2, ChevronDown, ChevronUp, CheckCircle2, Search, X, Filter, Paperclip, MessageSquare, Send } from 'lucide-react';
+import { Plus, Target, Star, TrendingUp, Pencil, Trash2, ChevronDown, ChevronUp, CheckCircle2, Search, X, Filter, Paperclip, MessageSquare, Send, Upload, Loader2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
@@ -272,6 +272,8 @@ function ReviewCard({ rv }) {
 function GoalDetailsPanel({ goalId, isAdmin, newComment, setNewComment, onCommentPost }) {
   const toast = useToast();
   const qc    = useQueryClient();
+  const fileRef = useRef(null);
+  const [uploading, setUploading] = useState(false);
   const { data: comments = [] } = useQuery({ queryKey: ['goal-comments', goalId], queryFn: () => apiGet(`/performance/goals/${goalId}/comments`).catch(() => []) });
   const { data: attachments = [] } = useQuery({ queryKey: ['goal-attachments', goalId], queryFn: () => apiGet(`/performance/goals/${goalId}/attachments`).catch(() => []) });
   const commentMut = useMutation({
@@ -279,11 +281,55 @@ function GoalDetailsPanel({ goalId, isAdmin, newComment, setNewComment, onCommen
     onSuccess: () => { qc.invalidateQueries({ queryKey: ['goal-comments', goalId] }); onCommentPost(); toast('Comment added', 'success'); },
     onError: e => toast(e.message, 'error'),
   });
+  // BUG_239: attachment upload handler — posts to the goal-attachments endpoint
+  async function handleAttach(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) { toast('Attachment must be under 10 MB', 'error'); return; }
+    setUploading(true);
+    try {
+      const token = localStorage.getItem('lt_token');
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch(`/api/performance/goals/${goalId}/attachments`, {
+        method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Upload failed');
+      toast('Attachment uploaded!', 'success');
+      qc.invalidateQueries({ queryKey: ['goal-attachments', goalId] });
+    } catch (err) {
+      toast(err.message, 'error');
+    } finally {
+      setUploading(false);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  }
+
   return (
     <div className="mt-2 pt-3 border-t border-[#f0f3ff] space-y-3">
       {/* Comments */}
       <div>
-        <p className="text-[0.65rem] font-black text-[#777587] uppercase tracking-wide mb-2 flex items-center gap-1"><MessageSquare size={10} /> Manager Comments</p>
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-[0.65rem] font-black text-[#777587] uppercase tracking-wide flex items-center gap-1"><MessageSquare size={10} /> Manager Comments</p>
+          {/* BUG_239: attach supporting files to this goal */}
+          <input type="file" ref={fileRef} className="hidden" onChange={handleAttach}
+            accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.xlsx,.csv" />
+          <button type="button" disabled={uploading} onClick={() => fileRef.current?.click()}
+            className="flex items-center gap-1 text-[0.65rem] font-bold text-[#3525cd] hover:underline disabled:opacity-50">
+            {uploading ? <><Loader2 size={10} className="animate-spin" />Uploading…</> : <><Paperclip size={10} />Attach File</>}
+          </button>
+        </div>
+        {attachments.length > 0 && (
+          <div className="flex flex-wrap gap-2 mb-2">
+            {attachments.map(a => (
+              <a key={a.id} href={a.file_url} target="_blank" rel="noopener noreferrer"
+                className="flex items-center gap-1 text-[0.65rem] font-semibold text-[#3525cd] bg-[#f0f3ff] border border-[#c7c4d8] rounded-lg px-2 py-0.5 hover:bg-[#e0e7ff] transition-colors">
+                <Paperclip size={9} />{a.file_name || 'Attachment'}
+              </a>
+            ))}
+          </div>
+        )}
         {comments.length === 0 ? (
           <p className="text-xs text-[#9ca3af] italic">No manager comments yet.</p>
         ) : (
@@ -310,20 +356,7 @@ function GoalDetailsPanel({ goalId, isAdmin, newComment, setNewComment, onCommen
           </div>
         )}
       </div>
-      {/* Attachments */}
-      {attachments.length > 0 && (
-        <div>
-          <p className="text-[0.65rem] font-black text-[#777587] uppercase tracking-wide mb-2 flex items-center gap-1"><Paperclip size={10} /> Attachments</p>
-          <div className="flex flex-wrap gap-2">
-            {attachments.map(a => (
-              <a key={a.id} href={a.file_url} target="_blank" rel="noopener noreferrer"
-                className="flex items-center gap-1.5 text-xs font-semibold text-[#3525cd] bg-[#f0f3ff] border border-[#c7c4d8] rounded-lg px-2.5 py-1 hover:bg-[#e0e7ff] transition-colors">
-                <Paperclip size={10} />{a.file_name || 'Attachment'}
-              </a>
-            ))}
-          </div>
-        </div>
-      )}
+      {/* Attachments list now rendered above with the upload control (BUG_239) */}
     </div>
   );
 }

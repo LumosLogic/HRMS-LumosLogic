@@ -20,7 +20,8 @@ function getTypeLink(isEmployee, isRootAdmin) {
     exit:           isEmployee ? '/portal/exit'          : `${prefix}/exit-management`,
     announcement:   isEmployee ? '/portal/announcements' : `${prefix}/announcements`,
     asset:          isEmployee ? '/portal/home'          : `${prefix}/assets`,
-    document:       '/documents?tab=verification',
+    // BUG_231: employees should go to their own documents section, not the HR verification queue
+    document:       isEmployee ? '/portal/my-profile?tab=documents' : '/documents?tab=verification',
     leave:          isEmployee ? '/portal/leaves'        : `${prefix}/leaves`,
   };
 }
@@ -288,9 +289,10 @@ export default function NotificationCenter() {
                           className="flex-1 min-w-0 cursor-pointer"
                           onClick={() => {
                             if (!n.is_read) readMut.mutate(n.id);
-                            // BUG_093: document notifications always go to verification queue
+                            // BUG_231: route document notifications by user role
+                            // Employees see their own docs; admins go to the verification queue
                             if (n.type === 'document' || n.reference_type === 'document_submission') {
-                              navigate('/documents?tab=verification');
+                              navigate(TYPE_LINK.document);
                               return;
                             }
                             const link = TYPE_LINK[n.type];
