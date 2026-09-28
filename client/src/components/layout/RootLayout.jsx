@@ -32,7 +32,7 @@ const ROOT_PAYROLL_SUB_ITEMS = [
 const ROOT_OTHER_FINANCE_ITEMS = [
   { to: '/root/statutory/compliance',   label: 'Compliance Dashboard', Icon: ShieldCheck, featureKey: 'payroll' },
   { to: '/root/statutory/config',       label: 'Statutory Config',     Icon: ShieldAlert, featureKey: 'payroll' },
-  { to: '/root/statutory/declarations', label: 'Tax Declarations',     Icon: FileText,    featureKey: 'payroll' },
+  // { to: '/root/statutory/declarations', label: 'Tax Declarations',     Icon: FileText,    featureKey: 'payroll' }, // temporarily hidden
   { to: '/root/expenses', label: 'Expenses', Icon: Receipt },
   { to: '/root/assets',   label: 'Assets',   Icon: Monitor },
 ];

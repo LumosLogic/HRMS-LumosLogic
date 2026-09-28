@@ -66,7 +66,7 @@ const OTHER_FINANCE_ITEMS = [
   // would hide them for all HR admins. Add perm once statutory seeding is complete.
   { to: '/statutory/compliance',   label: 'Compliance Dashboard', Icon: ShieldCheck, featureKey: 'payroll', adminOnly: true },
   { to: '/statutory/config',       label: 'Statutory Config',     Icon: Shield,      featureKey: 'payroll', adminOnly: true },
-  { to: '/statutory/declarations', label: 'Tax Declarations',     Icon: FileText,    featureKey: 'payroll', adminOnly: true },
+  // { to: '/statutory/declarations', label: 'Tax Declarations',     Icon: FileText,    featureKey: 'payroll', adminOnly: true }, // temporarily hidden
   { to: '/expenses', label: 'Expenses', Icon: Receipt, featureKey: 'expenses', perm: 'expenses' },
   { to: '/assets',   label: 'Assets',   Icon: Monitor, featureKey: 'assets',   perm: 'assets'   },
   { to: '/reports',  label: 'Reports',  Icon: BarChart3, featureKey: 'reports', perm: 'reports'  },
