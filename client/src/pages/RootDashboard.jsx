@@ -242,7 +242,7 @@ export default function RootDashboard() {
   }
 
   const {
-    totalEmployees = 0, totalHR = 0, pendingLeaves = 0, presentToday = 0,
+    totalEmployees = 0, totalActiveEmployees = 0, totalHR = 0, pendingLeaves = 0, presentToday = 0,
     // BUG_116: pendingRegCount and pendingExpCount come from dashboard API
     pendingRegCount = 0,
     pendingExpCount = 0,
@@ -255,8 +255,10 @@ export default function RootDashboard() {
 
   const isBusy       = approveMut.isPending || rejectMut.isPending;
   const onLeaveToday = attendanceBreakdown.on_leave || 0;
-  // BUG_117: totalEmployees from backend already excludes resigned/terminated
-  const presentPct   = totalEmployees > 0 ? Math.min(100, Math.round((presentToday / totalEmployees) * 100)) : 0;
+  // Bug-001: presentPct uses active employees only (excludes resigned/terminated);
+  // totalEmployees (from backend) now shows all employees including inactive for the KPI card.
+  const activeEmpCount = totalActiveEmployees || totalEmployees;
+  const presentPct   = activeEmpCount > 0 ? Math.min(100, Math.round((presentToday / activeEmpCount) * 100)) : 0;
   // BUG_116: total pending = leaves/WFH + regularizations + expenses
   const totalPendingApprovals = pendingLeaves + pendingRegCount + pendingExpCount;
 

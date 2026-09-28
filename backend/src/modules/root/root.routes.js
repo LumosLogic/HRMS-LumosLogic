@@ -270,6 +270,9 @@ router.get('/dashboard', auth, rootAdminOnly, withBranchContext, async (req, res
     const activeEmployees = allEmployees.filter(e =>
       e.role !== 'admin' && !['resigned', 'terminated', 'inactive'].includes(e.employee_status)
     );
+    // Bug-001 (18-09-2026): the "Total Employees" KPI should include ALL employees (active + inactive);
+    // activeEmployees is kept for attendance calculations (present %, absent count, dept health).
+    const allEmployeesCount = allEmployees.filter(e => e.role !== 'admin').length;
     const totalEmployees = activeEmployees.length;
 
     // BUG_116: pendingLeaves counts leaves+WFH (they share the leaves table).
@@ -438,7 +441,11 @@ router.get('/dashboard', auth, rootAdminOnly, withBranchContext, async (req, res
       .map(({ id, name, department, position, avatar_color, created_at }) => ({ id, name, department, position, avatar_color, created_at }));
 
     res.json({
-      totalEmployees, totalHR, pendingLeaves, presentToday,
+      // Bug-001: totalEmployees shows ALL employees (including inactive) for the KPI card;
+      // totalActiveEmployees is used by the frontend for attendance % calculations.
+      totalEmployees: allEmployeesCount,
+      totalActiveEmployees: totalEmployees,
+      totalHR, pendingLeaves, presentToday,
       // BUG_116: expose pendingRegCount and pendingExpCount so frontend KPI adds all pending types
       pendingRegCount: pendingReg || 0,
       pendingExpCount: pendingExp || 0,

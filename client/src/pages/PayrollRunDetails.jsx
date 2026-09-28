@@ -18,8 +18,8 @@ const fmtD = n => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFracti
 const STATUS_META = {
   draft:                  { label: 'Draft',               cls: 'bg-[#f0f3ff] text-[#3525cd]',   Icon: Clock },
   processing:             { label: 'Processing',          cls: 'bg-amber-50 text-amber-700',     Icon: Clock },
-  completed:              { label: 'Completed',           cls: 'bg-emerald-50 text-emerald-700', Icon: CheckCircle2 },
-  completed_with_errors:  { label: 'Completed w/ Errors', cls: 'bg-orange-50 text-orange-700',   Icon: AlertTriangle },
+  completed:              { label: 'Generated',            cls: 'bg-emerald-50 text-emerald-700', Icon: CheckCircle2 },
+  completed_with_errors:  { label: 'Generated w/ Errors', cls: 'bg-orange-50 text-orange-700',   Icon: AlertTriangle },
   failed:                 { label: 'Failed',              cls: 'bg-red-50 text-red-700',         Icon: AlertCircle },
   verified:               { label: 'Verified',            cls: 'bg-violet-50 text-violet-700',   Icon: ShieldCheck },
   approved:               { label: 'Approved',            cls: 'bg-blue-50 text-blue-700',       Icon: ThumbsUp },

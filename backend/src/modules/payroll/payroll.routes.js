@@ -891,6 +891,11 @@ router.get('/payslips', auth, withBranchContext, async (req, res) => {
       .order('year', { ascending: false })
       .order('month', { ascending: false });
     if (year) q = q.eq('year', year);
+    // Bug-104: employees may only view locked payslips (admin has approved & locked the run)
+    // or payslips that were individually published. Admins see all.
+    if (!isAdmin(req.user.role)) {
+      q = q.or('locked.eq.true,status.eq.published');
+    }
     const { data, error } = await q;
     if (error) throw error;
     res.json(data || []);

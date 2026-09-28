@@ -72,7 +72,7 @@ function HRFormModal({ open, onClose, editing }) {
           </div>
           <div className="col-span-2">
             <label className="form-label">Official Email</label>
-            <input className="form-control" type="email" autoComplete="new-password" value={form.email} onChange={e => set('email', e.target.value)} placeholder="hr@company.com" />
+            <input className="form-control" type="text" inputMode="email" autoComplete="off" name="hr-admin-email-new" value={form.email} onChange={e => set('email', e.target.value)} placeholder="hr@company.com" />
           </div>
           <div className="col-span-2">
             <label className="form-label">{editing ? 'New Password (leave blank to keep)' : 'Password'}</label>
