@@ -9,6 +9,12 @@ export const EMPLOYER_KEYS  = ['employer_pf','employer_esi'];
 
 export const ALL_COMPONENT_KEYS = [...EARNING_KEYS, ...DEDUCTION_KEYS, ...EMPLOYER_KEYS];
 
+// Statutory component keys — owned by Statutory Config, not by salary_calculation_rules.
+export const STATUTORY_COMPONENT_KEYS = new Set([
+  'employee_pf', 'employee_esi', 'professional_tax', 'tds',
+  'employer_pf', 'employer_esi',
+]);
+
 export const DEFAULT_SALARY_RULES = {
   enabled: false,
   components: [
@@ -42,6 +48,76 @@ export function mergeWithDefaults(savedRules) {
 }
 
 /**
+ * Derive a statutory component's CTC-suggestion amount from Statutory Config.
+ *
+ * Returns a number (including 0 when the component is disabled) so the caller
+ * knows the value has been resolved from statutory config.
+ * Returns null when the key is not a statutory component, or when the config
+ * cannot produce a deterministic value (PT/TDS when enabled — caller falls
+ * through to the rule-based suggestion in those cases).
+ *
+ * This function is pure: no DB calls, no side effects.
+ */
+function computeStatutory(key, statutoryConfig, ctx) {
+  if (!statutoryConfig) return null;
+  const { pf, esi, pt, tds } = statutoryConfig;
+
+  if (key === 'employee_pf') {
+    if (!pf?.enabled) return 0;
+    const basis = pf.pf_wage_basis === 'basic_da'
+      ? (ctx.basic || 0) + (ctx.da || 0)
+      : (ctx.basic || 0);
+    const wages = Number(pf.wage_ceiling || 0) > 0
+      ? Math.min(basis, Number(pf.wage_ceiling))
+      : basis;
+    return r2(wages * (Number(pf.employee_pf_pct || 12) / 100));
+  }
+
+  if (key === 'employer_pf') {
+    if (!pf?.enabled) return 0;
+    const basis = pf.pf_wage_basis === 'basic_da'
+      ? (ctx.basic || 0) + (ctx.da || 0)
+      : (ctx.basic || 0);
+    const wages     = Number(pf.wage_ceiling || 0) > 0 ? Math.min(basis, Number(pf.wage_ceiling)) : basis;
+    const epsCeiling = Math.min(basis, 15000); // EPS statutory ceiling is always ₹15,000
+    const eps = r2(epsCeiling * (Number(pf.employer_eps_pct || 8.33) / 100));
+    const epf = r2(wages     * (Number(pf.employer_epf_pct || 3.67) / 100));
+    return r2(eps + epf);
+  }
+
+  if (key === 'employee_esi') {
+    if (!esi?.enabled) return 0;
+    const wageLimit = Number(esi.wage_limit || 21000);
+    if (wageLimit > 0 && (ctx.gross || 0) > wageLimit) return 0;
+    return r2((ctx.gross || 0) * (Number(esi.employee_esi_pct || 0.75) / 100));
+  }
+
+  if (key === 'employer_esi') {
+    if (!esi?.enabled) return 0;
+    const wageLimit = Number(esi.wage_limit || 21000);
+    if (wageLimit > 0 && (ctx.gross || 0) > wageLimit) return 0;
+    return r2((ctx.gross || 0) * (Number(esi.employer_esi_pct || 3.25) / 100));
+  }
+
+  if (key === 'professional_tax') {
+    // PT requires a state-specific slab lookup not available in this pure function.
+    // Return 0 when PT is disabled; null when enabled so the rule-based fixed-amount
+    // suggestion (₹200) is used as a reasonable in-form approximation.
+    if (!pt?.enabled) return 0;
+    return null;
+  }
+
+  if (key === 'tds') {
+    // TDS requires annual projection + declarations — not computable at CTC-entry time.
+    // Return 0 when disabled; null when enabled (rule default is already 0 / manual).
+    if (!tds?.enabled) return 0;
+    return null;
+  }
+
+  return null; // not a statutory component
+}
+
+/**
  * Calculate a full salary breakdown from CTC + org rules.
  *
  * Design contract:
@@ -57,7 +133,7 @@ export function mergeWithDefaults(savedRules) {
  * @param {object} manualOverrides  { [componentKey]: number } for HR-unlocked fields
  * @returns {object|null}
  */
-export function calculateFromCTC(ctc, rules, manualOverrides = {}) {
+export function calculateFromCTC(ctc, rules, manualOverrides = {}, statutoryConfig = null) {
   if (!ctc || ctc <= 0 || !rules?.enabled) return null;
 
   const getComp = key => rules.components?.find(c => c.key === key);
@@ -67,12 +143,23 @@ export function calculateFromCTC(ctc, rules, manualOverrides = {}) {
   // component cascades through components that depend on it (e.g. HRA = 50% of
   // basic reacts when basic is overridden).
   function applyRule(rule, ctx) {
-    if (!rule || !rule.enabled) return 0;
+    if (!rule) return 0;
 
-    // HR override wins over the configured method
+    // Manual override: highest priority — always wins over every other source
     if (Object.prototype.hasOwnProperty.call(manualOverrides, rule.key)) {
       return r2(Number(manualOverrides[rule.key]) || 0);
     }
+
+    // Statutory config: authoritative for statutory components.
+    // computeStatutory returns a resolved number (including 0 when disabled)
+    // or null when the value cannot be derived from config (→ fall through to rule).
+    if (statutoryConfig) {
+      const sv = computeStatutory(rule.key, statutoryConfig, ctx);
+      if (sv !== null) return sv;
+    }
+
+    // Rule-based calculation (non-statutory components or statutory fallback)
+    if (!rule.enabled) return 0;
 
     if (rule.method === 'manual')    return 0;
     if (rule.method === 'fixed')     return r2(Number(rule.value || 0));
@@ -139,7 +226,7 @@ export function calculateFromCTC(ctc, rules, manualOverrides = {}) {
     : applyRule(specialRule, ctx0);
 
   let totalGross = r2(basicVal + hraVal + daVal + transportVal + medicalVal + specialVal + otherAllowVal);
-  let ctxFinal   = { gross: totalGross, basic: basicVal };
+  let ctxFinal   = { gross: totalGross, basic: basicVal, da: daVal };
 
   // ── Employer contributions (final, using settled values) ───────────────────
   const employerPf  = applyRule(getComp('employer_pf'),  ctxFinal);
@@ -155,7 +242,7 @@ export function calculateFromCTC(ctc, rules, manualOverrides = {}) {
     if (Math.abs(delta) > 0) {
       specialVal = r2(Math.max(0, specialVal + delta));
       totalGross = r2(totalGross + delta);
-      ctxFinal   = { gross: totalGross, basic: basicVal };
+      ctxFinal   = { gross: totalGross, basic: basicVal, da: daVal };
     }
   }
 

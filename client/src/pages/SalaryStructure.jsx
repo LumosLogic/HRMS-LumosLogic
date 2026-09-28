@@ -17,6 +17,7 @@ import {
   EARNING_KEYS,
   DEDUCTION_KEYS,
   EMPLOYER_KEYS,
+  STATUTORY_COMPONENT_KEYS,
 } from '@/lib/salaryCalculator';
 
 const fmt  = n => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 0 });
@@ -49,7 +50,7 @@ function firstOfCurrentMonth() {
 }
 
 // ── CTC Mode — auto-calculated salary form ────────────────────────────────────
-function CtcModal({ employee, rules, onClose, onSaved, modeToggle }) {
+function CtcModal({ employee, rules, onClose, onSaved, modeToggle, statutoryConfig = null }) {
   const toast = useToast();
   const qc    = useQueryClient();
 
@@ -74,7 +75,7 @@ function CtcModal({ employee, rules, onClose, onSaved, modeToggle }) {
     // Restore manual overrides: compare stored component values against what
     // calculateFromCTC would auto-produce. Any field that differs was manually set.
     if (storedCtc > 0) {
-      const autoCalc = calculateFromCTC(storedCtc, rules, {});
+      const autoCalc = calculateFromCTC(storedCtc, rules, {}, statutoryConfig);
       if (autoCalc) {
         const overriddenKeys = new Set();
         const overriddenVals = {};
@@ -103,7 +104,7 @@ function CtcModal({ employee, rules, onClose, onSaved, modeToggle }) {
     return o;
   }, [manualKeys, manualVals]);
 
-  const calc = useMemo(() => calculateFromCTC(ctcNum, rules, overrides), [ctcNum, rules, overrides]);
+  const calc = useMemo(() => calculateFromCTC(ctcNum, rules, overrides, statutoryConfig), [ctcNum, rules, overrides, statutoryConfig]);
 
   function val(key) {
     if (manualKeys.has(key)) return manualVals[key] ?? 0;
@@ -162,18 +163,35 @@ function CtcModal({ employee, rules, onClose, onSaved, modeToggle }) {
 
   const getComp = key => rules.components?.find(c => c.key === key);
 
+  // Returns true when statutory config has this component enabled.
+  function isStatutoryActive(key) {
+    if (!statutoryConfig) return false;
+    if (key === 'employee_pf' || key === 'employer_pf') return !!statutoryConfig.pf?.enabled;
+    if (key === 'employee_esi' || key === 'employer_esi') return !!statutoryConfig.esi?.enabled;
+    if (key === 'professional_tax') return !!statutoryConfig.pt?.enabled;
+    if (key === 'tds') return !!statutoryConfig.tds?.enabled;
+    return false;
+  }
+
   function FieldRow({ fieldKey, group }) {
-    const comp = getComp(fieldKey);
-    const isMan = manualKeys.has(fieldKey);
-    const amount = val(fieldKey);
-    if (comp && !comp.enabled && !isMan) return null;
+    const comp     = getComp(fieldKey);
+    const isMan    = manualKeys.has(fieldKey);
+    const amount   = val(fieldKey);
+    const statutory = isStatutoryActive(fieldKey);
+
+    // Show row when: manually overridden, rule is enabled, OR statutory config is active
+    if (!isMan && !comp?.enabled && !statutory) return null;
 
     return (
       <div className="flex items-center gap-3 py-2 border-b border-[#f0f3ff] last:border-0">
         <div className="flex-1 min-w-0">
           <p className="text-xs font-semibold text-[#151c27]">{COMPONENT_LABELS[fieldKey]}</p>
-          {comp?.enabled && !isMan && <p className="text-[0.6rem] text-[#9ca3af]">{ruleLabel(comp)}</p>}
-          {isMan && <p className="text-[0.6rem] text-amber-600">Manual override</p>}
+          {isMan
+            ? <p className="text-[0.6rem] text-amber-600">Manual override</p>
+            : STATUTORY_COMPONENT_KEYS.has(fieldKey) && statutoryConfig
+              ? <p className="text-[0.6rem] text-[#3525cd]/70">From Statutory Config</p>
+              : comp?.enabled && <p className="text-[0.6rem] text-[#9ca3af]">{ruleLabel(comp)}</p>
+          }
         </div>
         {isMan ? (
           <div className="flex items-center gap-1.5">
@@ -567,7 +585,7 @@ function ManualModal({ employee, onClose, onSaved, modeToggle }) {
 
 // ── SalaryModal: picks CTC or Manual mode based on org rules ─────────────────
 // Mode toggle is embedded inside the modal header (not floating above it).
-function SalaryModal({ employee, rules, onClose }) {
+function SalaryModal({ employee, rules, onClose, statutoryConfig = null }) {
   const rulesEnabled = rules?.enabled;
   const [mode, setMode] = useState(rulesEnabled ? 'ctc' : 'manual');
 
@@ -576,6 +594,7 @@ function SalaryModal({ employee, rules, onClose }) {
     <>
       {mode === 'ctc'
         ? <CtcModal key="ctc" employee={employee} rules={rules} onClose={onClose}
+            statutoryConfig={statutoryConfig}
             modeToggle={rulesEnabled ? (
               <div className="flex items-center gap-1 bg-[#f0f3ff] border border-[#c7c4d8] p-0.5 rounded-lg">
                 <button onClick={() => setMode('ctc')}
@@ -777,10 +796,27 @@ export default function SalaryStructure() {
     queryFn: () => apiGet('/payroll/settings'),
   });
 
+  const { data: statutoryData } = useQuery({
+    queryKey: ['statutory-config'],
+    queryFn: () => apiGet('/statutory/config'),
+  });
+
   const salaryRules = useMemo(
     () => mergeWithDefaults(payrollSettings?.salary_calculation_rules),
     [payrollSettings]
   );
+
+  // Extract only the sub-configs needed for CTC-suggestion calculations.
+  // Matches the shape expected by computeStatutory() in salaryCalculator.js.
+  const statutoryConfig = useMemo(() => {
+    if (!statutoryData) return null;
+    return {
+      pf:  statutoryData.pf  || null,
+      esi: statutoryData.esi || null,
+      pt:  statutoryData.pt  || null,
+      tds: statutoryData.tds || null,
+    };
+  }, [statutoryData]);
 
   const withSalary    = employees.filter(e => e.salary_id);
   const withoutSalary = employees.filter(e => !e.salary_id);
@@ -941,7 +977,7 @@ export default function SalaryStructure() {
         )}
       </div>
 
-      {editEmp    && <SalaryModal   employee={editEmp}    rules={salaryRules} onClose={() => setEditEmp(null)} />}
+      {editEmp    && <SalaryModal   employee={editEmp}    rules={salaryRules} statutoryConfig={statutoryConfig} onClose={() => setEditEmp(null)} />}
       {historyEmp && <HistoryModal  employee={historyEmp} onClose={() => setHistoryEmp(null)} />}
     </div>
   );

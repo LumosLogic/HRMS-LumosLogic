@@ -684,9 +684,17 @@ router.get('/reports/pf-ecr', auth, hasPermission('statutory', 'view'), async (r
   try {
     const p    = rParams(req);
     const data = await getPFECR(p);
+    if (!data || data.length === 0) {
+      return res.status(400).json({ error: 'No PF ECR data found for the selected period. Ensure payroll has been generated and PF is applicable for at least one employee.' });
+    }
     if (req.query.format === 'csv') return sendCSV(res, data, PF_ECR_FIELDS, 'pf_ecr.csv');
     res.json(data);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    const msg = err.message?.includes('does not exist') || err.message?.includes('column')
+      ? 'PF ECR report is not available. Please ensure the statutory configuration is complete and payroll has been generated.'
+      : err.message;
+    res.status(500).json({ error: msg });
+  }
 });
 
 // GET /api/statutory/reports/esi
@@ -694,9 +702,17 @@ router.get('/reports/esi', auth, hasPermission('statutory', 'view'), async (req,
   try {
     const p    = rParams(req);
     const data = await getESIReturn(p);
+    if (!data || data.length === 0) {
+      return res.status(400).json({ error: 'No ESI Return data found for the selected period. Ensure payroll has been generated and ESI is applicable for at least one employee.' });
+    }
     if (req.query.format === 'csv') return sendCSV(res, data, ESI_FIELDS, 'esi_return.csv');
     res.json(data);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    const msg = err.message?.includes('does not exist') || err.message?.includes('column')
+      ? 'ESI Return report is not available. Please ensure the statutory configuration is complete and payroll has been generated.'
+      : err.message;
+    res.status(500).json({ error: msg });
+  }
 });
 
 // GET /api/statutory/reports/pt

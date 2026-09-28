@@ -9,7 +9,7 @@ import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPut, apiPost } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
-import { DEFAULT_SALARY_RULES, mergeWithDefaults } from '@/lib/salaryCalculator';
+import { DEFAULT_SALARY_RULES, mergeWithDefaults, STATUTORY_COMPONENT_KEYS } from '@/lib/salaryCalculator';
 
 const DEFAULTS = {
   payroll_cycle:                'monthly',
@@ -174,6 +174,8 @@ const GROUPS = [
   { key: 'deduction', label: 'Employee Deductions',      color: 'text-rose-700 bg-rose-50 border-rose-200' },
   { key: 'employer',  label: 'Employer Contributions',   color: 'text-blue-700 bg-blue-50 border-blue-200' },
 ];
+
+// STATUTORY_COMPONENT_KEYS is imported from salaryCalculator — single definition.
 
 function ComponentRow({ comp, onChange }) {
   const [open, setOpen] = useState(false);
@@ -491,8 +493,16 @@ function SalaryRulesSection({ rules, onChange }) {
             </p>
           </div>
 
+          <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5">
+            <Info size={14} className="text-blue-500 flex-shrink-0 mt-0.5" />
+            <p className="text-xs text-blue-700">
+              PF, ESI, Professional Tax and TDS rates are configured in <strong>Payroll → Statutory Config</strong>.
+              Only non-statutory deductions (Other Deductions, Retention) appear here.
+            </p>
+          </div>
+
           {GROUPS.map(group => {
-            const comps = rules.components.filter(c => c.group === group.key);
+            const comps = rules.components.filter(c => c.group === group.key && !STATUTORY_COMPONENT_KEYS.has(c.key));
             if (!comps.length) return null;
             return (
               <div key={group.key}>
