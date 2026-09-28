@@ -5,7 +5,7 @@ const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { initOffboarding } = require('../offboarding/offboardingService');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, getAdminsForEmployee } = require('../../utils/branchFilter');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
@@ -91,11 +91,11 @@ router.post('/', auth, async (req, res) => {
       .select().single();
     if (error) throw error;
 
-    // Notify all HR admins and root admins with the correct employee name.
-    const { data: admins } = await db.from('users').select('id').eq('organization_id', oId).in('role', ['admin', 'root_admin']);
-    if (admins?.length) {
-      await db.from('notifications').insert(admins.map(a => ({
-        user_id: a.id, title: 'Resignation Submitted',
+    // Notify only branch-scoped HR admins and root admins
+    const adminIds = await getAdminsForEmployee(targetUserId, oId);
+    if (adminIds.length) {
+      await db.from('notifications').insert(adminIds.map(id => ({
+        user_id: id, title: 'Resignation Submitted',
         message: `${targetName} submitted a resignation. Last working day: ${lwd.toISOString().split('T')[0]}`,
         type: 'exit', organization_id: oId,
       })));
@@ -219,31 +219,26 @@ router.put('/:id', auth, hasPermission('exit', 'manage'), async (req, res) => {
           .then(() => {})
           .catch(() => {});
 
-        // Look up the departing employee's name for the notification message
-        db.from('users').select('name').eq('id', current.user_id).maybeSingle()
-          .then(({ data: emp }) => {
-            const empName = emp?.name || 'An employee';
-            return db.from('users').select('id')
-              .in('role', ['admin', 'root_admin']).eq('organization_id', oId);
-          })
-          .then(({ data: admins }) => {
-            if (!admins?.length) return;
-            // Fetch name again for the message (chain is separate from above)
-            return db.from('users').select('name').eq('id', current.user_id).maybeSingle()
-              .then(({ data: emp }) => {
-                const empName = emp?.name || 'An employee';
-                return db.from('notifications').insert(
-                  admins.map(a => ({
-                    user_id: a.id,
-                    title:   'Exit Approved — Action Required',
-                    message: `${empName}'s resignation is approved (LWD: ${data.last_working_day || 'TBD'}). Please complete: IT access revocation, asset return, and final settlement.`,
-                    type:    'exit',
-                    organization_id: oId,
-                  }))
-                );
-              });
-          })
-          .catch(() => {});
+        // Notify branch-scoped admins of the approved exit — rewritten to avoid messy chaining
+        ;(async () => {
+          try {
+            const [empRes, adminIds] = await Promise.all([
+              db.from('users').select('name').eq('id', current.user_id).maybeSingle(),
+              getAdminsForEmployee(current.user_id, oId),
+            ]);
+            const empName = empRes.data?.name || 'An employee';
+            if (!adminIds.length) return;
+            await db.from('notifications').insert(
+              adminIds.map(id => ({
+                user_id: id,
+                title:   'Exit Approved — Action Required',
+                message: `${empName}'s resignation is approved (LWD: ${data.last_working_day || 'TBD'}). Please complete: IT access revocation, asset return, and final settlement.`,
+                type:    'exit',
+                organization_id: oId,
+              }))
+            );
+          } catch { /* fire-and-forget */ }
+        })();
 
         // Trigger offboarding checklist (requires phase_d_offboarding_checklists.sql migration)
         initOffboarding(current.user_id, oId).catch(() => {});

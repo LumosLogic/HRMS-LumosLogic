@@ -4,7 +4,7 @@ const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { getFilterState, resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
+const { getFilterState, resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee } = require('../../utils/branchFilter');
 const cloudinary = require('cloudinary').v2;
 const multer     = require('multer');
 
@@ -104,11 +104,11 @@ router.post('/', auth, async (req, res) => {
       }).then(() => {});
     }
 
-    // Always notify HR admins (for visibility — direct review if no manager)
-    const { data: admins } = await db.from('users').select('id').eq('organization_id', oId).in('role', ['admin', 'root_admin']);
-    if (admins?.length) {
-      await db.from('notifications').insert(admins.map(a => ({
-        user_id: a.id, title: 'New Expense Claim',
+    // Notify only branch-scoped HR admins (direct review if no manager)
+    const adminIds = await getAdminsForEmployee(targetUserId, oId);
+    if (adminIds.length) {
+      await db.from('notifications').insert(adminIds.map(id => ({
+        user_id: id, title: 'New Expense Claim',
         message: managerId
           ? `${req.user.name} submitted ₹${amount} for "${title}" — awaiting manager approval.`
           : `${req.user.name} submitted ₹${amount} for "${title}" — no manager assigned, direct review needed.`,
@@ -214,18 +214,17 @@ router.put('/:id/manager-approve', auth, async (req, res) => {
       type: 'expense', organization_id: oId,
     }).then(() => {});
 
-    // On approval: notify HR admins so they can process the now-approved claim
+    // On approval: notify branch-scoped HR admins so they can process the approved claim
     if (action === 'approve') {
-      db.from('users').select('id').eq('organization_id', oId).in('role', ['admin', 'root_admin'])
-        .then(({ data: admins }) => {
-          if (!admins?.length) return;
-          return db.from('notifications').insert(admins.map(a => ({
-            user_id: a.id,
-            title:   'Expense Ready for HR Review',
-            message: `Manager approved ${exp.title} (₹${exp.amount}) — ready for your processing.`,
-            type:    'expense', organization_id: oId,
-          })));
-        }).catch(() => {});
+      getAdminsForEmployee(exp.user_id, oId).then(adminIds => {
+        if (!adminIds.length) return;
+        return db.from('notifications').insert(adminIds.map(id => ({
+          user_id: id,
+          title:   'Expense Ready for HR Review',
+          message: `Manager approved ${exp.title} (₹${exp.amount}) — ready for your processing.`,
+          type:    'expense', organization_id: oId,
+        })));
+      }).catch(() => {});
     }
 
     res.json(data);

@@ -5,7 +5,7 @@ const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { generateEmployeePayslip } = require('../../services/payrollGenerationService');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee } = require('../../utils/branchFilter');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
@@ -188,16 +188,15 @@ router.post('/', auth, async (req, res) => {
       throw error;
     }
 
-    // Notify admins
-    const { data: admins } = await db.from('users')
-      .select('id').eq('organization_id', oId).in('role', ['admin', 'root_admin']);
-    if (admins?.length) {
+    // Notify only branch-scoped admins
+    const adminIds = await getAdminsForEmployee(req.user.id, oId);
+    if (adminIds.length) {
       const title   = type === 'early_leave' ? 'Early Leave Request' : 'Regularization Request';
       const message = type === 'early_leave'
         ? `${req.user.name} requested early leave on ${date} (exit at ${requested_early_exit_time})`
         : `${req.user.name} requested attendance correction for ${date}`;
-      await db.from('notifications').insert(admins.map(a => ({
-        user_id: a.id, title, message,
+      await db.from('notifications').insert(adminIds.map(id => ({
+        user_id: id, title, message,
         type: 'regularization',
         reference_id: data.id, reference_type: 'regularization',
         organization_id: oId,

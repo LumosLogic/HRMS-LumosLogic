@@ -188,10 +188,73 @@ async function canAdminAccessUser(branchContext, userId, oId) {
   return false;
 }
 
+/**
+ * Returns the IDs of admin users (root_admin + hr_admin) who have branch access
+ * to the given employee, so notifications are only sent to relevant admins.
+ *
+ * Rules:
+ *   - root_admin always notified (org-wide access, no branch restriction)
+ *   - Employee has no branch_id → all active admins notified (single-branch / branches
+ *     feature not configured — safe fallback so nothing is silently dropped)
+ *   - Employee has a branch_id → only admins with all_branches=true OR matching
+ *     branch_id grant in hr_branch_access are included
+ *
+ * Errors fail open: returns all admin IDs so a transient DB issue never loses notifications.
+ */
+async function getAdminsForEmployee(employeeId, orgId) {
+  try {
+    const empRes = await pool.query(
+      `SELECT branch_id FROM users WHERE id = $1 AND organization_id = $2 LIMIT 1`,
+      [employeeId, orgId]
+    );
+    const branchId = empRes.rows[0]?.branch_id ?? null;
+
+    if (!branchId) {
+      // No branch assigned — notify all active admins
+      const r = await pool.query(
+        `SELECT id FROM users
+         WHERE organization_id = $1
+           AND role IN ('root_admin', 'admin')
+           AND (employee_status IS NULL OR employee_status NOT IN ('inactive','terminated'))`,
+        [orgId]
+      );
+      return r.rows.map(r => Number(r.id));
+    }
+
+    // Employee has a branch — filter HR admins by branch access
+    const r = await pool.query(
+      `SELECT DISTINCT u.id
+       FROM users u
+       LEFT JOIN hr_branch_access hba ON hba.user_id = u.id AND hba.org_id = $1
+       WHERE u.organization_id = $1
+         AND u.role IN ('root_admin', 'admin')
+         AND (u.employee_status IS NULL OR u.employee_status NOT IN ('inactive','terminated'))
+         AND (
+           u.role = 'root_admin'
+           OR hba.all_branches = TRUE
+           OR hba.branch_id = $2
+         )`,
+      [orgId, branchId]
+    );
+    return r.rows.map(r => Number(r.id));
+  } catch (err) {
+    // Fail open — branch lookup error must never silently drop notifications
+    console.error('[branchFilter] getAdminsForEmployee error:', err.message);
+    try {
+      const fb = await pool.query(
+        `SELECT id FROM users WHERE organization_id = $1 AND role IN ('root_admin','admin')`,
+        [orgId]
+      );
+      return fb.rows.map(r => Number(r.id));
+    } catch { return []; }
+  }
+}
+
 module.exports = {
   getFilterState,
   resolveEmployeeIds,
   getBranchUserSQLFilter,
   getBranchJoinSQLFilter,
   canAdminAccessUser,
+  getAdminsForEmployee,
 };

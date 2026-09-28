@@ -4,7 +4,7 @@ const { db, pool } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, getAdminsForEmployee } = require('../../utils/branchFilter');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
@@ -228,18 +228,17 @@ router.put('/:id/complete', auth, async (req, res) => {
               type: 'onboarding', organization_id: oId,
             }).then(() => {});
           } else {
-            // Notify HR admins that an HR/IT/manager onboarding task needs attention
-            const { data: admins } = await db.from('users')
-              .select('id').in('role', ['admin', 'root_admin']).eq('organization_id', oId);
-            if (admins?.length) {
-              db.from('notifications').insert(
-                admins.map(a => ({
-                  user_id: a.id, title: 'Onboarding Task Ready',
+            // Notify branch-scoped HR admins that an HR/IT/manager onboarding task needs attention
+            getAdminsForEmployee(task.user_id, oId).then(adminIds => {
+              if (!adminIds.length) return;
+              return db.from('notifications').insert(
+                adminIds.map(id => ({
+                  user_id: id, title: 'Onboarding Task Ready',
                   message: `Onboarding: "${nextTask.title}" requires ${nextTask.assigned_to} action.`,
                   type: 'onboarding', organization_id: oId,
                 }))
-              ).then(() => {});
-            }
+              );
+            }).catch(() => {});
           }
         }
       } catch (_) {}

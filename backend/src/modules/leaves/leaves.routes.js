@@ -7,7 +7,7 @@ const { flat, flatOne, orgId, getSettings, isWorkingDay, getRecipients, localDat
 const { sendMail, leaveAppliedHtml, leaveStatusHtml, leaveDeptApprovalHtml, leaveForwardedToRootHtml } = require('../../services/emailService');
 const engine = require('../../services/leaveWorkflowEngine');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee } = require('../../utils/branchFilter');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -82,17 +82,21 @@ function notify(userId, title, message, oId) {
   ).catch(() => {}); // fire-and-forget
 }
 
-// BUG_096: notify all HR admins and root admins in the org (fire-and-forget)
-async function notifyAdmins(oId, title, message, excludeUserId) {
+// BUG_096: notify branch-scoped HR admins and root admins (fire-and-forget)
+// employeeId scopes the fan-out to only admins who can see that employee's branch.
+async function notifyAdmins(oId, title, message, excludeUserId, employeeId) {
   try {
-    const query = db.from('users')
-      .select('id')
-      .eq('organization_id', oId)
-      .in('role', ['admin', 'root_admin']);
-    if (excludeUserId) query.neq('id', excludeUserId);
-    const { data: admins } = await query;
-    for (const admin of admins || []) {
-      notify(admin.id, title, message, oId);
+    let adminIds;
+    if (employeeId) {
+      adminIds = await getAdminsForEmployee(employeeId, oId);
+    } else {
+      const { data: admins } = await db.from('users')
+        .select('id').eq('organization_id', oId).in('role', ['admin', 'root_admin']);
+      adminIds = (admins || []).map(a => a.id);
+    }
+    for (const id of adminIds) {
+      if (excludeUserId && Number(id) === Number(excludeUserId)) continue;
+      notify(id, title, message, oId);
     }
   } catch (_) {}
 }
@@ -1000,8 +1004,8 @@ router.post('/', auth, async (req, res) => {
 
       notify(wfInit.current_approver_id, leaveNotifyTitle, leaveNotifyMsg, orgId(req));
 
-      // BUG_096: also notify all HR/root admins in-app (excluding the specific approver)
-      notifyAdmins(orgId(req), leaveNotifyTitle, leaveNotifyMsg, wfInit.current_approver_id);
+      // BUG_096: notify branch-scoped HR/root admins (excluding the specific approver)
+      notifyAdmins(orgId(req), leaveNotifyTitle, leaveNotifyMsg, wfInit.current_approver_id, targetUserId);
 
       // BUG_096: notify dept head if not already the current approver
       getDeptHeadId(targetUserId, orgId(req)).then(headId => {
@@ -1031,8 +1035,8 @@ router.post('/', auth, async (req, res) => {
         });
       }
 
-      // BUG_096: in-app notify all HR/root admins
-      notifyAdmins(orgId(req), leaveNotifyTitle, leaveNotifyMsg, targetUserId);
+      // BUG_096: notify branch-scoped HR/root admins
+      notifyAdmins(orgId(req), leaveNotifyTitle, leaveNotifyMsg, targetUserId, targetUserId);
 
       // BUG_096: in-app notify dept head
       getDeptHeadId(targetUserId, orgId(req)).then(headId => {
@@ -1215,10 +1219,13 @@ router.put('/:id/approve', auth, withBranchContext, async (req, res) => {
             }
           } else {
             // Role-based next approver (hr_admin / root_admin)
+            // Only notify admins who have branch access to this employee
             const nextRoleType = nextInfo.level.role_type;
             const roleFilter   = nextRoleType === 'root_admin' ? ['root_admin'] : ['admin', 'root_admin'];
-            const { data: roleUsers } = await db.from('users')
+            const branchAdminIds = await getAdminsForEmployee(leave.user_id, oId);
+            const { data: allRoleUsers } = await db.from('users')
               .select('id, email, name').eq('organization_id', oId).in('role', roleFilter);
+            const roleUsers = (allRoleUsers || []).filter(u => branchAdminIds.includes(Number(u.id)));
             const { data: empUser } = await db.from('users')
               .select('name, email, department').eq('id', leave.user_id).maybeSingle();
             const empName = empUser?.name || 'An employee';

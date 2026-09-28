@@ -5,7 +5,7 @@ const { auth }   = require('../../middleware/auth');
 const cloudinary = require('cloudinary').v2;
 const multer     = require('multer');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { getFilterState, validateBranchAccess, resolveEmployeeIds } = require('../../utils/branchFilter');
+const { getFilterState, validateBranchAccess, resolveEmployeeIds, getAdminsForEmployee } = require('../../utils/branchFilter');
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -643,18 +643,16 @@ router.post('/:id/submit', auth, upload.single('file'), async (req, res) => {
       });
     }
 
-    // Notify HR admins
-    db.from('users').select('id')
-      .eq('organization_id', oId).in('role', ['admin', 'root_admin'])
-      .then(({ data: admins }) => {
-        if (!admins?.length) return;
-        return db.from('notifications').insert(admins.map(a => ({
-          user_id: a.id,
-          title:   'Document Uploaded for Review',
-          message: `${req.user.name} uploaded "${requirement.name}". Review in Verification Queue.`,
-          type:    'document', organization_id: oId,
-        })));
-      }).catch(() => {});
+    // Notify branch-scoped HR admins
+    getAdminsForEmployee(req.user.id, oId).then(adminIds => {
+      if (!adminIds.length) return;
+      return db.from('notifications').insert(adminIds.map(id => ({
+        user_id: id,
+        title:   'Document Uploaded for Review',
+        message: `${req.user.name} uploaded "${requirement.name}". Review in Verification Queue.`,
+        type:    'document', organization_id: oId,
+      })));
+    }).catch(() => {});
 
     res.json(submission);
   } catch (err) { res.status(500).json({ error: err.message }); }

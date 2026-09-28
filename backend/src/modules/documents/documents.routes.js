@@ -6,7 +6,7 @@ const { hasPermission } = require('../../middleware/permissions');
 const cloudinary = require('cloudinary').v2;
 const multer     = require('multer');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee } = require('../../utils/branchFilter');
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -217,18 +217,17 @@ router.post('/upload', auth, hasPermission('documents', 'upload'), withBranchCon
     }).select().single();
     if (error) throw error;
 
-    // Notify HR admins only when an employee (non-admin) uploads — admin uploads need no review.
+    // Notify branch-scoped HR admins when an employee uploads — admin uploads need no review.
     if (!isAdmin(req.user.role)) {
-      db.from('users').select('id').eq('organization_id', oId).in('role', ['admin', 'root_admin'])
-        .then(({ data: admins }) => {
-          if (!admins?.length) return;
-          return db.from('notifications').insert(admins.map(a => ({
-            user_id: a.id,
-            title:   'Employee Document Uploaded',
-            message: `${req.user.name} uploaded "${doc.name}" (${doc.category}). Please review in the Documents section.`,
-            type:    'document', organization_id: oId,
-          })));
-        }).catch(() => {});
+      getAdminsForEmployee(req.user.id, oId).then(adminIds => {
+        if (!adminIds.length) return;
+        return db.from('notifications').insert(adminIds.map(id => ({
+          user_id: id,
+          title:   'Employee Document Uploaded',
+          message: `${req.user.name} uploaded "${doc.name}" (${doc.category}). Please review in the Documents section.`,
+          type:    'document', organization_id: oId,
+        })));
+      }).catch(() => {});
     }
 
     // Insert shares for 'specific' visibility
