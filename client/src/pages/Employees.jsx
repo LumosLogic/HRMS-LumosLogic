@@ -1148,7 +1148,7 @@ function ComboInput({ value, onChange, options, placeholder, className }) {
 }
 
 // ── Add / Edit Employee Modal ─────────────────────────────────────────────────
-function EmployeeFormModal({ open, onClose, employee, onSaved, departments = [], defaultRole = 'employee', initialTab = 'personal' }) {
+function EmployeeFormModal({ open, onClose, employee, onSaved, departments = [], defaultRole = 'employee', initialTab = 'personal', initialBranchId = null }) {
   const isEdit            = !!employee;
   const toast             = useToast();
   const { isRootAdmin }   = useAuth();
@@ -1253,7 +1253,7 @@ function EmployeeFormModal({ open, onClose, employee, onSaved, departments = [],
     phone: '', personal_email: '', joining_date: '', employment_type: 'full_time',
     work_mode: 'office', employee_status: 'active', ctc: '', salary_effective_date: '',
     // Extended profile defaults
-    salutation: '', middle_name: '', surname: '', branch_id: '', location: '', grade: '',
+    salutation: '', middle_name: '', surname: '', branch_id: initialBranchId ? String(initialBranchId) : '', location: '', grade: '',
     division: '', sub_division: '', device_enrollment_id: '', weekly_off_day: '',
     work_hours_per_day: 8,
     // Personal profile fields defaults
@@ -3185,7 +3185,7 @@ export default function Employees() {
 
       {/* ── MODALS ────────────────────────────────────────────────────────── */}
       {addOpen && (
-        <EmployeeFormModal open={addOpen} onClose={() => { setAddOpen(false); setAddDefaultRole('employee'); }} departments={departments} defaultRole={addDefaultRole} />
+        <EmployeeFormModal open={addOpen} onClose={() => { setAddOpen(false); setAddDefaultRole('employee'); }} departments={departments} defaultRole={addDefaultRole} initialBranchId={selectedBranchId} />
       )}
       {editEmp && (
         <EmployeeFormModal open={!!editEmp} onClose={() => setEditEmp(null)} employee={editEmp} departments={departments} />
