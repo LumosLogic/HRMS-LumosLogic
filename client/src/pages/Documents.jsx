@@ -567,6 +567,8 @@ function SharedDocumentsTab({ onUploadClick }) {
   const [visFilter, setVisFilter]       = useState('');
   const [empFilter, setEmpFilter]       = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [sortCol, setSortCol]           = useState('created_at');
+  const [sortDir, setSortDir]           = useState('desc');
   const [page, setPage]                 = useState(1);
   const [pageSize, setPageSize]         = useState(10);
   const [preview, setPreview]           = useState(null);
@@ -621,8 +623,25 @@ function SharedDocumentsTab({ onUploadClick }) {
     if (statusFilter === 'expired')  docs = docs.filter(d => d.expiry_date && d.expiry_date < today);
     if (statusFilter === 'expiring') docs = docs.filter(d => d.expiry_date && d.expiry_date >= today && d.expiry_date <= soon);
     if (statusFilter === 'active')   docs = docs.filter(d => !d.expiry_date || d.expiry_date > soon);
+    // BUG-017: sort support
+    docs = [...docs].sort((a, b) => {
+      let va, vb;
+      if (sortCol === 'name')       { va = (a.name || '').toLowerCase(); vb = (b.name || '').toLowerCase(); }
+      else if (sortCol === 'category') { va = (a.category || ''); vb = (b.category || ''); }
+      else if (sortCol === 'expiry_date') { va = a.expiry_date || ''; vb = b.expiry_date || ''; }
+      else { va = a.created_at || ''; vb = b.created_at || ''; }
+      if (va < vb) return sortDir === 'asc' ? -1 : 1;
+      if (va > vb) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
     return docs;
-  }, [_docs, search, catFilter, visFilter, empFilter, statusFilter, today, soon]);
+  }, [_docs, search, catFilter, visFilter, empFilter, statusFilter, today, soon, sortCol, sortDir]);
+
+  function toggleSort(col) {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('asc'); }
+    setPage(1);
+  }
 
   const totalPages = Math.ceil(filtered.length / pageSize);
   const paginated  = filtered.slice((page - 1) * pageSize, page * pageSize);
@@ -708,8 +727,20 @@ function SharedDocumentsTab({ onUploadClick }) {
             <table className="w-full text-left text-xs">
               <thead className="bg-[#f9f9ff] border-b border-[#c7c4d8]">
                 <tr>
-                  {['DOCUMENT','CATEGORY','VISIBILITY','SHARED WITH','UPLOADED BY','UPLOADED ON','EXPIRY','ACTIONS'].map(h => (
-                    <th key={h} className="px-4 py-3 font-black text-[#464555] text-[0.65rem] tracking-wide whitespace-nowrap">{h}</th>
+                  {[
+                    { label: 'DOCUMENT',    col: 'name' },
+                    { label: 'CATEGORY',    col: 'category' },
+                    { label: 'VISIBILITY',  col: null },
+                    { label: 'SHARED WITH', col: null },
+                    { label: 'UPLOADED BY', col: null },
+                    { label: 'UPLOADED ON', col: 'created_at' },
+                    { label: 'EXPIRY',      col: 'expiry_date' },
+                    { label: 'ACTIONS',     col: null },
+                  ].map(({ label, col }) => (
+                    <th key={label} onClick={col ? () => toggleSort(col) : undefined}
+                      className={`px-4 py-3 font-black text-[#464555] text-[0.65rem] tracking-wide whitespace-nowrap ${col ? 'cursor-pointer select-none hover:text-[#3525cd]' : ''}`}>
+                      {label}{col && sortCol === col ? (sortDir === 'asc' ? ' ↑' : ' ↓') : (col ? ' ↕' : '')}
+                    </th>
                   ))}
                 </tr>
               </thead>
@@ -1390,8 +1421,7 @@ function EmployeeRequirementsTab() {
         <div className="empty-state">
           <ClipboardList size={48} className="mx-auto mb-3 text-[#c7c4d8]" />
           <p>No document requirements yet</p>
-          <p className="text-sm text-[#9ca3af] mt-1">Create requirements to build your employee compliance checklist.</p>
-          <button className="btn btn-primary mt-4" onClick={() => setModal('create')}><Plus size={14} /> Create First Requirement</button>
+          <p className="text-sm text-[#9ca3af] mt-1">Use the "Create Requirement" button above to build your employee compliance checklist.</p>
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-[#c7c4d8] overflow-hidden">
@@ -2442,6 +2472,8 @@ function EmployeeDocumentsDashboard() {
     setUploadFor(null);
     qc.invalidateQueries({ queryKey: ['doc-requirements-my'] });
     qc.invalidateQueries({ queryKey: ['doc-activity'] });
+    qc.invalidateQueries({ queryKey: ['my-shared-docs'] });
+    qc.invalidateQueries({ queryKey: ['documents'] });
   }
 
   if (isLoading) return <div className="loading"><div className="spinner" /> Loading your documents…</div>;

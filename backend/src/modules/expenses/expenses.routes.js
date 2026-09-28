@@ -64,8 +64,10 @@ router.post('/', auth, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { title, category, amount, expense_date, description, receipt_url, merchant_name, receipt_number, user_id } = req.body;
-    if (!title || !amount || !expense_date) return res.status(400).json({ error: 'title, amount and date required' });
-    if (Number(amount) <= 0) return res.status(400).json({ error: 'Amount must be greater than zero' });
+    if (!title || !title.trim()) return res.status(400).json({ error: 'Expense title is required. Please enter a description of the expense.' });
+    if (!expense_date) return res.status(400).json({ error: 'Expense date is required. Please select the date when this expense was incurred.' });
+    if (!amount) return res.status(400).json({ error: 'Amount is required. Please enter the expense amount.' });
+    if (Number(amount) <= 0) return res.status(400).json({ error: 'Amount must be greater than zero. Please enter a valid expense amount.' });
 
     // Employees always submit for themselves; admins may specify a target user.
     let targetUserId = req.user.id;
@@ -92,7 +94,11 @@ router.post('/', auth, async (req, res) => {
         manager_id: managerId,
       })
       .select().single();
-    if (error) throw error;
+    if (error) {
+      if (error.code === '23502') return res.status(400).json({ error: 'Expense submission failed: a required field is missing. Please ensure all required details are filled in.' });
+      if (error.code === '23514') return res.status(400).json({ error: 'Expense submission failed: one or more values are outside the allowed range. Please check your inputs.' });
+      throw error;
+    }
 
     // Notify manager (primary approver) if one is configured
     if (managerId) {

@@ -56,7 +56,7 @@ function BranchModal({ open, onClose, branch }) {
 
     const code = (form.code || '').trim();
     if (code && code.length > 20) errs.code = 'Branch code cannot exceed 20 characters.';
-    else if (code && !/^[a-zA-Z0-9\-_/]+$/.test(code)) errs.code = 'Branch code may only contain letters, numbers, hyphens, underscores, or slashes.';
+    else if (code && !/^[a-zA-Z0-9\-_ /]+$/.test(code)) errs.code = 'Branch code may only contain letters, numbers, hyphens, underscores, spaces, or slashes.';
 
     const location = (form.location || '').trim();
     if (location && location.length > 100) errs.location = 'Location cannot exceed 100 characters.';
@@ -131,12 +131,12 @@ function HRAccessModal({ open, onClose, branch }) {
   const toast = useToast();
   const qc    = useQueryClient();
 
-  // Fetch HR users in this org
+  // Fetch HR admin users in this org — uses a branch-bypass endpoint so all
+  // HR admins are visible regardless of the current branch context (BUG_247)
   const { data: hrUsers = [] } = useQuery({
     queryKey: ['hr-users-for-branch-access'],
-    queryFn: () => apiGet('/employees', { role: 'admin' }),
+    queryFn: () => apiGet('/branches/hr-admins'),
     enabled: open,
-    select: d => (Array.isArray(d) ? d : []).filter(u => u.role === 'admin'),
   });
 
   // Fetch who currently has access to this branch

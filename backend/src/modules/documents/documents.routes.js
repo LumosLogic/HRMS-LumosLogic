@@ -569,9 +569,12 @@ router.delete('/:id', auth, async (req, res) => {
       .select('*').eq('id', req.params.id).eq('organization_id', oId).single();
     if (!doc) return res.status(404).json({ error: 'Document not found' });
 
-    // HR Admin cannot delete — only Root Admin allowed
-    if (isAdmin(req.user.role) && req.user.role !== 'root_admin')
-      return res.status(403).json({ error: 'Only Root Admin can delete documents. HR Admin can view, download, approve, reject, or request re-upload.' });
+    // HR Admin can delete org-wide shared documents (visibility='all'); employee personal docs need Root Admin (BUG-015)
+    if (isAdmin(req.user.role) && req.user.role !== 'root_admin') {
+      if (doc.visibility !== 'all') {
+        return res.status(403).json({ error: 'HR Admin can only delete organization-wide shared documents. To delete an employee\'s personal document, please contact a Root Admin.' });
+      }
+    }
 
     // Non-admins can only delete their own (no UI, kept for API compatibility)
     if (!isAdmin(req.user.role) && doc.user_id !== req.user.id)

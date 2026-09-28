@@ -69,19 +69,18 @@ router.get('/usage', auth, async (req, res) => {
     const daysInMonth = new Date(year, month, 0).getDate();
     const end   = `${year}-${pad(month)}-${pad(daysInMonth)}`;
 
-    // BUG_244: the allowance counts APPROVED early-leave requests this month —
-    // not attendance rows stamped 'early_leave'. Attendance stamping only happens
-    // when the request is approved on the same day as the exit, so counting
-    // attendance rows under-reported the usage (always showed 0/3).
+    // BUG_244: count both pending AND approved early-leave requests so submitted
+    // requests immediately reduce the displayed quota (avoids showing 0/3 when all are pending).
     const apprRes = await pool.query(
-      `SELECT COUNT(*) AS approved_early_leaves
+      `SELECT COUNT(*) AS early_leave_count
          FROM attendance_regularization
         WHERE user_id = $1 AND organization_id = $2
-          AND type = 'early_leave' AND status = 'approved'
+          AND type = 'early_leave'
+          AND status IN ('pending', 'approved')
           AND date >= $3 AND date <= $4`,
       [uid, oId, start, end]
     );
-    const early_leave_days = parseInt(apprRes.rows[0]?.approved_early_leaves || 0);
+    const early_leave_days = parseInt(apprRes.rows[0]?.early_leave_count || 0);
 
     // Late-arriving days still come from attendance (independent quota, informational)
     const attRes = await pool.query(

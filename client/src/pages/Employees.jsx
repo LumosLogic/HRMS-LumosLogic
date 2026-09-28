@@ -1420,6 +1420,9 @@ function EmployeeFormModal({ open, onClose, employee, onSaved, departments = [],
       // Never send a client-supplied password for new employees.
       // The backend generates a secure temporary password and emails it to the employee.
       const { password: _ignored, ...addPayload } = form;
+      // BUG_246: if no branch was picked in the form but admin is viewing a specific
+      // branch, default the new employee to that branch so they appear immediately
+      if (!addPayload.branch_id && initialBranchId) addPayload.branch_id = initialBranchId;
       return apiPost('/employees', addPayload);
     },
     onSuccess: (data) => {

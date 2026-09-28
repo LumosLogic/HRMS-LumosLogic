@@ -476,6 +476,16 @@ router.post('/salary-structures', auth, hasPermission('payroll', 'manage_structu
     if (!user_id)        return res.status(400).json({ error: 'user_id is required' });
     if (!effective_from) return res.status(400).json({ error: 'effective_from is required' });
 
+    // Bug-098: reject past Effective From dates (only today and future are allowed for new structures)
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const effDate = new Date(effective_from + 'T00:00:00');
+    if (isNaN(effDate.getTime())) return res.status(400).json({ error: `Invalid Effective From date: ${effective_from}` });
+    if (effDate < today) {
+      return res.status(400).json({
+        error: `Effective From date cannot be in the past. Please choose today (${today.toISOString().split('T')[0]}) or a future date.`,
+      });
+    }
+
     // Verify employee belongs to this org
     const { data: employee } = await db.from('users')
       .select('id, name').eq('id', user_id).eq('organization_id', oId).maybeSingle();
@@ -493,6 +503,18 @@ router.post('/salary-structures', auth, hasPermission('payroll', 'manage_structu
       Number(special_allowance) + Number(other_allowance);
 
     const ctc = gross_salary + Number(employer_pf) + Number(employer_esi);
+
+    // Validate components are non-negative
+    const salaryComponents = { basic, hra, da, transport_allowance, medical_allowance, special_allowance, other_allowance };
+    for (const [key, val] of Object.entries(salaryComponents)) {
+      if (Number(val) < 0) {
+        return res.status(400).json({ error: `Salary amount for "${key.replace(/_/g, ' ')}" cannot be negative. Please enter a value of 0 or greater.` });
+      }
+    }
+    const totalDeductions = Number(employee_pf) + Number(employee_esi) + Number(professional_tax) + Number(tds) + Number(other_deductions) + Number(retention);
+    if (totalDeductions > gross_salary && gross_salary > 0) {
+      return res.status(400).json({ error: `Total deductions (₹${totalDeductions.toLocaleString('en-IN')}) cannot be greater than Gross Salary (₹${gross_salary.toLocaleString('en-IN')}). Please review and reduce the deduction amounts.` });
+    }
 
     const client = await pool.connect();
     let newRecord;
@@ -687,6 +709,15 @@ router.put('/salary-structures/:id', auth, hasPermission('payroll', 'manage_stru
       newValues: updated[0],
       ip: req.ip,
     });
+
+    // Bug-101: notify employee of salary correction (fire-and-forget)
+    db.from('notifications').insert({
+      user_id:         existing[0].user_id,
+      title:           'Your Salary Structure Has Been Updated',
+      message:         `Your salary structure effective from ${updated[0].effective_from ? String(updated[0].effective_from).split('T')[0] : 'current period'} has been revised. Gross pay: ₹${Number(updated[0].gross_salary || 0).toLocaleString('en-IN')}.`,
+      type:            'payroll',
+      organization_id: oId,
+    }).then(() => {}).catch(() => {});
 
     res.json(updated[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }

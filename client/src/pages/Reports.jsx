@@ -11,6 +11,7 @@ import { apiGet } from '@/lib/api';
 import { MONTHS } from '@/lib/utils';
 import { useBranch } from '@/context/BranchContext';
 import { useAuth } from '@/context/AuthContext';
+import { useToast } from '@/context/ToastContext';
 import { Modal } from '@/components/ui/Modal';
 import { Avatar } from '@/components/ui/Avatar';
 import { AttCorrectionModal } from '@/components/AttendanceDayModal';
@@ -309,6 +310,7 @@ export default function Reports() {
   const { selectedBranchId, isBranchContextReady } = useBranch();
   const { isAdmin } = useAuth();
   const qc = useQueryClient();
+  const toast = useToast();
   const [searchParams] = useSearchParams();
   const preselectedUserId = searchParams.get('userId') || '';
   // When navigating from Calendar → View Attendance, month and year are passed as URL params
@@ -347,6 +349,7 @@ export default function Reports() {
     const updated = [...savedViews.filter(v => v.name !== name), view];
     setSavedViews(updated);
     localStorage.setItem(SAVED_VIEWS_KEY, JSON.stringify(updated));
+    toast(`View "${name}" saved. Clear all filters to access saved views.`, 'success');
   }
   function loadView(view) {
     setActive(view.active);

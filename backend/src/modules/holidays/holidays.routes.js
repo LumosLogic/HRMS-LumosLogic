@@ -103,13 +103,15 @@ router.post('/copy-from-year', auth, hasPermission('holidays', 'manage'), async 
     const { data: existing } = await db.from('holidays')
       .select('date').eq('organization_id', oId)
       .gte('date', `${to_year}-01-01`).lte('date', `${to_year}-12-31`);
-    const existingDates = new Set((existing || []).map(h => h.date.substring(5)));
+    // Use first 10 chars to handle both 'YYYY-MM-DD' and 'YYYY-MM-DDTHH:...' formats
+    const toDateStr = d => String(d).substring(0, 10);
+    const existingDates = new Set((existing || []).map(h => toDateStr(h.date).substring(5)));
     const toInsert = source
-      .filter(h => !existingDates.has(h.date.substring(5)))
+      .filter(h => !existingDates.has(toDateStr(h.date).substring(5)))
       .map(h => ({
         name: h.name, type: h.type, description: h.description || '',
         specific_msg: h.specific_msg || '', organization_id: oId,
-        date: `${to_year}-${h.date.substring(5)}`,
+        date: `${to_year}-${toDateStr(h.date).substring(5)}`,
       }));
     let copied = 0;
     if (toInsert.length > 0) {

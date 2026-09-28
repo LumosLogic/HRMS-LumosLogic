@@ -895,6 +895,62 @@ router.post('/', auth, async (req, res) => {
     const targetUserId = (isAdminRole(req.user.role) && user_id) ? parseInt(user_id) : req.user.id;
     const isOnBehalf   = isAdminRole(req.user.role) && targetUserId !== req.user.id;
 
+    // ── LEAVE-002: Balance check for employee self-submissions ────────────────
+    // Skip for WFH, admin on-behalf, and leave types without a policy quota
+    if (!isOnBehalf && leave_time !== 'wfh' && leave_type !== 'wfh') {
+      try {
+        const oId        = orgId(req);
+        const settings   = await getSettings(oId);
+        const holidaySet = await fetchHolidaySet(oId, start_date, end_date);
+        const newDays    = leave_time === 'half' ? 0.5 : buildWorkingDates(start_date, end_date, settings, holidaySet).length;
+
+        if (newDays > 0) {
+          // Fetch quota for this leave type
+          const { data: policy } = await db.from('leave_policies')
+            .select('annual_quota').eq('organization_id', oId)
+            .eq('leave_type', leave_type || 'casual').eq('active', true).maybeSingle();
+
+          if (policy && policy.annual_quota > 0) {
+            const now     = new Date();
+            const year    = now.getFullYear();
+            const fyStart = `${year}-01-01`;
+            const fyEnd   = `${year}-12-31`;
+
+            // Count already used + pending days this year
+            const { data: existingLeaves } = await db.from('leaves')
+              .select('leave_time, start_date, end_date, status')
+              .eq('user_id', targetUserId).eq('organization_id', oId)
+              .eq('leave_type', leave_type || 'casual')
+              .in('status', ['approved', 'pending', 'pending_dept', 'pending_root', 'pending_approval'])
+              .gte('start_date', fyStart).lte('end_date', fyEnd);
+
+            let usedDays = 0;
+            for (const l of (existingLeaves || [])) {
+              if (l.leave_time === 'half') { usedDays += 0.5; continue; }
+              const hs = await fetchHolidaySet(oId, l.start_date, l.end_date);
+              usedDays += buildWorkingDates(l.start_date, l.end_date, settings, hs).length;
+            }
+
+            const { data: adj } = await db.from('leave_balance_adjustments')
+              .select('delta').eq('user_id', targetUserId).eq('org_id', oId)
+              .eq('year', year).eq('leave_type', leave_type || 'casual');
+            const adjTotal = (adj || []).reduce((s, r) => s + Number(r.delta), 0);
+            const quota    = policy.annual_quota + adjTotal;
+
+            if (usedDays + newDays > quota) {
+              const remaining = Math.max(0, quota - usedDays);
+              return res.status(400).json({
+                error: `Insufficient leave balance. You have ${remaining} day(s) available for "${leave_type || 'casual'}" leave but requested ${newDays} day(s). Please adjust your request or contact HR.`,
+              });
+            }
+          }
+        }
+      } catch (balanceErr) {
+        // Non-critical: if balance check fails, allow submission (avoid blocking employees)
+        console.warn('[leaves] balance check skipped:', balanceErr.message);
+      }
+    }
+
     // ── Admin creates on behalf → auto-approve ────────────────────────────────
     if (isOnBehalf) {
       const settings     = await getSettings(orgId(req));

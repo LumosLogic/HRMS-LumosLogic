@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Settings, Save, Info,
-  Calendar, Clock, Users, Shield, IndianRupee,
+  Calendar, Clock, Users, IndianRupee,
   ChevronDown, ChevronUp, Percent, Lock, Zap,
 } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
@@ -23,10 +23,6 @@ const DEFAULTS = {
   early_exit_allowance_minutes: 30,
   half_day_after_lates:         3,
   lop_after_half_days:          2,
-  pf_enabled:                   true,
-  esi_enabled:                  true,
-  professional_tax_enabled:     true,
-  tds_enabled:                  false,
   payslip_auto_email:           true,
   auto_generate_payroll:        false,
   auto_publish:                 false,
@@ -703,23 +699,6 @@ export default function PayrollSettings() {
         <Row label="Half Days Before LOP" hint={`Every ${form.lop_after_half_days} half days = 1 LOP day`}>
           <NumInput value={form.lop_after_half_days} onChange={v => set('lop_after_half_days', v)} min={1} max={10} />
         </Row>
-      </Section>
-
-      {/* Statutory */}
-      <Section
-        icon={<Shield size={15} className="text-[#3525cd]" />}
-        title="Statutory Components"
-        subtitle="Enable or disable statutory deductions. Amounts are set per employee in salary structures.">
-        {[
-          ['pf_enabled',                'Provident Fund (PF)',       'Employee and employer PF contributions'],
-          ['esi_enabled',               'ESI',                       'Employee State Insurance contributions'],
-          ['professional_tax_enabled',  'Professional Tax (PT)',      'State-level professional tax deduction'],
-          ['tds_enabled',               'TDS',                       'Tax Deducted at Source on salary'],
-        ].map(([key, label, hint]) => (
-          <Row key={key} label={label} hint={hint}>
-            <Toggle checked={form[key]} onChange={v => set(key, v)} />
-          </Row>
-        ))}
       </Section>
 
       {/* ── Salary Calculation Rules ─────────────────────────────────────── */}

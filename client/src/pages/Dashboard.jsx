@@ -447,7 +447,7 @@ function AttendanceTrendChart({ analytics, navigate }) {
       tooltip: { ...tooltipStyle, callbacks: { label: ctx => ` ${ctx.parsed.y}% attendance` } },
     },
     scales: {
-      x: { grid: { display: false }, border: { display: false }, ticks: { font: { size: 9 }, color: '#9ca3af', maxTicksLimit: period === '7d' ? 7 : 10 } },
+      x: { grid: { display: false }, border: { display: false }, ticks: { font: { size: 9 }, color: '#9ca3af', maxTicksLimit: period === '7d' ? 7 : 15 } },
       y: { min: 0, max: 100, grid: { color: '#f0f0f8' }, border: { display: false }, ticks: { callback: v => `${v}%`, font: { size: 9 }, color: '#9ca3af', maxTicksLimit: 5 } },
     },
     onClick: () => navigate('/calendar'),

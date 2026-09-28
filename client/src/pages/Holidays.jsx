@@ -177,7 +177,12 @@ export default function HolidaysPage() {
   // EHN_Holidays_002: copy from previous year mutation
   const copyMut = useMutation({
     mutationFn: () => apiPost('/holidays/copy-from-year', { from_year: year - 1, to_year: year }),
-    onSuccess: (res) => { toast(`Copied ${res.copied} holidays from ${year - 1}!`, 'success'); qc.invalidateQueries({ queryKey: ['holidays'] }); setCopyConfirm(false); },
+    onSuccess: (res) => {
+      if (res.message) { toast(res.message, 'warning'); }
+      else if (res.copied === 0) { toast(`No new holidays to copy (${res.skipped} already exist in ${year}).`, 'warning'); }
+      else { toast(`Copied ${res.copied} holidays from ${year - 1}${res.skipped ? ` (${res.skipped} skipped — already exist)` : ''}!`, 'success'); }
+      qc.invalidateQueries({ queryKey: ['holidays'] }); setCopyConfirm(false);
+    },
     onError: e => { toast(e.message, 'error'); setCopyConfirm(false); },
   });
 

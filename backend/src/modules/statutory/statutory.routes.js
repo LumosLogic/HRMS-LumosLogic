@@ -97,6 +97,15 @@ router.put('/config/pf', auth, hasPermission('statutory', 'configure'), async (r
     logAudit({ oId, actorId: req.user.id, actorName: req.user.name,
       action: 'statutory_config_updated', entityType: 'statutory_config',
       newValues: { type: 'pf', ...rows[0] }, ip: req.ip });
+
+    // Keep payroll_settings flag in sync so payrollEngine reads the correct value
+    pool.query(
+      `INSERT INTO payroll_settings (organization_id, pf_enabled)
+       VALUES ($2, $1)
+       ON CONFLICT (organization_id) DO UPDATE SET pf_enabled = EXCLUDED.pf_enabled`,
+      [Boolean(enabled), oId]
+    ).catch(() => {});
+
     res.json(rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -125,6 +134,14 @@ router.put('/config/esi', auth, hasPermission('statutory', 'configure'), async (
     logAudit({ oId, actorId: req.user.id, actorName: req.user.name,
       action: 'statutory_config_updated', entityType: 'statutory_config',
       newValues: { type: 'esi', ...rows[0] }, ip: req.ip });
+
+    pool.query(
+      `INSERT INTO payroll_settings (organization_id, esi_enabled)
+       VALUES ($2, $1)
+       ON CONFLICT (organization_id) DO UPDATE SET esi_enabled = EXCLUDED.esi_enabled`,
+      [Boolean(enabled), oId]
+    ).catch(() => {});
+
     res.json(rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -152,6 +169,14 @@ router.put('/config/pt', auth, hasPermission('statutory', 'configure'), async (r
     logAudit({ oId, actorId: req.user.id, actorName: req.user.name,
       action: 'statutory_config_updated', entityType: 'statutory_config',
       newValues: { type: 'pt', state_code }, ip: req.ip });
+
+    pool.query(
+      `INSERT INTO payroll_settings (organization_id, professional_tax_enabled)
+       VALUES ($2, $1)
+       ON CONFLICT (organization_id) DO UPDATE SET professional_tax_enabled = EXCLUDED.professional_tax_enabled`,
+      [Boolean(enabled), oId]
+    ).catch(() => {});
+
     res.json(rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -185,6 +210,14 @@ router.put('/config/tds', auth, hasPermission('statutory', 'configure'), async (
     logAudit({ oId, actorId: req.user.id, actorName: req.user.name,
       action: 'statutory_config_updated', entityType: 'statutory_config',
       newValues: { type: 'tds', ...rows[0] }, ip: req.ip });
+
+    pool.query(
+      `INSERT INTO payroll_settings (organization_id, tds_enabled)
+       VALUES ($2, $1)
+       ON CONFLICT (organization_id) DO UPDATE SET tds_enabled = EXCLUDED.tds_enabled`,
+      [Boolean(enabled), oId]
+    ).catch(() => {});
+
     res.json(rows[0]);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

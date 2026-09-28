@@ -448,15 +448,37 @@ router.post('/', auth, hasPermission('branches', 'create'), async (req, res) => 
     const { name, code, location, address, is_active } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: 'Branch name is required' });
     if (name.trim().length < 2) return res.status(400).json({ error: 'Branch name must be at least 2 characters.' });
+
+    const orgId = req.user.organization_id;
+
+    // Explicit duplicate check (name is case-insensitive; code checked when provided)
+    const dupCheck = await pool.query(
+      `SELECT id FROM branches
+        WHERE org_id = $1 AND LOWER(name) = LOWER($2)`,
+      [orgId, name.trim()]
+    );
+    if (dupCheck.rows.length) {
+      return res.status(400).json({ error: `A branch named "${name.trim()}" already exists in your organization.` });
+    }
+    if (code && code.trim()) {
+      const codeCheck = await pool.query(
+        `SELECT id FROM branches WHERE org_id = $1 AND LOWER(code) = LOWER($2)`,
+        [orgId, code.trim()]
+      );
+      if (codeCheck.rows.length) {
+        return res.status(400).json({ error: `Branch code "${code.trim()}" is already in use. Please choose a different code.` });
+      }
+    }
+
     const result = await pool.query(
       `INSERT INTO branches (org_id, name, code, location, address, is_active)
        VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [req.user.organization_id, name.trim(), code || null, location || null,
+      [orgId, name.trim(), code ? code.trim() : null, location || null,
        address || null, is_active !== false]
     );
     res.json(result.rows[0]);
   } catch (err) {
-    if (err.code === '23505') return res.status(400).json({ error: 'A branch with this name already exists.' });
+    if (err.code === '23505') return res.status(400).json({ error: 'A branch with this name or code already exists.' });
     res.status(500).json({ error: err.message });
   }
 });

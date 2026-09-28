@@ -22,7 +22,7 @@ router.get('/', auth, async (req, res) => {
       const { data: activeUsers } = await db.from('users')
         .select('id')
         .eq('organization_id', oId)
-        .eq('role', 'employee')
+        .in('role', ['employee', 'admin'])
         .not('employee_status', 'in', '("inactive","resigned","terminated")');
       const activeIds = (activeUsers || []).map(u => u.id);
 

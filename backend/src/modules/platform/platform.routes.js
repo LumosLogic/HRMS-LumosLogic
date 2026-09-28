@@ -62,7 +62,7 @@ router.get('/stats', platformAdminAuth, async (req, res) => {
       db.from('organizations').select('id', { count: 'exact', head: true }),
       db.from('org_registration_requests').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
       db.from('users').select('id', { count: 'exact', head: true }),
-      db.from('org_registration_requests').select('id', { count: 'exact', head: true }).eq('status', 'approved'),
+      db.from('organizations').select('id', { count: 'exact', head: true }).eq('status', 'active'),
     ]);
 
     const { data: recentOrgs } = await db.from('organizations')

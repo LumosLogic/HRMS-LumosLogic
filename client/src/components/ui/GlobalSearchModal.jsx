@@ -26,6 +26,8 @@ const SYSTEM_MODULES = [
   { name: 'Document Center', description: 'Upload and share organization documents', path: '/documents', forAdmin: true },
   { name: 'Company Calendar & Holidays', description: 'Manage holidays, shifts, and company events', path: '/calendar', forAdmin: true },
   { name: 'Organization Settings', description: 'Configure HR rules, shifts, and integrations', path: '/settings', forAdmin: true },
+  { name: 'Branches', description: 'Manage office branches, locations, and HR access assignments', path: '/branches', forAdmin: true },
+  { name: 'Branch Management', description: 'Add or edit branch details and assign HR administrators', path: '/branches', forAdmin: true },
 ];
 
 export function GlobalSearchModal({ open, onClose }) {

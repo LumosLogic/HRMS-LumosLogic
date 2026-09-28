@@ -178,18 +178,34 @@ router.put('/:id', auth, hasPermission('exit', 'manage'), async (req, res) => {
         const { data: existing } = await db.from('exit_requests').select('*').eq('id', req.params.id).single();
         return res.json(existing);
       }
-      // Allow approved → completed; block everything else from approved/rejected/completed
-      if (current.status === 'rejected' || current.status === 'completed') {
-        return res.status(409).json({
-          error: `Request already ${current.status}. Cannot change status again.`,
-          current_status: current.status,
-        });
-      }
-      if (current.status === 'approved' && updates.status !== 'completed') {
-        return res.status(409).json({
-          error: 'Request already approved. It can only be marked as completed.',
-          current_status: current.status,
-        });
+      // Enforce valid state transitions for exit requests:
+      //   pending  → approved | rejected
+      //   approved → completed
+      const allowedTransitions = {
+        pending:   ['approved', 'rejected'],
+        approved:  ['completed'],
+        rejected:  [],
+        completed: [],
+      };
+      const allowed = allowedTransitions[current.status] || [];
+      if (!allowed.includes(updates.status)) {
+        const friendlyMessages = {
+          completed: {
+            rejected:  'This exit request was already rejected and cannot be completed. Please raise a new exit request if needed.',
+            completed: 'This offboarding has already been marked as completed.',
+            pending:   'The exit request must be approved before it can be marked as completed. Please approve the request first.',
+          },
+          approved: {
+            completed: 'This offboarding has already been marked as completed. No further changes are possible.',
+            rejected:  'This exit request was already rejected.',
+          },
+          rejected: {
+            pending:   'You cannot reject an exit request that is still pending — please approve or reject it first.',
+          },
+        };
+        const msg = friendlyMessages[updates.status]?.[current.status]
+          || `Cannot change status from "${current.status}" to "${updates.status}". The exit request must be in the correct state for this action.`;
+        return res.status(409).json({ error: msg, current_status: current.status });
       }
       updates.reviewed_by = req.user.id;
       updates.reviewed_at = new Date().toISOString();

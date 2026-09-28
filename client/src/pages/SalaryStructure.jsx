@@ -611,9 +611,10 @@ function SalaryModal({ employee, rules, onClose }) {
 
 // ── History Modal ─────────────────────────────────────────────────────────────
 function HistoryModal({ employee, onClose }) {
-  const { data: history = [], isLoading } = useQuery({
+  const { data: history = [], isLoading, error: histError } = useQuery({
     queryKey: ['salary-history', employee.id],
     queryFn: () => apiGet(`/payroll/salary-structures/history/${employee.id}`),
+    retry: false,
   });
 
   return (
@@ -633,6 +634,12 @@ function HistoryModal({ employee, onClose }) {
           {isLoading ? (
             <div className="flex items-center justify-center py-10">
               <div className="w-5 h-5 border-2 border-[#3525cd]/30 border-t-[#3525cd] rounded-full animate-spin" />
+            </div>
+          ) : histError ? (
+            <div className="text-center py-10">
+              <AlertCircle size={32} className="text-rose-300 mx-auto mb-2" />
+              <p className="text-sm text-rose-500">Could not load salary history.</p>
+              <p className="text-xs text-[#777587] mt-1">{histError.message}</p>
             </div>
           ) : history.length === 0 ? (
             <div className="text-center py-10">

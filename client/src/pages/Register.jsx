@@ -287,6 +287,8 @@ export default function Register() {
                 <input type="text" className={`form-control pl-9 ${fieldErrors.company_name ? 'border-rose-500 focus:border-rose-500' : ''}`} required
                   placeholder="Acme Corp" value={form.company_name}
                   maxLength={255}
+                  title={form.company_name || undefined}
+                  style={{ textOverflow: 'ellipsis' }}
                   onChange={handleCompanyChange} />
               </div>
               {fieldErrors.company_name && <p className="text-[0.72rem] text-rose-600 mt-1">{fieldErrors.company_name}</p>}

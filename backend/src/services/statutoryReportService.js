@@ -39,7 +39,7 @@ async function getPFECR({ organizationId, month, year }) {
     `SELECT
          COALESCE(u.employee_id, u.id::TEXT) AS employee_id,
          u.name            AS member_name,
-         u.uan_number,
+         u.uan_no AS uan_number,
          u.pan_number,
          ps.gross_salary,
          ps.pf_employee    AS employee_pf,
@@ -106,7 +106,7 @@ async function getESIReturn({ organizationId, month, year }) {
     `SELECT
          COALESCE(u.employee_id, u.id::TEXT) AS employee_id,
          u.name         AS employee_name,
-         u.esi_number,
+         u.esi_no AS esi_number,
          ps.gross_salary,
          ps.esi_employee,
          ps.esi_employer

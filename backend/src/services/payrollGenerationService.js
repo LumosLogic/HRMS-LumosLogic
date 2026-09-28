@@ -614,9 +614,9 @@ async function lockPayrollRun({ organizationId, runId, actorId, actorName, ip })
 
   if (run.status === 'locked') return { id: rId, status: 'locked' }; // idempotent
 
-  if (!['completed', 'completed_with_errors'].includes(run.status)) {
+  if (!['completed', 'completed_with_errors', 'verified', 'approved'].includes(run.status)) {
     throw new GenerationError(
-      `Cannot lock a run with status '${run.status}'. Complete generation first.`,
+      `Cannot lock a run with status '${run.status}'. The run must be completed or approved first.`,
       'INVALID_STATUS_FOR_LOCK',
       { currentStatus: run.status }
     );

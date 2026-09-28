@@ -282,7 +282,7 @@ export default function RootDashboard() {
   // ── Attendance Trend — slice by selected days ─────────────────────────────────
   const trendSlice  = attendanceTrend.slice(-trendDays);
   const trendLabels = trendSlice.map((t, i) =>
-    (i === 0 || i % Math.ceil(trendDays / 5) === 0 || i === trendSlice.length - 1) ? t.date.slice(5) : ''
+    (i === 0 || i % Math.ceil(trendDays / 8) === 0 || i === trendSlice.length - 1) ? t.date.slice(5) : ''
   );
   // BUG_117: avg attendance % for the selected period (exclude days with no data)
   const trendDaysWithData = trendSlice.filter(t => t.total > 0);
@@ -674,9 +674,9 @@ export default function RootDashboard() {
           <div className="flex items-center justify-between px-5 py-4 border-b border-[#e7eefe]">
             <h2 className="text-sm font-black text-[#151c27] flex items-center gap-2">
               <ClipboardList size={14} className="text-amber-500" /> Pending Approvals
-              {(pendingLeavesData.length + pendingRegs.length) > 0 && (
+              {totalPendingApprovals > 0 && (
                 <span className="text-[0.6rem] font-black px-1.5 py-0.5 rounded-full bg-amber-500 text-white">
-                  {pendingLeavesData.length + pendingRegs.length}
+                  {totalPendingApprovals}
                 </span>
               )}
             </h2>
@@ -689,7 +689,7 @@ export default function RootDashboard() {
           {/* Type tabs */}
           <div className="flex gap-1 px-4 pt-3 pb-2 border-b border-[#f0f3ff] overflow-x-auto">
             {[
-              { key: 'all',   label: `All (${pendingLeavesData.length + pendingRegs.length})` },
+              { key: 'all',   label: `All (${totalPendingApprovals})` },
               { key: 'leave', label: `Leave (${pendingLeavesData.filter(l => l.leave_type !== 'wfh' && l.leave_time !== 'wfh').length})` },
               { key: 'wfh',   label: `WFH (${pendingLeavesData.filter(l => l.leave_type === 'wfh' || l.leave_time === 'wfh').length})` },
               { key: 'reg',   label: `Regularization (${pendingRegs.length})` },
