@@ -148,14 +148,13 @@ function ManageHrAdminsModal({ open, onClose, branch }) {
   const qc    = useQueryClient();
 
   // Eligible HR admins (role = admin) in this organization
-  // queryKey includes branch?.id so each branch modal gets a fresh fetch
+  // Uses dedicated endpoint — bypasses employee branch filtering
   const { data: hrUsers = [], isLoading: hrLoading } = useQuery({
     queryKey: ['hr-admins-for-branch-access', branch?.id],
-    queryFn:  () => apiGet('/employees'),
+    queryFn:  () => apiGet('/branches/hr-admins'),
     enabled:  open && !!branch?.id,
     staleTime: 0,
     gcTime: 0,
-    select:   d => (Array.isArray(d) ? d : []).filter(u => u.role === 'admin'),
   });
 
   // Current access grants for this branch

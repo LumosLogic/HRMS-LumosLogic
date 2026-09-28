@@ -388,6 +388,22 @@ router.post('/setup', auth, rootAdminOnly, async (req, res) => {
   }
 });
 
+// ─── GET /api/branches/hr-admins — all HR admin users in this org (root_admin only) ──
+// Used by the Manage HR Admins modal. Bypasses employee branch filtering intentionally.
+router.get('/hr-admins', auth, rootAdminOnly, async (req, res) => {
+  try {
+    const result = await pool.query(
+      `SELECT id, name, email FROM users
+       WHERE organization_id = $1
+         AND role = 'admin'
+         AND COALESCE(employee_status, 'active') NOT IN ('inactive', 'resigned', 'terminated')
+       ORDER BY name`,
+      [req.user.organization_id]
+    );
+    res.json(result.rows);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ─── Existing Branch CRUD (/:id must come after all specific named routes) ────
 
 // GET /api/branches — list all branches in org with HR admin assignment counts
