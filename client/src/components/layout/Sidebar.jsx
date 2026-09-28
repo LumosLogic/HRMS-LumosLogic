@@ -266,8 +266,8 @@ export function Sidebar({ onClose, prefix = '', onMenuClick, onSearchOpen }) {
     const timer = setTimeout(() => {
       if (!navRef.current) return;
       const activeLink = navRef.current.querySelector('a[aria-current="page"]');
-      if (activeLink) activeLink.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-    }, 100);
+      if (activeLink) activeLink.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }, 150);
     return () => clearTimeout(timer);
   }, [location.pathname]);
 

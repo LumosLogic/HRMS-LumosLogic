@@ -187,6 +187,22 @@ router.post('/', auth, async (req, res) => {
       throw error;
     }
 
+    // Store the actual attendance times at the time of submission (fire-and-forget).
+    // Requires migration add_actual_times_to_regularization_2026_09_28.sql to have run first.
+    // Wrapped in try/catch so it never breaks request creation if columns don't exist yet.
+    try {
+      const { data: existingAtt } = await db.from('attendance')
+        .select('check_in, check_out').eq('user_id', req.user.id).eq('date', date).maybeSingle();
+      if (existingAtt?.check_in || existingAtt?.check_out) {
+        await pool.query(
+          `UPDATE attendance_regularization
+           SET actual_check_in = $1, actual_check_out = $2
+           WHERE id = $3`,
+          [existingAtt.check_in || null, existingAtt.check_out || null, data.id]
+        );
+      }
+    } catch { /* columns may not exist yet — non-fatal */ }
+
     // Notify only branch-scoped admins
     const adminIds = await getAdminsForEmployee(req.user.id, oId);
     if (adminIds.length) {

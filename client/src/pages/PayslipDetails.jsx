@@ -244,6 +244,14 @@ export default function PayslipDetails() {
         </div>
       </div>
 
+      {/* ── Notes ── */}
+      {slip.notes && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-5 py-3">
+          <p className="text-[0.7rem] font-black uppercase tracking-widest text-amber-700 mb-1">Notes</p>
+          <p className="text-sm text-amber-900">{slip.notes}</p>
+        </div>
+      )}
+
       {/* ── Meta ── */}
       <div className="text-xs text-[#777587] space-y-0.5 pb-6">
         {slip.formula_version && <p>Calculation engine: v{slip.formula_version}</p>}

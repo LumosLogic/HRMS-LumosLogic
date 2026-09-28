@@ -271,7 +271,10 @@ router.put('/:id', auth, hasPermission('attendance', 'edit'), withBranchContext,
         total_break_minutes: 0,
         notes,
       })
-      .eq('id', req.params.id).select().single();
+      .eq('id', req.params.id)
+      .eq('organization_id', orgId(req))
+      .select().single();
+    if (!data) return res.status(404).json({ error: 'Attendance record not found' });
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

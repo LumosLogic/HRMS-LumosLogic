@@ -1282,7 +1282,7 @@ function LeaveSummaryTable({ employees, leaves, policies, filterStart, filterEnd
     });
     return {
       id: emp.id, name: emp.name, avatar_color: emp.avatar_color,
-      department: emp.department || '',
+      department: emp.department || emp.departments?.[0]?.name || '',
       joiningDate: emp.joining_date,
       byType, balByType,
       totalApproved: days(approved),

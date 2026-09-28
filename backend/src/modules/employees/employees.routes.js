@@ -605,11 +605,11 @@ router.post('/:id/avatar', auth, isAdminRole, upload.single('file'), async (req,
       ).end(req.file.buffer);
     });
     const { error } = await db.from('users')
-      .update({ avatar_url: result.secure_url })
+      .update({ avatar_url: result.secure_url, profile_photo_url: result.secure_url })
       .eq('id', req.params.id)
       .eq('organization_id', orgId(req));
     if (error) throw new Error(error.message);
-    res.json({ avatar_url: result.secure_url });
+    res.json({ avatar_url: result.secure_url, profile_photo_url: result.secure_url });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -628,10 +628,10 @@ router.post('/me/avatar', auth, upload.single('file'), async (req, res) => {
       ).end(req.file.buffer);
     });
     const { error } = await db.from('users')
-      .update({ avatar_url: result.secure_url })
+      .update({ avatar_url: result.secure_url, profile_photo_url: result.secure_url })
       .eq('id', req.user.id);
     if (error) throw new Error(error.message);
-    res.json({ avatar_url: result.secure_url });
+    res.json({ avatar_url: result.secure_url, profile_photo_url: result.secure_url });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

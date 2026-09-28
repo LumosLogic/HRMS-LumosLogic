@@ -159,16 +159,16 @@ router.post('/upload-avatar', auth, upload.single('file'), async (req, res) => {
         (err, r) => err ? reject(err) : resolve(r)
       ).end(req.file.buffer);
     });
-    await db.from('users').update({ avatar_url: result.secure_url }).eq('id', req.user.id);
-    res.json({ avatar_url: result.secure_url });
+    await db.from('users').update({ avatar_url: result.secure_url, profile_photo_url: result.secure_url }).eq('id', req.user.id);
+    res.json({ avatar_url: result.secure_url, profile_photo_url: result.secure_url });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ─── Auth: Remove Avatar Photo (BUG_110) ─────────────────────
 router.delete("/remove-avatar", auth, async (req, res) => {
   try {
-    await db.from("users").update({ avatar_url: null }).eq("id", req.user.id);
-    res.json({ success: true, avatar_url: null });
+    await db.from("users").update({ avatar_url: null, profile_photo_url: null }).eq("id", req.user.id);
+    res.json({ success: true, avatar_url: null, profile_photo_url: null });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
