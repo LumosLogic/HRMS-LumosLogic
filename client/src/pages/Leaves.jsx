@@ -7,6 +7,7 @@ import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Avatar } from '@/components/ui/Avatar';
+import { DateInput } from '@/components/ui/DateInput';
 import { StatusBadge, LeaveTypeBadge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -246,11 +247,11 @@ export default function Leaves() {
               <option value="">All Types</option>
               {LEAVE_TYPES.map(t => <option key={t} value={t} className="capitalize">{t === 'comp_off' ? 'Comp Off' : t.charAt(0).toUpperCase() + t.slice(1)}</option>)}
             </select>
-            <input type="date" className="form-control w-auto py-1.5 px-3 text-xs" value={filterStart}
-              onChange={e => { setFilterStart(e.target.value); setFilterMonth(''); }} />
+            <DateInput value={filterStart} onChange={v => { setFilterStart(v); setFilterMonth(''); }}
+              className="w-auto py-1.5 px-3 text-xs" placeholder="From date" />
             <span className="text-xs text-[#777587]">to</span>
-            <input type="date" className="form-control w-auto py-1.5 px-3 text-xs" value={filterEnd}
-              onChange={e => { setFilterEnd(e.target.value); setFilterMonth(''); }} />
+            <DateInput value={filterEnd} onChange={v => { setFilterEnd(v); setFilterMonth(''); }}
+              className="w-auto py-1.5 px-3 text-xs" placeholder="To date" />
             <span className="text-xs text-[#9ca3af] font-medium">or month:</span>
             <input type="month" className="form-control w-auto py-1.5 px-3 text-xs" value={filterMonth}
               onChange={e => {

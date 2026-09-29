@@ -85,6 +85,32 @@ function buildCorePermIds(slug, allPermissions) {
   return ids;
 }
 
+// ─── BUG_160: Employee role — only these permissions are allowed ─────────────
+// Everything else is locked (disabled + unchecked) to prevent admin-level access.
+const EMPLOYEE_ALLOWED_PERMS = new Set([
+  'dashboard:view',
+  'attendance:view',
+  'leaves:view', 'leaves:create',
+  'documents:view', 'documents:upload',
+  'announcements:view',
+  'holidays:view',
+  'expenses:view', 'expenses:create',
+  'performance:view', 'performance:create',
+  'onboarding:view', 'onboarding:complete_task',
+  'notifications:view',
+  'regularization:view', 'regularization:create',
+  'payroll:view_own',
+]);
+
+function buildBlockedPermIds(slug, allPermissions) {
+  if (slug !== 'employee') return new Set();
+  const ids = new Set();
+  for (const p of allPermissions) {
+    if (!EMPLOYEE_ALLOWED_PERMS.has(`${p.module_key}:${p.action}`)) ids.add(p.id);
+  }
+  return ids;
+}
+
 // ─── EHN_RM_005: High-risk permissions that need a confirmation step ──────────
 const HIGH_RISK_ACTIONS = new Set(['delete', 'lock']);
 const HIGH_RISK_COMBOS  = new Set(['payroll:approve', 'payroll:generate', 'employees:delete', 'roles:manage', 'attendance:delete']);
@@ -148,7 +174,7 @@ const ACTION_COLORS = {
 };
 
 // ─── Permission Checkbox ──────────────────────────────────────────────────────
-function PermissionCheckbox({ permission, checked, onChange, disabled }) {
+function PermissionCheckbox({ permission, checked, onChange, disabled, isBlocked = false }) {
   const actionStr  = typeof permission?.action === 'string' ? permission.action : 'unknown';
   const labelStr   = permission?.label || 'Unnamed permission';
   const permId     = permission?.id;
@@ -156,9 +182,11 @@ function PermissionCheckbox({ permission, checked, onChange, disabled }) {
   // EHN_RM_004: look up tooltip
   const tooltipKey = `${permission?.module_key}:${actionStr}`;
   const tooltip    = PERMISSION_TOOLTIPS[tooltipKey];
-  const titleText  = disabled
-    ? 'This permission is protected in system roles and cannot be removed'
-    : tooltip || undefined;
+  const titleText  = isBlocked
+    ? 'Not available for the Employee role — only self-service permissions are allowed'
+    : disabled
+      ? 'This permission is protected in system roles and cannot be removed'
+      : tooltip || undefined;
   return (
     <div
       role="checkbox"
@@ -183,11 +211,13 @@ function PermissionCheckbox({ permission, checked, onChange, disabled }) {
       )}
     >
       <div className="flex-shrink-0">
-        {disabled && checked
-          ? <Lock size={14} className="text-amber-500" title="This permission is protected and cannot be removed from a system role" />
-          : checked
-            ? <CheckSquare size={16} className="text-[#3525cd]" />
-            : <Square size={16} className="text-[#c7c4d8]" />
+        {isBlocked
+          ? <Lock size={14} className="text-slate-400" title="Not available for Employee role" />
+          : disabled && checked
+            ? <Lock size={14} className="text-amber-500" title="This permission is protected and cannot be removed from a system role" />
+            : checked
+              ? <CheckSquare size={16} className="text-[#3525cd]" />
+              : <Square size={16} className="text-[#c7c4d8]" />
         }
       </div>
       <div className="min-w-0">
@@ -208,7 +238,7 @@ function PermissionCheckbox({ permission, checked, onChange, disabled }) {
 }
 
 // ─── Module Section ───────────────────────────────────────────────────────────
-function ModuleSection({ module, permissions = [], selectedIds, onToggle, onToggleAll, isSystemRole, corePermIds = new Set() }) {
+function ModuleSection({ module, permissions = [], selectedIds, onToggle, onToggleAll, isSystemRole, corePermIds = new Set(), blockedPermIds = new Set() }) {
   const [collapsed, setCollapsed] = useState(false);
   const safeSelectedIds = (selectedIds && typeof selectedIds.has === 'function') ? selectedIds : new Set();
   
@@ -262,8 +292,9 @@ function ModuleSection({ module, permissions = [], selectedIds, onToggle, onTogg
               permission={permItem}
               checked={safeSelectedIds.has(permItem.id)}
               onChange={onToggle}
-              // BUG_193: only lock the minimum core permissions; all others are editable.
-              disabled={corePermIds.has(permItem.id)}
+              // BUG_193: lock core minimum permissions; BUG_160: lock non-employee-service perms
+              disabled={corePermIds.has(permItem.id) || blockedPermIds.has(permItem.id)}
+              isBlocked={blockedPermIds.has(permItem.id)}
             />
           ))}
         </div>
@@ -669,6 +700,11 @@ export default function PermissionMatrix() {
     ? buildCorePermIds(role.slug, allPermissions)
     : new Set();
 
+  // BUG_160: for the employee system role, lock all non-self-service permissions
+  const blockedPermIds = (isSystemRole && role?.slug === 'employee')
+    ? buildBlockedPermIds(role.slug, allPermissions)
+    : new Set();
+
   function applyToggle(permId, checked) {
     setSelectedIds(prev => {
       const next = new Set(prev);
@@ -679,6 +715,11 @@ export default function PermissionMatrix() {
   }
 
   function handleToggle(permId, checked) {
+    // BUG_160: block enabling non-self-service permissions on the employee role
+    if (checked && blockedPermIds.has(permId)) {
+      showToast('This permission is not available for the Employee role.', 'error');
+      return;
+    }
     // BUG_193: only block removal of core minimum permissions
     if (!checked && corePermIds.has(permId)) {
       showToast('This is a core permission and cannot be removed from this system role.', 'error');
@@ -880,8 +921,18 @@ export default function PermissionMatrix() {
           </div>
         )}
 
-        {/* System role banner — BUG_160: core permissions are protected; only additions allowed */}
-        {isSystemRole && !isRootAdmin && (
+        {/* System role banner — BUG_160: employee role is restricted to self-service only */}
+        {isSystemRole && !isRootAdmin && role?.slug === 'employee' && (
+          <div className="bg-slate-50 border border-slate-200 rounded-xl px-4 py-3 mb-5 flex items-center gap-3">
+            <Lock size={15} className="text-slate-500 flex-shrink-0" />
+            <p className="text-xs text-slate-700 font-semibold">
+              Employee role — restricted to <strong>self-service permissions only</strong>.
+              Permissions shown with a grey lock cannot be granted to employees.
+              Core self-service permissions (amber lock) cannot be removed.
+            </p>
+          </div>
+        )}
+        {isSystemRole && !isRootAdmin && role?.slug !== 'employee' && (
           <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 mb-5 flex items-center gap-3">
             <Lock size={15} className="text-amber-500 flex-shrink-0" />
             <p className="text-xs text-amber-700 font-semibold">
@@ -984,6 +1035,7 @@ export default function PermissionMatrix() {
                 onToggleAll={handleToggleAll}
                 isSystemRole={isRootAdmin}
                 corePermIds={corePermIds}
+                blockedPermIds={blockedPermIds}
               />
             ))}
           </div>

@@ -8,6 +8,7 @@ import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { DateInput } from '@/components/ui/DateInput';
 import { Avatar } from '@/components/ui/Avatar';
 import { fmtDate } from '@/lib/utils';
 
@@ -41,13 +42,13 @@ function ExpenseModal({ open, onClose, expense, allExpenses = [] }) {
     ? {
         title: expense.title, category: expense.category, amount: expense.amount,
         expense_date: expense.expense_date, description: expense.description || '',
-        receipt_url: expense.receipt_url || '',
+        receipt_url: expense.receipt_url || '', receipt_filename: expense.receipt_filename || '',
         merchant_name: expense.merchant_name || '',
         receipt_number: expense.receipt_number || '',
       }
     : {
         title: '', category: 'travel', amount: '', expense_date: today,
-        description: '', receipt_url: '',
+        description: '', receipt_url: '', receipt_filename: '',
         merchant_name: '', receipt_number: '',
       });
 
@@ -81,6 +82,7 @@ function ExpenseModal({ open, onClose, expense, allExpenses = [] }) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Upload failed');
       set('receipt_url', data.url);
+      set('receipt_filename', data.filename || file.name || '');
       toast('Receipt uploaded!', 'success');
     } catch (err) { toast(err.message, 'error'); setPendingFile(null); }
     finally { setUploading(false); }
@@ -104,6 +106,7 @@ function ExpenseModal({ open, onClose, expense, allExpenses = [] }) {
       return await apiPost('/expenses/check-duplicate', {
         merchant_name: mn,
         receipt_number: rn,
+        receipt_filename: form.receipt_filename || '',
         amount: form.amount,
         expense_date: form.expense_date,
         exclude_id: isEdit ? expense.id : undefined,
@@ -125,7 +128,7 @@ function ExpenseModal({ open, onClose, expense, allExpenses = [] }) {
     setChecking(false);
 
     if (result?.type === 'hard') { setDupBlock(result.existing); return; }
-    if (result?.type === 'soft') { setDupConfirm(result.existing); return; }
+    if (result?.type === 'soft') { setDupConfirm(result); return; }
 
     mut.mutate();
   }
@@ -216,8 +219,7 @@ function ExpenseModal({ open, onClose, expense, allExpenses = [] }) {
 
           <div>
             <label className="form-label">Expense Date <span className="text-rose-500">*</span></label>
-            <input type="date" className="form-control" max={today} value={form.expense_date}
-              onChange={e => set('expense_date', e.target.value)} />
+            <DateInput value={form.expense_date} onChange={v => set('expense_date', v)} max={today} placeholder="Select expense date" />
             <p className="text-[0.65rem] text-[#9ca3af] mt-1">Future dates are not allowed</p>
           </div>
 
@@ -266,16 +268,18 @@ function ExpenseModal({ open, onClose, expense, allExpenses = [] }) {
         </div>
       </Modal>
 
-      {/* Soft-duplicate confirmation — same merchant + amount + date, different receipt number */}
+      {/* Soft-duplicate confirmation */}
       {dupConfirm && (
         <ConfirmModal
           open
           title="Possible Duplicate Expense"
           message={
-            `A similar expense "${dupConfirm.title}"` +
-            (dupConfirm.merchant_name ? ` from ${dupConfirm.merchant_name}` : '') +
-            ` for ${fmt(dupConfirm.amount)} on ${fmtDate(dupConfirm.expense_date)} already exists in your claims.` +
-            ` If this is a genuinely different transaction, click Submit Anyway.`
+            dupConfirm.reason === 'filename'
+              ? `A receipt file named "${form.receipt_filename}" was already used in a previous claim ("${dupConfirm.existing.title}"). If this is a different receipt, click Submit Anyway.`
+              : `A similar expense "${dupConfirm.existing?.title || dupConfirm.title}"` +
+                (dupConfirm.existing?.merchant_name || dupConfirm.merchant_name ? ` from ${dupConfirm.existing?.merchant_name || dupConfirm.merchant_name}` : '') +
+                ` for ${fmt(dupConfirm.existing?.amount || dupConfirm.amount)} on ${fmtDate(dupConfirm.existing?.expense_date || dupConfirm.expense_date)} already exists in your claims.` +
+                ` If this is a genuinely different transaction, click Submit Anyway.`
           }
           confirmLabel="Submit Anyway"
           onConfirm={() => { setDupConfirm(null); mut.mutate(); }}
@@ -557,8 +561,8 @@ export default function ExpensesPage() {
               <span className="text-xs text-[#777587]">–</span>
               <input type="number" className="form-control py-1.5 text-xs w-24" placeholder="Max ₹" value={expAmtMax} onChange={e => setExpAmtMax(e.target.value)} />
             </div>
-            <input type="date" className="form-control py-1.5 text-xs w-auto" value={expDateFrom} onChange={e => setExpDateFrom(e.target.value)} title="Date from" />
-            <input type="date" className="form-control py-1.5 text-xs w-auto" value={expDateTo} onChange={e => setExpDateTo(e.target.value)} title="Date to" />
+            <DateInput value={expDateFrom} onChange={setExpDateFrom} className="py-1.5 text-xs w-auto" placeholder="From date" title="Date from" />
+            <DateInput value={expDateTo} onChange={setExpDateTo} className="py-1.5 text-xs w-auto" placeholder="To date" title="Date to" />
             {isAdvancedFilterActive && (
               <button className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-600 border border-rose-200 bg-rose-50 hover:bg-rose-100 transition-colors"
                 onClick={() => { setExpSearch(''); setExpCatFilt(''); setExpAmtMin(''); setExpAmtMax(''); setExpDateFrom(''); setExpDateTo(''); }}>

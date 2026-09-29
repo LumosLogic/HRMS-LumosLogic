@@ -10,6 +10,7 @@ import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { Avatar } from '@/components/ui/Avatar';
 import { fmtDate } from '@/lib/utils';
+import { DateInput } from '@/components/ui/DateInput';
 
 function fmtPunchTs(ts) {
   if (!ts) return '--';
@@ -1171,21 +1172,11 @@ export default function Regularization() {
         {/* Date From */}
         <div className="flex items-center gap-1.5">
           <CalendarRange size={13} className="text-[#777587] flex-shrink-0" />
-          <input
-            type="date"
-            className="form-control py-1.5 text-xs w-[130px]"
-            title="From date"
-            value={dateFrom}
-            onChange={e => setDateFrom(e.target.value)}
-          />
+          <DateInput value={dateFrom} onChange={setDateFrom}
+            className="py-1.5 text-xs w-[130px]" title="From date" placeholder="From date" />
           <span className="text-xs text-[#777587]">to</span>
-          <input
-            type="date"
-            className="form-control py-1.5 text-xs w-[130px]"
-            title="To date"
-            value={dateTo}
-            onChange={e => setDateTo(e.target.value)}
-          />
+          <DateInput value={dateTo} onChange={setDateTo}
+            className="py-1.5 text-xs w-[130px]" title="To date" placeholder="To date" />
         </div>
 
         {/* Sort */}

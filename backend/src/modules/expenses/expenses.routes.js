@@ -63,7 +63,7 @@ router.get('/', auth, withBranchContext, async (req, res) => {
 router.post('/', auth, async (req, res) => {
   try {
     const oId = req.user.organization_id;
-    const { title, category, amount, expense_date, description, receipt_url, merchant_name, receipt_number, user_id } = req.body;
+    const { title, category, amount, expense_date, description, receipt_url, receipt_filename, merchant_name, receipt_number, user_id } = req.body;
     if (!title || !title.trim()) return res.status(400).json({ error: 'Expense title is required. Please enter a description of the expense.' });
     if (!expense_date) return res.status(400).json({ error: 'Expense date is required. Please select the date when this expense was incurred.' });
     if (!amount) return res.status(400).json({ error: 'Amount is required. Please enter the expense amount.' });
@@ -90,6 +90,7 @@ router.post('/', auth, async (req, res) => {
         description: description || '', receipt_url: receipt_url || '',
         merchant_name: (merchant_name || '').trim(),
         receipt_number: (receipt_number || '').trim(),
+        receipt_filename: receipt_filename ? receipt_filename.trim() : null,
         organization_id: oId,
         manager_id: managerId,
       })
@@ -136,13 +137,14 @@ router.post('/check-duplicate', auth, async (req, res) => {
   try {
     const oId    = req.user.organization_id;
     const userId = req.user.id;
-    const { merchant_name, receipt_number, amount, expense_date, exclude_id } = req.body;
+    const { merchant_name, receipt_number, receipt_filename, amount, expense_date, exclude_id } = req.body;
 
-    const rn = (receipt_number || '').trim();
-    const mn = (merchant_name  || '').trim();
+    const rn = (receipt_number   || '').trim();
+    const mn = (merchant_name    || '').trim();
+    const fn = (receipt_filename || '').trim();
 
     const base = () => db.from('expenses')
-      .select('id, title, amount, expense_date, merchant_name, receipt_number')
+      .select('id, title, amount, expense_date, merchant_name, receipt_number, receipt_filename')
       .eq('organization_id', oId)
       .eq('user_id', userId);
     const excl = q => exclude_id ? q.neq('id', parseInt(exclude_id)) : q;
@@ -167,6 +169,12 @@ router.post('/check-duplicate', auth, async (req, res) => {
       if (data?.length) return res.json({ type: 'soft', existing: data[0] });
     }
 
+    // 4. Soft warn: same receipt filename already used in another claim by this user
+    if (fn) {
+      const { data } = await excl(base().ilike('receipt_filename', fn));
+      if (data?.length) return res.json({ type: 'soft', existing: data[0], reason: 'filename' });
+    }
+
     res.json({ type: null });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -182,7 +190,8 @@ router.post('/upload-receipt', auth, upload.single('file'), async (req, res) => 
         (err, r) => err ? reject(err) : resolve(r)
       ).end(req.file.buffer);
     });
-    res.json({ url: result.secure_url });
+    // Return original filename so the frontend can include it in the expense payload
+    res.json({ url: result.secure_url, filename: req.file.originalname || null });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

@@ -2,6 +2,7 @@ const express    = require('express');
 const router     = express.Router();
 const { db } = require('../../config/db');
 const { auth }   = require('../../middleware/auth');
+const { hasPermission } = require('../../middleware/permissions');
 const { sendMail, announcementHtml } = require('../../services/emailService');
 const { getOrgContext } = require('../../utils/helpers');
 const cloudinary = require('cloudinary').v2;
@@ -101,7 +102,7 @@ router.get('/', auth, async (req, res) => {
 });
 
 // POST /api/announcements/upload — Cloudinary attachment upload
-router.post('/upload', auth, upload.single('file'), async (req, res) => {
+router.post('/upload', auth, hasPermission('announcements', 'create'), upload.single('file'), async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
@@ -123,7 +124,7 @@ router.post('/upload', auth, upload.single('file'), async (req, res) => {
 });
 
 // POST /api/announcements
-router.post('/', auth, async (req, res) => {
+router.post('/', auth, hasPermission('announcements', 'create'), async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = resolveOrgId(req);
@@ -210,7 +211,7 @@ router.post('/', auth, async (req, res) => {
 });
 
 // PUT /api/announcements/:id
-router.put('/:id', auth, async (req, res) => {
+router.put('/:id', auth, hasPermission('announcements', 'manage'), async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
 
@@ -249,7 +250,7 @@ router.put('/:id', auth, async (req, res) => {
 });
 
 // DELETE /api/announcements/:id
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', auth, hasPermission('announcements', 'manage'), async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
 

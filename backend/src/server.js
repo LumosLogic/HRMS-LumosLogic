@@ -267,6 +267,8 @@ async function runStartupMigrations() {
     // BUG_242: scheduled announcements — publish-time gating + one-shot notify flag
     `ALTER TABLE announcements ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMPTZ DEFAULT NULL`,
     `ALTER TABLE announcements ADD COLUMN IF NOT EXISTS published_notified BOOLEAN NOT NULL DEFAULT false`,
+    // Expense duplicate filename tracking
+    `ALTER TABLE expenses ADD COLUMN IF NOT EXISTS receipt_filename TEXT DEFAULT NULL`,
   ];
   for (const sql of migrations) {
     await pool.query(sql).catch(e => console.warn('[startup-migration] skipped:', e.message));

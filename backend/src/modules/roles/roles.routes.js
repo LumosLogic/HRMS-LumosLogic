@@ -527,6 +527,39 @@ router.put('/:id/permissions', auth, hasPermission('roles', 'manage'), async (re
       return res.status(400).json({ error: 'The Root Admin role always has all permissions and cannot be restricted.' });
     }
 
+    // BUG_160: Employee system role is limited to self-service permissions only.
+    // Any permission not in this allowlist is silently filtered out to prevent
+    // admin-level access being granted to the employee role.
+    if (role.is_system_role && role.slug === 'employee') {
+      const EMPLOYEE_ALLOWED = new Set([
+        'dashboard:view',
+        'attendance:view',
+        'leaves:view', 'leaves:create',
+        'documents:view', 'documents:upload',
+        'announcements:view',
+        'holidays:view',
+        'expenses:view', 'expenses:create',
+        'performance:view', 'performance:create',
+        'onboarding:view', 'onboarding:complete_task',
+        'notifications:view',
+        'regularization:view', 'regularization:create',
+        'payroll:view_own',
+      ]);
+      // Map requested permission IDs to module_key:action and filter
+      const { rows: permRows } = await pool.query(
+        `SELECT id, module_key, action FROM permissions WHERE id = ANY($1::bigint[])`,
+        [safeIds]
+      );
+      const allowedIds = permRows
+        .filter(p => EMPLOYEE_ALLOWED.has(`${p.module_key}:${p.action}`))
+        .map(p => p.id);
+      const blockedCount = safeIds.length - allowedIds.length;
+      if (blockedCount > 0) {
+        // Replace the requested list with only the allowed subset
+        safeIds.splice(0, safeIds.length, ...allowedIds);
+      }
+    }
+
     // BUG_193: System roles now allow full permission editing EXCEPT for a small
     // set of minimum core permissions that are protected per slug.
     // Admin can remove any non-core permission (e.g. remove payroll from HR Admin).
