@@ -1702,6 +1702,7 @@ function VerificationQueueTab() {
   const [reviewSub,    setReviewSub]    = useState(null);
   const [statusFilter, setStatusFilter] = useState('all');
   const [search,       setSearch]       = useState('');
+  const [sortDir,      setSortDir]      = useState('desc'); // Bug-089: sort by Uploaded On
 
   const { data: allSubs = [], isLoading } = useQuery({
     queryKey: ['verification-queue'],
@@ -1726,8 +1727,14 @@ function VerificationQueueTab() {
         s.requirement?.name?.toLowerCase().includes(q)
       );
     }
+    // Bug-089: sort by uploaded_at / created_at
+    list = [...list].sort((a, b) => {
+      const ta = new Date(a.uploaded_at || a.created_at || 0).getTime();
+      const tb = new Date(b.uploaded_at || b.created_at || 0).getTime();
+      return sortDir === 'desc' ? tb - ta : ta - tb;
+    });
     return list;
-  }, [allSubs, statusFilter, search]);
+  }, [allSubs, statusFilter, search, sortDir]);
 
   // Reviewable = employee has submitted and it needs an admin decision.
   // re_upload_requested means we are WAITING for the employee to re-upload — not yet reviewable.
@@ -1752,17 +1759,19 @@ function VerificationQueueTab() {
         </div>
       </div>
 
-      {/* Status filter tabs */}
-      <div className="flex items-center gap-1 mb-4 border-b border-[#c7c4d8]">
-        {STATUS_TABS.map(tab => (
-          <button key={tab.key} onClick={() => setStatusFilter(tab.key)}
-            className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-all -mb-px whitespace-nowrap ${statusFilter === tab.key ? 'border-[#3525cd] text-[#3525cd]' : 'border-transparent text-[#777587] hover:text-[#464555]'}`}>
-            {tab.label}
-            <span className={`px-1.5 py-0.5 rounded-full text-[0.6rem] font-black ${statusFilter === tab.key ? 'bg-[#3525cd] text-white' : 'bg-[#f0f3ff] text-[#464555]'}`}>
-              {tab.count}
-            </span>
-          </button>
-        ))}
+      {/* Status filter tabs — overflow-x-auto for tablet/mobile */}
+      <div className="overflow-x-auto scrollbar-hide mb-4 border-b border-[#c7c4d8]">
+        <div className="flex items-center gap-1 min-w-max">
+          {STATUS_TABS.map(tab => (
+            <button key={tab.key} onClick={() => setStatusFilter(tab.key)}
+              className={`flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold border-b-2 transition-all -mb-px whitespace-nowrap ${statusFilter === tab.key ? 'border-[#3525cd] text-[#3525cd]' : 'border-transparent text-[#777587] hover:text-[#464555]'}`}>
+              {tab.label}
+              <span className={`px-1.5 py-0.5 rounded-full text-[0.6rem] font-black ${statusFilter === tab.key ? 'bg-[#3525cd] text-white' : 'bg-[#f0f3ff] text-[#464555]'}`}>
+                {tab.count}
+              </span>
+            </button>
+          ))}
+        </div>
       </div>
 
       {isLoading ? (
@@ -1784,7 +1793,17 @@ function VerificationQueueTab() {
             <table className="w-full text-left text-xs min-w-[560px]">
               <thead className="bg-[#f9f9ff] border-b border-[#c7c4d8]">
                 <tr>
-                  {['EMPLOYEE', 'DOCUMENT', 'UPLOADED ON', 'STATUS', 'REVIEWED BY', 'ACTIONS'].map(h => (
+                  {['EMPLOYEE', 'DOCUMENT'].map(h => (
+                    <th key={h} className="px-4 py-3 font-black text-[#464555] text-[0.65rem] tracking-wide whitespace-nowrap">{h}</th>
+                  ))}
+                  <th className="px-4 py-3 font-black text-[#464555] text-[0.65rem] tracking-wide whitespace-nowrap">
+                    <button className="flex items-center gap-1 hover:text-[#3525cd] transition-colors"
+                      onClick={() => setSortDir(d => d === 'desc' ? 'asc' : 'desc')}>
+                      UPLOADED ON
+                      <span className="text-[0.6rem]">{sortDir === 'desc' ? '↓' : '↑'}</span>
+                    </button>
+                  </th>
+                  {['STATUS', 'REVIEWED BY', 'ACTIONS'].map(h => (
                     <th key={h} className="px-4 py-3 font-black text-[#464555] text-[0.65rem] tracking-wide whitespace-nowrap">{h}</th>
                   ))}
                 </tr>

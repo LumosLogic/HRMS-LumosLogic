@@ -1401,7 +1401,7 @@ function CompensationTab({ empId, isAdmin, onEdit, emp }) {
               </div>
             )}
             {pLoad ? <LoadingSection /> : (
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 xl:grid-cols-3 gap-3">
                 {[
                   ['CTC (Annual)', payroll?.ctc ? `₹${(Number(payroll.ctc)*12).toLocaleString('en-IN')}` : emp.ctc ? `₹${Number(emp.ctc).toLocaleString('en-IN')}` : null],
                   ['Effective From', payroll?.effective_from ? fmtDate(payroll.effective_from) : emp.salary_effective_date ? fmtDate(emp.salary_effective_date) : null],

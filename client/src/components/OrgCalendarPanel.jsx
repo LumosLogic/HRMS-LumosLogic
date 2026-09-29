@@ -388,7 +388,8 @@ const STATUS_COLORS_MAP = { present:'#10B981', early_leave:'#F97316', absent:'#E
 function WeekView({ weekDates, grouped, employees, user, isAdmin, onDayClick, getLeaveForDate, searchQuery = '' }) {
   const today = todayStr();
   return (
-    <div className="grid grid-cols-7 gap-2.5">
+    <div className="overflow-x-auto scrollbar-hide -mx-0">
+    <div className="grid grid-cols-7 gap-2.5 min-w-[560px]">
       {weekDates.map(d => {
         const ds      = toISODate(d);
         const isToday = ds === today;
@@ -427,6 +428,7 @@ function WeekView({ weekDates, grouped, employees, user, isAdmin, onDayClick, ge
           </div>
         );
       })}
+    </div>
     </div>
   );
 }

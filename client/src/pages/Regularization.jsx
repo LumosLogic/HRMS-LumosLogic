@@ -1027,19 +1027,19 @@ export default function Regularization() {
           <h1 className="page-title">Attendance Regularization</h1>
           <p className="page-subtitle">{isAdmin ? 'Review and approve employee attendance correction and early leave requests' : 'Request attendance corrections or early leave approval'}</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           {filtered.length > 0 && (
-            <button className="btn btn-outline" onClick={() => exportCSV(filtered)} title="Export filtered requests as CSV">
-              <Download size={14} />Export
+            <button className="btn btn-outline btn-sm" onClick={() => exportCSV(filtered)} title="Export filtered requests as CSV">
+              <Download size={13} />Export
             </button>
           )}
           {!isAdmin && (
             <>
-              <button className="btn btn-outline" onClick={() => setEarlyLeaveOpen(true)}>
-                <LogOut size={15} />Early Leave
+              <button className="btn btn-outline btn-sm" onClick={() => setEarlyLeaveOpen(true)}>
+                <LogOut size={13} />Early Leave
               </button>
-              <button className="btn btn-primary" onClick={() => setApplyOpen(true)}>
-                <Plus size={16} />Request Correction
+              <button className="btn btn-primary btn-sm" onClick={() => setApplyOpen(true)}>
+                <Plus size={14} />Request Correction
               </button>
             </>
           )}
