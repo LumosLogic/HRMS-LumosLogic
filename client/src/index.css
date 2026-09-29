@@ -38,6 +38,17 @@
   ::-webkit-scrollbar-thumb:hover { background: rgba(53,37,205,.3); }
 }
 
+@layer utilities {
+  /* Hide scrollbar visually while keeping scroll functional (used on horizontal tab bars) */
+  .scrollbar-hide {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+  }
+}
+
 @layer components {
   /* ── Spinner ── */
   .spinner {

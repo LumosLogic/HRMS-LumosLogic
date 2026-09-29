@@ -281,14 +281,21 @@ function AdminOnboarding() {
                       {isOpen ? <ChevronUp size={15} className="text-[#777587]" /> : <ChevronDown size={15} className="text-[#777587]" />}
                     </div>
                   </div>
-                  {isOpen && (
-                    <div className="border-t border-[#f0f3ff] p-5 bg-[#f9f9ff] space-y-2">
-                      {(o.tasks || []).map(t => (
-                        <TaskItem key={t.id} task={t} canToggle
-                          onToggle={(id, c) => toggleMut.mutate({ id, completed: c })} />
-                      ))}
+                  {/* Bug_004: smooth expand/collapse via CSS grid-template-rows animation */}
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateRows: isOpen ? '1fr' : '0fr',
+                    transition: 'grid-template-rows 0.28s ease',
+                  }}>
+                    <div style={{ overflow: 'hidden' }}>
+                      <div className="border-t border-[#f0f3ff] p-5 bg-[#f9f9ff] space-y-2">
+                        {(o.tasks || []).map(t => (
+                          <TaskItem key={t.id} task={t} canToggle
+                            onToggle={(id, c) => toggleMut.mutate({ id, completed: c })} />
+                        ))}
+                      </div>
                     </div>
-                  )}
+                  </div>
                 </div>
               );
             })}

@@ -2225,17 +2225,19 @@ function AdminDocumentsPage() {
           onUploaded={() => { setShowUpload(false); qc.invalidateQueries({ queryKey: ['documents'] }); }} />
       )}
 
-      {/* Tabs */}
-      <div className="flex items-center gap-1 mb-6 border-b border-[#c7c4d8]">
-        {tabs.map(tab => (
-          <button key={tab.id} onClick={() => switchTab(tab.id)}
-            className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold border-b-2 transition-all -mb-px whitespace-nowrap ${activeTab === tab.id ? 'border-[#3525cd] text-[#3525cd]' : 'border-transparent text-[#777587] hover:text-[#464555]'}`}>
-            <tab.Icon size={14} /> {tab.label}
-            {tab.badge > 0 && (
-              <span className="px-1.5 py-0.5 rounded-full text-[0.6rem] font-black bg-rose-500 text-white">{tab.badge}</span>
-            )}
-          </button>
-        ))}
+      {/* Tabs — overflow-x-auto so all tabs are reachable on tablet/mobile */}
+      <div className="overflow-x-auto mb-6 border-b border-[#c7c4d8] scrollbar-hide">
+        <div className="flex items-center gap-1 min-w-max">
+          {tabs.map(tab => (
+            <button key={tab.id} onClick={() => switchTab(tab.id)}
+              className={`flex items-center gap-2 px-4 py-2.5 text-xs font-bold border-b-2 transition-all -mb-px whitespace-nowrap ${activeTab === tab.id ? 'border-[#3525cd] text-[#3525cd]' : 'border-transparent text-[#777587] hover:text-[#464555]'}`}>
+              <tab.Icon size={14} /> {tab.label}
+              {tab.badge > 0 && (
+                <span className="px-1.5 py-0.5 rounded-full text-[0.6rem] font-black bg-rose-500 text-white">{tab.badge}</span>
+              )}
+            </button>
+          ))}
+        </div>
       </div>
 
       {activeTab === 'shared'          && <SharedDocumentsTab onUploadClick={() => setShowUpload(true)} />}
