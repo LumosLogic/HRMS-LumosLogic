@@ -273,6 +273,27 @@ router.get('/my-activity', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// GET /api/doc-requirements/employees — org-wide active employee list for requirement assignment.
+// Bug-119: The generic /employees endpoint applies branch filtering which can make the
+// employee picker empty. This endpoint intentionally omits branch filtering because
+// branch scope is already enforced through assigned_branch_ids[] on the requirement.
+// Security: still scoped to the authenticated org. Admin-only.
+router.get('/employees', auth, async (req, res) => {
+  try {
+    if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
+    const oId = req.user.organization_id;
+    const { data, error } = await db
+      .from('users')
+      .select('id, name, email, department, position, avatar_color, employee_status')
+      .eq('organization_id', oId)
+      .eq('role', 'employee')
+      .not('employee_status', 'in', ['inactive', 'resigned', 'terminated'])
+      .order('name');
+    if (error) throw error;
+    res.json(data || []);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // GET /api/doc-requirements/verification-queue — HR all submissions (branch-filtered)
 router.get('/verification-queue', auth, withBranchContext, async (req, res) => {
   try {

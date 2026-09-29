@@ -176,6 +176,137 @@ router.put('/shift/:shiftId', auth, hasPermission('settings', 'manage'), async (
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ─── Branch Work Schedule Overrides ──────────────────────────────────────────
+// BUG-115: Branch-specific work schedule management (root admin only).
+// Uses branch_work_schedule table (see migration add_branch_work_schedule_2026_09_29.sql).
+
+// GET /api/settings/branch-overrides — list all branch overrides for this org
+router.get('/branch-overrides', auth, async (req, res) => {
+  if (!isRootAdmin(req.user.role)) return res.status(403).json({ error: 'Root admin only' });
+  try {
+    const oId = orgId(req);
+    const { data, error } = await db.from('branch_work_schedule')
+      .select('*, branch:branches!branch_work_schedule_branch_id_fkey(id, name, code)')
+      .eq('organization_id', oId)
+      .order('created_at');
+    if (error) {
+      // Table doesn't exist yet — return empty array gracefully
+      if (error.message && error.message.includes('does not exist')) return res.json([]);
+      throw error;
+    }
+    res.json(data || []);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/settings/branch/:branchId — get branch override (falls back to org defaults)
+router.get('/branch/:branchId', auth, async (req, res) => {
+  if (!isRootAdmin(req.user.role)) return res.status(403).json({ error: 'Root admin only' });
+  try {
+    const oId      = orgId(req);
+    const branchId = parseInt(req.params.branchId, 10);
+    if (!branchId) return res.status(400).json({ error: 'Invalid branchId' });
+
+    // Verify branch belongs to this org
+    const { data: branch } = await db.from('branches')
+      .select('id, name').eq('id', branchId).eq('org_id', oId).maybeSingle();
+    if (!branch) return res.status(404).json({ error: 'Branch not found in this organisation' });
+
+    const [overrideRes, orgRes] = await Promise.all([
+      db.from('branch_work_schedule').select('*').eq('organization_id', oId).eq('branch_id', branchId).maybeSingle(),
+      db.from('work_schedule').select('*').eq('organization_id', oId).maybeSingle(),
+    ]);
+
+    res.json({
+      branch_id:    branchId,
+      branch_name:  branch.name,
+      has_override: !!overrideRes.data,
+      override:     overrideRes.data  || null,
+      org_default:  orgRes.data       || null,
+      // effective = override if present, else org default
+      effective:    overrideRes.data  || orgRes.data || null,
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// PUT /api/settings/branch/:branchId — create or update branch override
+router.put('/branch/:branchId', auth, hasPermission('settings', 'manage'), async (req, res) => {
+  if (!isRootAdmin(req.user.role)) return res.status(403).json({ error: 'Root admin only' });
+  try {
+    const oId      = orgId(req);
+    const branchId = parseInt(req.params.branchId, 10);
+    if (!branchId) return res.status(400).json({ error: 'Invalid branchId' });
+
+    // Verify branch belongs to this org
+    const { data: branch } = await db.from('branches')
+      .select('id').eq('id', branchId).eq('org_id', oId).maybeSingle();
+    if (!branch) return res.status(404).json({ error: 'Branch not found in this organisation' });
+
+    const {
+      start_time, end_time, late_threshold, early_exit_threshold,
+      half_day_hours, work_days, full_day_hours, max_early_leave_count,
+      late_entry_threshold_enabled, early_exit_threshold_enabled,
+    } = req.body;
+
+    const fields = {
+      organization_id: oId,
+      branch_id:       branchId,
+      updated_at:      new Date().toISOString(),
+      ...(start_time                    !== undefined && { start_time }),
+      ...(end_time                      !== undefined && { end_time }),
+      ...(late_threshold                !== undefined && { late_threshold }),
+      ...(early_exit_threshold          !== undefined && { early_exit_threshold }),
+      ...(half_day_hours                !== undefined && { half_day_hours }),
+      ...(full_day_hours                !== undefined && { full_day_hours }),
+      ...(work_days                     !== undefined && { work_days }),
+      ...(max_early_leave_count         !== undefined && { max_early_leave_count }),
+      ...(late_entry_threshold_enabled  !== undefined && { late_entry_threshold_enabled:  late_entry_threshold_enabled  ?? true }),
+      ...(early_exit_threshold_enabled  !== undefined && { early_exit_threshold_enabled:  early_exit_threshold_enabled  ?? true }),
+    };
+
+    const { data: existing } = await db.from('branch_work_schedule')
+      .select('id').eq('organization_id', oId).eq('branch_id', branchId).maybeSingle();
+
+    let result, err;
+    if (existing) {
+      ({ data: result, error: err } = await db.from('branch_work_schedule')
+        .update(fields).eq('id', existing.id).select().single());
+    } else {
+      // Set defaults for required fields if not provided
+      ({ data: result, error: err } = await db.from('branch_work_schedule')
+        .insert({
+          start_time:                   '09:00',
+          end_time:                     '18:00',
+          late_threshold:               '09:30',
+          early_exit_threshold:         '17:00',
+          half_day_hours:               4.5,
+          full_day_hours:               8,
+          work_days:                    '1,2,3,4,5',
+          max_early_leave_count:        3,
+          late_entry_threshold_enabled: true,
+          early_exit_threshold_enabled: true,
+          ...fields,
+        }).select().single());
+    }
+    if (err) throw new Error(err.message);
+    res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// DELETE /api/settings/branch/:branchId — remove branch override (falls back to org default)
+router.delete('/branch/:branchId', auth, hasPermission('settings', 'manage'), async (req, res) => {
+  if (!isRootAdmin(req.user.role)) return res.status(403).json({ error: 'Root admin only' });
+  try {
+    const oId      = orgId(req);
+    const branchId = parseInt(req.params.branchId, 10);
+    if (!branchId) return res.status(400).json({ error: 'Invalid branchId' });
+
+    const { error } = await db.from('branch_work_schedule')
+      .delete().eq('organization_id', oId).eq('branch_id', branchId);
+    if (error) throw new Error(error.message);
+    res.json({ ok: true, message: 'Branch override removed. Branch will now use the organisation-wide schedule.' });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ─── Settings: Email Automation — GET ────────────────────────────────────────
 router.get('/email-automation', auth, async (req, res) => {
   if (!isRootAdmin(req.user.role)) return res.status(403).json({ error: 'Root admin only' });

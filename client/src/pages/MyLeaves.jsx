@@ -158,7 +158,9 @@ function LeaveApplyPanel({ open, onClose, onSubmit, loading: submitting, policie
       .reduce((sum, l) => sum + (l.leave_time === 'half' ? 0.5 : countWorkingDaysInRange(l.start_date, l.end_date)), 0);
     const pending = (leaves || []).filter(l => l.leave_type === typeVal && ['pending','pending_dept','pending_root','pending_approval'].includes(l.status) && !isWFHRecord(l))
       .reduce((sum, l) => sum + (l.leave_time === 'half' ? 0.5 : countWorkingDaysInRange(l.start_date, l.end_date)), 0);
-    return { used, pending, total, remaining: Math.max(0, total - used - pending) };
+    // Bug-128: remaining should only deduct approved (used) leaves, not pending.
+    // Pending leaves are shown separately so the employee knows days in-flight.
+    return { used, pending, total, remaining: Math.max(0, total - used) };
   }
 
   const isWFH          = form.request_type === 'wfh';

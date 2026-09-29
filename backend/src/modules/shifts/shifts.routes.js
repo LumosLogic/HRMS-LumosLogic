@@ -4,35 +4,47 @@ const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, canAdminAccessUser, getFilterState } = require('../../utils/branchFilter');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
 // ─── Shift Definitions ────────────────────────────────────────────────────────
 
 // GET /api/shifts
-router.get('/', auth, async (req, res) => {
+router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
-    const { data, error } = await db.from('shifts').select('*').eq('organization_id', oId).order('name');
+    const branchState = getFilterState(req.branchContext);
+    let q = db.from('shifts').select('*').eq('organization_id', oId).order('name');
+    // When a specific branch is selected, show shifts belonging to that branch + org-wide shifts (branch_id IS NULL)
+    if (branchState.type === 'specific') {
+      q = q.or(`branch_id.eq.${branchState.branchId},branch_id.is.null`);
+    } else if (branchState.type === 'multi') {
+      q = q.or(`branch_id.in.(${branchState.branchIds.join(',')}),branch_id.is.null`);
+    }
+    // type=all: show everything; type=none: show org-wide only
+    const { data, error } = await q;
     if (error) throw error;
     res.json(data || []);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // POST /api/shifts
-router.post('/', auth, hasPermission('shifts', 'manage'), async (req, res) => {
+router.post('/', auth, hasPermission('shifts', 'manage'), withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = req.user.organization_id;
     const { name, start_time, end_time, color, description, days_of_week } = req.body;
     if (!name || !start_time || !end_time) return res.status(400).json({ error: 'name, start_time and end_time required' });
-    // BUG_075: Duplicate shift check — same name (case-insensitive) in same org
-    const { data: existing } = await db.from('shifts')
-      .select('id').eq('organization_id', oId).ilike('name', name.trim()).maybeSingle();
-    if (existing) return res.status(400).json({ error: 'A shift with this name already exists. Please use a different name.' });
+    const branchId = req.branchContext?.selectedBranchId || null;
+    // BUG_075: Duplicate shift check scoped to branch (same name within same branch or org-wide scope)
+    let dupQ = db.from('shifts').select('id').eq('organization_id', oId).ilike('name', name.trim());
+    if (branchId) dupQ = dupQ.eq('branch_id', branchId);
+    else dupQ = dupQ.is('branch_id', null);
+    const { data: existing } = await dupQ.maybeSingle();
+    if (existing) return res.status(400).json({ error: 'A shift with this name already exists in this branch. Please use a different name.' });
     const { data, error } = await db.from('shifts')
-      .insert({ name: name.trim(), start_time, end_time, color: color || '#3525cd', description: description || '', days_of_week: days_of_week || null, organization_id: oId })
+      .insert({ name: name.trim(), start_time, end_time, color: color || '#3525cd', description: description || '', days_of_week: days_of_week || null, organization_id: oId, branch_id: branchId })
       .select().single();
     if (error) throw error;
     res.json(data);
@@ -40,11 +52,18 @@ router.post('/', auth, hasPermission('shifts', 'manage'), async (req, res) => {
 });
 
 // PUT /api/shifts/:id
-router.put('/:id', auth, hasPermission('shifts', 'manage'), async (req, res) => {
+router.put('/:id', auth, hasPermission('shifts', 'manage'), withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = req.user.organization_id;
     const { name, start_time, end_time, color, description, days_of_week } = req.body;
+    // Verify shift belongs to the accessible branch before editing
+    const { data: existing } = await db.from('shifts').select('branch_id').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
+    if (!existing) return res.status(404).json({ error: 'Shift not found' });
+    const branchState = getFilterState(req.branchContext);
+    if (branchState.type === 'specific' && existing.branch_id != null && Number(existing.branch_id) !== branchState.branchId) {
+      return res.status(403).json({ error: 'You do not have access to modify this branch\'s shift.' });
+    }
     const { data, error } = await db.from('shifts')
       .update({ name, start_time, end_time, color, description: description || '', days_of_week: days_of_week || null })
       .eq('id', req.params.id).eq('organization_id', oId).select().single();
@@ -54,10 +73,17 @@ router.put('/:id', auth, hasPermission('shifts', 'manage'), async (req, res) => 
 });
 
 // DELETE /api/shifts/:id
-router.delete('/:id', auth, hasPermission('shifts', 'manage'), async (req, res) => {
+router.delete('/:id', auth, hasPermission('shifts', 'manage'), withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = req.user.organization_id;
+    // Verify shift belongs to the accessible branch before deleting
+    const { data: existing } = await db.from('shifts').select('branch_id').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
+    if (!existing) return res.status(404).json({ error: 'Shift not found' });
+    const branchState = getFilterState(req.branchContext);
+    if (branchState.type === 'specific' && existing.branch_id != null && Number(existing.branch_id) !== branchState.branchId) {
+      return res.status(403).json({ error: 'You do not have access to delete this branch\'s shift.' });
+    }
     const { error } = await db.from('shifts').delete().eq('id', req.params.id).eq('organization_id', oId);
     if (error) throw error;
     res.json({ ok: true });

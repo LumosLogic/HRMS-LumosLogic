@@ -27,6 +27,8 @@ const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { orgId } = require('../../utils/helpers');
 const { clearUserCache, clearOrgCache } = require('../../services/permissionService');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { getFilterState } = require('../../utils/branchFilter');
 
 // ─── Validation helpers ───────────────────────────────────────────────────────
 
@@ -62,7 +64,9 @@ function slugify(name) {
 }
 
 // ─── 1. GET /api/roles — list all roles for org ───────────────────────────────
-router.get('/', auth, hasPermission('roles', 'view'), async (req, res) => {
+// member_count is branch-aware when a specific branch is selected.
+// Role definitions and permissions are always organization-wide.
+router.get('/', auth, hasPermission('roles', 'view'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
 
@@ -78,7 +82,7 @@ router.get('/', auth, hasPermission('roles', 'view'), async (req, res) => {
 
     const roleIds = roles.map(r => r.id);
 
-    // Permission counts per role (single batched query, no N+1)
+    // Permission counts per role (single batched query, no N+1) — always org-wide
     const pcRes = await pool.query(
       `SELECT role_id, COUNT(*) AS count
        FROM role_permissions
@@ -89,14 +93,42 @@ router.get('/', auth, hasPermission('roles', 'view'), async (req, res) => {
     const permCounts = {};
     pcRes.rows.forEach(r => { permCounts[r.role_id] = parseInt(r.count, 10); });
 
-    // Member counts per role (single batched query, no N+1)
-    const mcRes = await pool.query(
-      `SELECT role_id, COUNT(*) AS count
-       FROM user_roles
-       WHERE role_id = ANY($1::bigint[]) AND org_id = $2
-       GROUP BY role_id`,
-      [roleIds, oId]
-    );
+    // Member counts per role — branch-aware when a specific branch is selected
+    const branchState = getFilterState(req.branchContext);
+    let mcRes;
+    if (branchState.type === 'specific') {
+      // Count only members whose users.branch_id matches the selected branch
+      mcRes = await pool.query(
+        `SELECT ur.role_id, COUNT(*) AS count
+         FROM user_roles ur
+         JOIN users u ON u.id = ur.user_id AND u.organization_id = $2
+         WHERE ur.role_id = ANY($1::bigint[])
+           AND ur.org_id = $2
+           AND u.branch_id = $3
+         GROUP BY ur.role_id`,
+        [roleIds, oId, branchState.branchId]
+      );
+    } else if (branchState.type === 'multi') {
+      mcRes = await pool.query(
+        `SELECT ur.role_id, COUNT(*) AS count
+         FROM user_roles ur
+         JOIN users u ON u.id = ur.user_id AND u.organization_id = $2
+         WHERE ur.role_id = ANY($1::bigint[])
+           AND ur.org_id = $2
+           AND u.branch_id = ANY($3::bigint[])
+         GROUP BY ur.role_id`,
+        [roleIds, oId, branchState.branchIds]
+      );
+    } else {
+      // type=all or type=none (no branch selected / all branches) — org-wide count
+      mcRes = await pool.query(
+        `SELECT role_id, COUNT(*) AS count
+         FROM user_roles
+         WHERE role_id = ANY($1::bigint[]) AND org_id = $2
+         GROUP BY role_id`,
+        [roleIds, oId]
+      );
+    }
     const memberCounts = {};
     mcRes.rows.forEach(r => { memberCounts[r.role_id] = parseInt(r.count, 10); });
 

@@ -483,7 +483,8 @@ async function fetchAllData(oId, uId, month, year) {
         return await pool.query(
           `SELECT id, name, email, department, position, employee_id,
                   employee_status AS status,
-                  probation_start_date::text, probation_end_date::text
+                  probation_start_date::text, probation_end_date::text,
+                  branch_id
              FROM users
             WHERE id = $1 AND organization_id = $2`,
           [uId, oId]
@@ -491,7 +492,8 @@ async function fetchAllData(oId, uId, month, year) {
       } catch {
         return await pool.query(
           `SELECT id, name, email, department, position, employee_id,
-                  employee_status AS status
+                  employee_status AS status,
+                  branch_id
              FROM users
             WHERE id = $1 AND organization_id = $2`,
           [uId, oId]
@@ -660,6 +662,28 @@ async function fetchAllData(oId, uId, month, year) {
     ).catch(() => ({ rows: [] })),
   ]);
 
+  // BUG-115: Branch work schedule override.
+  // If the employee belongs to a branch that has a branch_work_schedule row,
+  // use that instead of the org-wide schedule. Falls back gracefully if the
+  // branch_work_schedule table doesn't exist yet (pre-migration).
+  let effectiveScheduleRow = scheduleRes.rows[0] ?? null;
+  const empBranchId = empRes.rows[0]?.branch_id ?? null;
+  if (empBranchId) {
+    try {
+      const branchSchedRes = await pool.query(
+        `SELECT start_time AS check_in, end_time AS check_out,
+                work_days, full_day_hours, half_day_hours, max_early_leave_count
+           FROM branch_work_schedule
+          WHERE organization_id = $1 AND branch_id = $2
+          LIMIT 1`,
+        [oId, empBranchId]
+      );
+      if (branchSchedRes.rows.length > 0) {
+        effectiveScheduleRow = branchSchedRes.rows[0];
+      }
+    } catch { /* table not yet migrated — use org-wide schedule */ }
+  }
+
   return {
     employee:         empRes.rows[0]      ?? null,
     settings:         settingsRes.rows[0] ?? null,
@@ -667,7 +691,7 @@ async function fetchAllData(oId, uId, month, year) {
     attendance:       attRes.rows         ?? [],
     leaves:           leaveRes.rows       ?? [],
     holidays:         holidayRes.rows     ?? [],
-    schedule:         scheduleRes.rows[0] ?? null,
+    schedule:         effectiveScheduleRow,
     regularized:      regRes.rows         ?? [],
     shiftAssignments: shiftRes.rows       ?? [],
     pfConfig:         pfConfigRes.rows[0] ?? null,

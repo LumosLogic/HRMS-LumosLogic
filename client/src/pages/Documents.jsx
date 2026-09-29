@@ -945,6 +945,7 @@ const STANDARD_DOC_TYPES = [
 function RequirementModal({ req, onClose, onSaved, existingRequirements = [] }) {
   const toast = useToast();
   const qc = useQueryClient();
+  const { selectedBranchId } = useBranch();
   const [saving, setSaving] = useState(false);
 
   // BUG_081: track whether user picked a standard type or is entering custom
@@ -1013,7 +1014,13 @@ function RequirementModal({ req, onClose, onSaved, existingRequirements = [] }) 
         await apiPatch(`/doc-requirements/${req.id}`, form);
         toast('Requirement updated!', 'success');
       } else {
-        await apiPost('/doc-requirements', form);
+        // Bug-118: when a specific branch is selected during creation,
+        // auto-assign the requirement to that branch via assigned_branch_ids.
+        const payload = { ...form };
+        if (selectedBranchId) {
+          payload.assigned_branch_ids = [selectedBranchId];
+        }
+        await apiPost('/doc-requirements', payload);
         toast('Requirement created!', 'success');
       }
       qc.invalidateQueries({ queryKey: ['doc-requirements'] });
@@ -1375,9 +1382,12 @@ function EmployeeRequirementsTab() {
     queryFn:  () => apiGet('/doc-requirements'),
   });
 
+  // Bug-119: use the scoped org-wide endpoint instead of /employees (which applies
+  // branch filtering and can make the picker empty). Branch scope for the requirement
+  // is enforced through assigned_branch_ids[], not the employee list itself.
   const { data: allEmployees = [] } = useQuery({
-    queryKey: ['employees-list-docs', selectedBranchId],
-    queryFn:  async () => { const all = await apiGet('/employees'); return all.filter(e => e.role === 'employee' && e.status === 'active'); },
+    queryKey: ['doc-requirement-employees'],
+    queryFn:  () => apiGet('/doc-requirements/employees'),
   });
 
   const delMut = useMutation({

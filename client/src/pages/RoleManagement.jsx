@@ -6,6 +6,7 @@ import {
   Settings, AlertCircle, CheckCircle2, X, Pencil,
 } from 'lucide-react';
 import { apiGet, apiPost, apiDelete, apiPut } from '@/lib/api';
+import { useBranch } from '@/context/BranchContext';
 import { cn } from '@/lib/utils';
 
 // ─── Create Role Modal ────────────────────────────────────────────────────────
@@ -409,12 +410,14 @@ function RoleCard({ role, onDelete, onClick, onEdit }) {
 export default function RoleManagement() {
   const navigate     = useNavigate();
   const queryClient  = useQueryClient();
+  const { selectedBranchId } = useBranch();
   const [showCreate, setShowCreate] = useState(false);
   const [editRole, setEditRole]     = useState(null); // role object being edited
   const [toast, setToast]           = useState(null);
 
+  // Include selectedBranchId in queryKey so member counts refresh when branch changes
   const { data: roles = [], isLoading } = useQuery({
-    queryKey: ['roles'],
+    queryKey: ['roles', selectedBranchId],
     queryFn: () => apiGet('/roles'),
   });
 

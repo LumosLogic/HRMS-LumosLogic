@@ -1,5 +1,6 @@
 const { pool } = require('../../config/db-pg-adapter');
 const { getOrgPolicy } = require('../../utils/orgPolicy');
+const { getEffectiveWorkSchedule } = require('../../utils/helpers');
 
 /**
  * Compute and upsert one day's attendance using first-in / last-out logic.
@@ -27,6 +28,28 @@ async function applyFILODay(userId, date, orgId, dayLogs, existingAtt, halfDayHo
   // Overrides the org-level values passed as arguments when a shift has its own config.
   const lookupDate = typeof date === 'string' ? date.slice(0, 10)
                    : new Date(date).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+  // Layer 1: branch-specific work schedule override (BUG-115).
+  // Applied before shift overrides so the priority chain is:
+  //   org default → branch override → shift override (highest)
+  try {
+    const userRes = await pool.query(
+      `SELECT branch_id FROM users WHERE id = $1 AND organization_id = $2 LIMIT 1`,
+      [userId, orgId]
+    );
+    const branchId = userRes.rows[0]?.branch_id ?? null;
+    if (branchId) {
+      const branchSched = await getEffectiveWorkSchedule(orgId, branchId);
+      if (branchSched && branchSched !== null) {
+        // Unconditionally override org defaults with branch values.
+        // Shift-specific values (Layer 2 below) will then override these.
+        if (branchSched.end_time)               shiftEndTime  = branchSched.end_time;
+        if (branchSched.half_day_hours != null)  halfDayHours  = parseFloat(branchSched.half_day_hours);
+        if (branchSched.full_day_hours != null)  fullDayHours  = parseFloat(branchSched.full_day_hours);
+      }
+    }
+  } catch { /* branch lookup failed — use org defaults */ }
+
+  // Layer 2: shift-specific overrides (existing logic — takes precedence over branch).
   try {
     const shiftRes = await pool.query(
       `SELECT s.end_time, s.half_day_hours, s.full_day_hours
@@ -42,7 +65,7 @@ async function applyFILODay(userId, date, orgId, dayLogs, existingAtt, halfDayHo
       if (sr.half_day_hours != null)  halfDayHours  = parseFloat(sr.half_day_hours);
       if (sr.full_day_hours != null)  fullDayHours  = parseFloat(sr.full_day_hours);
     }
-  } catch { /* shifts table or columns absent — use passed org defaults */ }
+  } catch { /* shifts table or columns absent — use branch/org defaults */ }
 
   const sorted = [...dayLogs].sort((a, b) =>
     new Date(a.punch_time) - new Date(b.punch_time)

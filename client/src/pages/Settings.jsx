@@ -11,7 +11,8 @@ import {
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
-import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { apiGet, apiPost, apiPut, apiDelete, apiPatch } from '@/lib/api';
+import { useFeature } from '@/context/FeatureFlagContext';
 import { Avatar } from '@/components/ui/Avatar';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { RoleBadge } from '@/components/ui/Badge';
@@ -1255,13 +1256,225 @@ function OrgSettingsPanel() {
   );
 }
 
+// ── Branch Work Schedule Panel (BUG-115) ─────────────────────────────────────
+// Visible only to Root Admin when the Branches feature is ON.
+// Allows creating / editing / deleting branch-specific work schedule overrides.
+function BranchSchedulePanel({ schedule }) {
+  const toast = useToast();
+  const qc    = useQueryClient();
+
+  const { data: branches = [] } = useQuery({ queryKey: ['branches'], queryFn: () => apiGet('/branches') });
+  const { data: overrides = [], isLoading } = useQuery({
+    queryKey: ['branch-schedule-overrides'],
+    queryFn:  () => apiGet('/settings/branch-overrides').catch(() => []),
+    staleTime: 30000,
+  });
+  const activeBranches = branches.filter(b => b.is_active !== false);
+
+  const [editing, setEditing] = useState(null); // branchId being edited
+  const [editForm, setEditForm] = useState({});
+  const [saving, setSaving]    = useState(false);
+  const [confirmDel, setConfirmDel] = useState(null);
+
+  const overrideMap = Object.fromEntries((overrides || []).map(o => [String(o.branch_id), o]));
+
+  function startEdit(branch) {
+    const existing = overrideMap[String(branch.id)];
+    const base = existing || schedule || {};
+    setEditForm({
+      start_time:                   base.start_time                   || '09:00',
+      end_time:                     base.end_time                     || '18:00',
+      late_threshold:               base.late_threshold               || '09:30',
+      early_exit_threshold:         base.early_exit_threshold         || '17:00',
+      half_day_hours:               base.half_day_hours               ?? 4.5,
+      full_day_hours:               base.full_day_hours               ?? 8,
+      work_days:                    parseShiftWorkDays(base.work_days || base.days_of_week || '1,2,3,4,5'),
+      max_early_leave_count:        base.max_early_leave_count        ?? 3,
+      late_entry_threshold_enabled: base.late_entry_threshold_enabled ?? true,
+      early_exit_threshold_enabled: base.early_exit_threshold_enabled ?? true,
+    });
+    setEditing(branch.id);
+  }
+
+  async function handleSave(branchId) {
+    setSaving(true);
+    try {
+      const payload = {
+        ...editForm,
+        work_days: editForm.work_days.join(','),
+      };
+      await apiPut(`/settings/branch/${branchId}`, payload);
+      toast('Branch schedule saved!', 'success');
+      qc.invalidateQueries({ queryKey: ['branch-schedule-overrides'] });
+      setEditing(null);
+    } catch (e) { toast(e.message, 'error'); }
+    finally { setSaving(false); }
+  }
+
+  async function handleDelete(branchId) {
+    try {
+      await apiDelete(`/settings/branch/${branchId}`);
+      toast('Branch override removed. Branch now uses organisation schedule.', 'success');
+      qc.invalidateQueries({ queryKey: ['branch-schedule-overrides'] });
+      setConfirmDel(null);
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  const set = (k, v) => setEditForm(f => ({ ...f, [k]: v }));
+  function toggleDay(dow) {
+    const days = editForm.work_days || [];
+    set('work_days', days.includes(dow) ? days.filter(d => d !== dow) : [...days, dow].sort((a, b) => a - b));
+  }
+
+  return (
+    <PanelWrap title="Branch Work Schedules" icon={<GitBranch size={15} className="text-[#3525cd]" />}
+      desc="Override the organisation-wide work schedule for specific branches. Employees without a branch, or in branches without an override, use the organisation schedule.">
+      {isLoading ? (
+        <div className="loading"><div className="spinner" /> Loading…</div>
+      ) : activeBranches.length === 0 ? (
+        <div className="empty-state">
+          <GitBranch size={40} className="mx-auto mb-2 text-[#c7c4d8]" />
+          <p>No active branches found. Enable branches in Organisation Settings first.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {activeBranches.map(branch => {
+            const override = overrideMap[String(branch.id)];
+            const isEdit   = editing === branch.id;
+            return (
+              <div key={branch.id} className="border border-[#e7eefe] rounded-xl overflow-hidden">
+                {/* Header row */}
+                <div className="flex items-center justify-between px-4 py-3 bg-[#f9f9ff]">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-[#f0f3ff] flex items-center justify-center flex-shrink-0">
+                      <GitBranch size={14} className="text-[#3525cd]" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-sm text-[#151c27]">{branch.name}</p>
+                      {override
+                        ? <span className="text-[0.65rem] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full">Custom Override</span>
+                        : <span className="text-[0.65rem] text-[#9ca3af]">Uses organisation default</span>
+                      }
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {!isEdit && (
+                      <button onClick={() => startEdit(branch)}
+                        className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border border-[#c7c4d8] text-[#464555] hover:border-[#3525cd] hover:text-[#3525cd] transition-colors">
+                        <SlidersHorizontal size={12} /> {override ? 'Edit' : 'Set Override'}
+                      </button>
+                    )}
+                    {override && !isEdit && (
+                      <button onClick={() => setConfirmDel(branch)}
+                        className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 transition-colors">
+                        <Trash2 size={12} /> Remove
+                      </button>
+                    )}
+                    {isEdit && (
+                      <button onClick={() => setEditing(null)} className="text-xs text-[#777587] hover:text-[#151c27] px-2 py-1.5">Cancel</button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Show current values if override exists and not editing */}
+                {override && !isEdit && (
+                  <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs border-t border-[#f0f3ff]">
+                    {[
+                      ['Start', override.start_time],
+                      ['End', override.end_time],
+                      ['Late after', override.late_threshold],
+                      ['Half day <', `${override.half_day_hours}h`],
+                    ].map(([label, val]) => (
+                      <div key={label}>
+                        <p className="text-[0.62rem] font-black text-[#9ca3af] uppercase tracking-widest">{label}</p>
+                        <p className="font-bold text-[#151c27]">{val}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Edit form */}
+                {isEdit && (
+                  <div className="px-4 py-4 border-t border-[#f0f3ff] space-y-4">
+                    <div className="grid grid-cols-2 gap-3">
+                      {[
+                        ['start_time', 'Start Time'], ['end_time', 'End Time'],
+                        ['late_threshold', 'Late After'], ['early_exit_threshold', 'Early Exit Before'],
+                      ].map(([key, label]) => (
+                        <div key={key}>
+                          <label className="form-label text-[0.7rem]">{label}</label>
+                          <input type="time" className="form-control text-sm" value={editForm[key] || ''}
+                            onChange={e => set(key, e.target.value)} />
+                        </div>
+                      ))}
+                      <div>
+                        <label className="form-label text-[0.7rem]">Half Day Hours</label>
+                        <input type="number" step="0.5" min="0" className="form-control text-sm"
+                          value={editForm.half_day_hours ?? 4.5} onChange={e => set('half_day_hours', parseFloat(e.target.value))} />
+                      </div>
+                      <div>
+                        <label className="form-label text-[0.7rem]">Full Day Hours</label>
+                        <input type="number" step="0.5" min="0" className="form-control text-sm"
+                          value={editForm.full_day_hours ?? 8} onChange={e => set('full_day_hours', parseFloat(e.target.value))} />
+                      </div>
+                      <div>
+                        <label className="form-label text-[0.7rem]">Max Early Leave / Month</label>
+                        <input type="number" min="0" className="form-control text-sm"
+                          value={editForm.max_early_leave_count ?? 3} onChange={e => set('max_early_leave_count', parseInt(e.target.value))} />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="form-label text-[0.7rem]">Working Days</label>
+                      <div className="flex gap-1.5 flex-wrap">
+                        {DAY_LABELS.map((d, i) => (
+                          <button key={i} type="button"
+                            onClick={() => toggleDay(i)}
+                            className={`px-2.5 py-1 rounded-lg text-xs font-bold border transition-colors ${
+                              (editForm.work_days || []).includes(i)
+                                ? 'bg-[#3525cd] text-white border-[#3525cd]'
+                                : 'bg-white text-[#464555] border-[#c7c4d8] hover:border-[#3525cd]'
+                            }`}
+                          >{d}</button>
+                        ))}
+                      </div>
+                    </div>
+                    <div className="flex gap-2 pt-1">
+                      <button onClick={() => handleSave(branch.id)} disabled={saving}
+                        className="btn btn-primary btn-sm">
+                        {saving ? <><span className="spinner w-3.5 h-3.5" /> Saving…</> : <><Save size={13} /> Save Override</>}
+                      </button>
+                      <button onClick={() => setEditing(null)} className="btn btn-outline btn-sm">Cancel</button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {confirmDel && (
+        <ConfirmModal
+          open
+          title={`Remove Override for ${confirmDel.name}`}
+          message={`${confirmDel.name} will revert to the organisation-wide work schedule.`}
+          confirmLabel="Remove Override"
+          danger
+          onConfirm={() => handleDelete(confirmDel.id)}
+          onCancel={() => setConfirmDel(null)}
+        />
+      )}
+    </PanelWrap>
+  );
+}
+
 // ─── Navigation config ────────────────────────────────────────────────────────
 const NAV_GROUPS = [
   {
     id: 'attendance', label: 'Attendance & Work Rules', icon: Clock, color: '#3525cd',
     items: [
-      { id: 'work_schedule',    label: 'Work Schedule',    icon: Calendar,          roles: ['admin','root_admin'] },
-      { id: 'attendance_rules', label: 'Attendance Rules', icon: SlidersHorizontal, roles: ['admin','root_admin'] },
+      { id: 'work_schedule',       label: 'Work Schedule',         icon: Calendar,          roles: ['admin','root_admin'] },
+      { id: 'branch_work_schedule', label: 'Branch Schedules',      icon: GitBranch,         roles: ['root_admin'] },
+      { id: 'attendance_rules',    label: 'Attendance Rules',       icon: SlidersHorizontal, roles: ['admin','root_admin'] },
       { id: 'status_legend',    label: 'Status Legend',    icon: Palette,           roles: ['admin','root_admin'] },
       { id: 'email_automation', label: 'Email Automation', icon: MailCheck,         roles: ['root_admin'] },
     ],
@@ -1340,8 +1553,9 @@ export default function Settings() {
 
   function renderPanel() {
     switch (active) {
-      case 'work_schedule':    return <WorkSchedulePanel    schedule={schedule} isAdmin={isAdmin} onSaved={refetch} />;
-      case 'attendance_rules': return <AttendanceRulesPanel schedule={schedule} isAdmin={isAdmin} onSaved={refetch} />;
+      case 'work_schedule':        return <WorkSchedulePanel    schedule={schedule} isAdmin={isAdmin} onSaved={refetch} />;
+      case 'branch_work_schedule': return <BranchSchedulePanel   schedule={schedule} />;
+      case 'attendance_rules':     return <AttendanceRulesPanel  schedule={schedule} isAdmin={isAdmin} onSaved={refetch} />;
       case 'status_legend':    return <StatusLegendPanel />;
       case 'email_automation': return <EmailAutomationPanel schedule={schedule} />;
       case 'leave_workflow':   return <LeaveWorkflowPanel />;

@@ -4,7 +4,7 @@ const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, getFilterState } = require('../../utils/branchFilter');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
@@ -16,13 +16,13 @@ router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { userId, status } = req.query;
+    const branchState = getFilterState(req.branchContext);
     let q = db.from('assets')
       .select('*, assigned_user:users!assets_assigned_to_fkey(id, name, avatar_color, department)')
       .eq('organization_id', oId)
       .order('created_at', { ascending: false });
 
     if (userId) {
-      // Specific-employee view: admin must have branch access to that employee
       if (isAdmin(req.user.role)) {
         const empIds = await resolveEmployeeIds(req.branchContext, oId);
         if (empIds !== null && !empIds.includes(parseInt(userId, 10)))
@@ -30,9 +30,18 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       }
       q = q.eq('assigned_to', userId);
     } else if (isAdmin(req.user.role)) {
-      // Org-wide admin view: branch-filter assigned assets; unassigned always visible
+      // Branch-filter assigned assets via employee IDs AND filter unassigned assets by branch_id.
       const empIds = await resolveEmployeeIds(req.branchContext, oId);
-      if (empIds !== null && empIds.length === 0) {
+      if (branchState.type === 'specific') {
+        const bid = branchState.branchId;
+        if (empIds !== null && empIds.length === 0) {
+          // No employees in branch — show only branch-owned unassigned assets
+          q = q.or(`branch_id.eq.${bid},branch_id.is.null`).is('assigned_to', null);
+        } else if (empIds !== null) {
+          // Show assets assigned to branch employees OR unassigned assets owned by this branch OR unowned (org-wide)
+          q = q.or(`assigned_to.in.(${empIds.join(',')}),branch_id.eq.${bid},and(assigned_to.is.null,branch_id.is.null)`);
+        }
+      } else if (empIds !== null && empIds.length === 0) {
         q = q.is('assigned_to', null);
       } else if (empIds !== null) {
         q = q.or(`assigned_to.is.null,assigned_to.in.(${empIds.join(',')})`);
@@ -71,12 +80,16 @@ function sanitiseAssetBody(body) {
 }
 
 // POST /api/assets
-router.post('/', auth, hasPermission('assets', 'create'), async (req, res) => {
+router.post('/', auth, hasPermission('assets', 'create'), withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = req.user.organization_id;
     const body = sanitiseAssetBody({ ...req.body, organization_id: oId });
     delete body.id; delete body.created_at;
+    // Store branch_id from the selected branch context so assets are branch-scoped
+    if (req.branchContext?.selectedBranchId) {
+      body.branch_id = req.branchContext.selectedBranchId;
+    }
 
     // ── Status validation ─────────────────────────────────────────────────────
     if (body.status && !VALID_STATUSES.includes(body.status)) {

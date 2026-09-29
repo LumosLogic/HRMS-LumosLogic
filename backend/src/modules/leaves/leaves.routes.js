@@ -3,7 +3,7 @@ const router  = express.Router();
 const { db, pool } = require('../../config/db');
 const { auth, isAdminRole } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
-const { flat, flatOne, orgId, getSettings, isWorkingDay, getRecipients, localDateStr, getOrgContext, toMinutes } = require('../../utils/helpers');
+const { flat, flatOne, orgId, getSettings, getSettingsForUser, isWorkingDay, getRecipients, localDateStr, getOrgContext, toMinutes } = require('../../utils/helpers');
 const { sendMail, leaveAppliedHtml, leaveStatusHtml, leaveDeptApprovalHtml, leaveForwardedToRootHtml } = require('../../services/emailService');
 const engine = require('../../services/leaveWorkflowEngine');
 const { withBranchContext } = require('../../middleware/branchContext');
@@ -179,12 +179,18 @@ router.put('/workflow-config', auth, hasPermission('settings', 'manage'), async 
 // ─── ROUTE: GET /my-approvals ─────────────────────────────────────────────────
 // Returns all new-workflow leaves currently pending THIS user's action.
 // MUST be before GET /:id.
-router.get('/my-approvals', auth, async (req, res) => {
+router.get('/my-approvals', auth, withBranchContext, async (req, res) => {
   try {
-    const leaves = await engine.getMyPendingLeaves(req.user.id, req.user.role, orgId(req));
+    const oId = orgId(req);
+    let leaves = await engine.getMyPendingLeaves(req.user.id, req.user.role, oId);
+    // Branch isolation: filter to only leaves from accessible-branch employees
+    const empIds = await resolveEmployeeIds(req.branchContext, oId);
+    if (empIds !== null) {
+      const empSet = new Set(empIds);
+      leaves = leaves.filter(l => empSet.has(l.user_id));
+    }
     res.json(leaves);
   } catch (err) {
-    // Migration not yet applied — return empty list gracefully
     if (err.message && (err.message.includes('does not exist') || err.message.includes('relation'))) {
       return res.json([]);
     }
@@ -413,17 +419,35 @@ router.get('/balance', auth, withBranchContext, async (req, res) => {
     // Date.UTC month is 0-indexed; day 0 = last day of previous month. UTC avoids TZ shift.
     const fyEnd = new Date(Date.UTC(fyEndYear, fyEndMonth, 0)).toISOString().split('T')[0];
 
+    // Use branch-specific leave policies for this employee (if their branch has them),
+    // falling back to org-wide policies.
+    const empBranchRow = await db.from('users').select('branch_id').eq('id', targetId).eq('organization_id', oId).maybeSingle();
+    const empBranchId = empBranchRow?.data?.branch_id ?? null;
+    let policiesQuery;
+    if (empBranchId) {
+      const { data: branchPols } = await db.from('leave_policies')
+        .select('leave_type, label, annual_quota').eq('organization_id', oId)
+        .eq('branch_id', empBranchId).eq('active', true).gt('annual_quota', 0);
+      if (branchPols && branchPols.length > 0) {
+        policiesQuery = Promise.resolve({ data: branchPols });
+      } else {
+        policiesQuery = db.from('leave_policies').select('leave_type, label, annual_quota')
+          .eq('organization_id', oId).is('branch_id', null).eq('active', true).gt('annual_quota', 0);
+      }
+    } else {
+      policiesQuery = db.from('leave_policies').select('leave_type, label, annual_quota')
+        .eq('organization_id', oId).is('branch_id', null).eq('active', true).gt('annual_quota', 0);
+    }
+
     const [policiesRes, leavesRes, settings, adjRes] = await Promise.all([
-      db.from('leave_policies')
-        .select('leave_type, label, annual_quota')
-        .eq('organization_id', oId).eq('active', true).gt('annual_quota', 0),
+      policiesQuery,
       db.from('leaves')
         .select('leave_type, leave_time, start_date, end_date, status')
         .eq('user_id', targetId).eq('organization_id', oId)
         .in('status', ['approved', 'pending', 'pending_dept', 'pending_root', 'pending_approval'])
         .gte('start_date', fyStart).lte('end_date', fyEnd)
         .neq('leave_type', 'wfh'),
-      getSettings(oId),
+      getSettingsForUser(oId, targetId),
       db.from('leave_balance_adjustments')
         .select('leave_type, delta')
         .eq('user_id', targetId).eq('org_id', oId).eq('year', year),
@@ -733,13 +757,12 @@ router.get('/pending-root', auth, hasPermission('leaves', 'approve'), withBranch
     } catch (_) { /* workflow tables not yet migrated — skip */ }
 
     // Branch isolation: filter leaves to only those from accessible-branch employees.
-    if (req.user.role !== 'root_admin') {
-      const empIds = await resolveEmployeeIds(req.branchContext, oId);
-      if (empIds !== null) {
-        const empSet = new Set(empIds);
-        const combined = [...legacyLeaves, ...newAdminLeaves];
-        return res.json(combined.filter(l => empSet.has(l.user_id)));
-      }
+    // Applies to all roles (root_admin included) when a specific branch is selected.
+    const empIds = await resolveEmployeeIds(req.branchContext, oId);
+    if (empIds !== null) {
+      const empSet = new Set(empIds);
+      const combined = [...legacyLeaves, ...newAdminLeaves];
+      return res.json(combined.filter(l => empSet.has(l.user_id)));
     }
     res.json([...legacyLeaves, ...newAdminLeaves]);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -876,7 +899,7 @@ router.post('/', auth, async (req, res) => {
     // Admins may legitimately create leaves on holidays (e.g., compensatory leave).
     const isSubmittedByAdmin = isAdminRole(req.user.role) && user_id && parseInt(user_id) !== req.user.id;
     if (leave_time !== 'wfh' && leave_type !== 'wfh' && !isSubmittedByAdmin) {
-      const settings     = await getSettings(orgId(req));
+      const settings     = await getSettingsForUser(orgId(req), req.user.id);
       const holidayDates = await fetchHolidaySet(orgId(req), start_date, end_date);
       const checkDates   = buildWorkingDates(start_date, end_date, settings, holidayDates);
       if (checkDates.length === 0) {
@@ -900,7 +923,7 @@ router.post('/', auth, async (req, res) => {
     if (!isOnBehalf && leave_time !== 'wfh' && leave_type !== 'wfh') {
       try {
         const oId        = orgId(req);
-        const settings   = await getSettings(oId);
+        const settings   = await getSettingsForUser(oId, targetUserId);
         const holidaySet = await fetchHolidaySet(oId, start_date, end_date);
         const newDays    = leave_time === 'half' ? 0.5 : buildWorkingDates(start_date, end_date, settings, holidaySet).length;
 
@@ -953,7 +976,7 @@ router.post('/', auth, async (req, res) => {
 
     // ── Admin creates on behalf → auto-approve ────────────────────────────────
     if (isOnBehalf) {
-      const settings     = await getSettings(orgId(req));
+      const settings     = await getSettingsForUser(orgId(req), targetUserId);
       const attStatus    = leave_time === 'half' ? 'half_day' : (leave_time === 'wfh' || leave_type === 'wfh') ? 'wfh' : 'on_leave';
       const holidayDates = await fetchHolidaySet(orgId(req), start_date, end_date);
       const workDates    = buildWorkingDates(start_date, end_date, settings, holidayDates);
@@ -1196,7 +1219,7 @@ router.put('/:id/approve', auth, withBranchContext, async (req, res) => {
 
       if (!nextInfo) {
         // ── Final level approved — create attendance + mark approved ────────
-        const settings     = await getSettings(oId);
+        const settings     = await getSettingsForUser(oId, leave.user_id);
         const holidayDates = await fetchHolidaySet(oId, leave.start_date, leave.end_date);
         const workDates    = buildWorkingDates(leave.start_date, leave.end_date, settings, holidayDates);
         const attStatus    = leave.leave_time === 'half' ? 'half_day'
@@ -1342,7 +1365,7 @@ router.put('/:id/approve', auth, withBranchContext, async (req, res) => {
       return res.status(403).json({ error: 'Not authorized to approve this leave.' });
     }
 
-    const settings     = await getSettings(oId);
+    const settings     = await getSettingsForUser(oId, leave.user_id);
     const holidayDates = await fetchHolidaySet(oId, leave.start_date, leave.end_date);
     const workDates    = buildWorkingDates(leave.start_date, leave.end_date, settings, holidayDates);
     const attStatus    = leave.leave_time === 'half' ? 'half_day'
@@ -1457,7 +1480,7 @@ router.put('/:id/reject', auth, withBranchContext, async (req, res) => {
     const rejectedAt = new Date().toISOString();
     let workDates = [];
     if (leave.status === 'approved') {
-      const settings     = await getSettings(oId);
+      const settings     = await getSettingsForUser(oId, leave.user_id);
       const holidayDates = await fetchHolidaySet(oId, leave.start_date, leave.end_date);
       workDates = buildWorkingDates(leave.start_date, leave.end_date, settings, holidayDates);
     }
@@ -1538,7 +1561,7 @@ router.put('/:id/revert', auth, withBranchContext, async (req, res) => {
       return res.status(403).json({ error: "You do not have access to this employee's branch." });
   }
 
-  const settings     = await getSettings(orgId(req));
+  const settings     = await getSettingsForUser(orgId(req), leave.user_id);
   const holidayDates = await fetchHolidaySet(orgId(req), leave.start_date, leave.end_date);
   const workDates    = buildWorkingDates(leave.start_date, leave.end_date, settings, holidayDates);
 
@@ -1607,7 +1630,7 @@ router.get('/override-preview', auth, async (req, res) => {
       return res.status(404).json({ error: 'No approved leave found for this employee on this date.' });
 
     // Calculate days using the same logic as admin-override-attendance
-    const settings = await getSettings(oId);
+    const settings = await getSettingsForUser(oId, uid);
     let totalDays = 0;
     for (const leave of approvedLeaves) {
       if (leave.leave_time === 'half') {
@@ -1670,7 +1693,7 @@ router.post('/admin-override-attendance', auth, withBranchContext, async (req, r
       return res.status(400).json({ error: 'No approved leave found for this employee on this date.' });
 
     // Compute days to be restored per leave (for the response — balance restores automatically)
-    const settings     = await getSettings(oId);
+    const settings     = await getSettingsForUser(oId, uid);
     let totalDaysRestored = 0;
     for (const leave of approvedLeaves) {
       if (leave.leave_time === 'half') {
@@ -1769,7 +1792,7 @@ router.delete('/:id', auth, withBranchContext, async (req, res) => {
 
   let workDates = [];
   if (leave.status === 'approved') {
-    const settings     = await getSettings(orgId(req));
+    const settings     = await getSettingsForUser(orgId(req), leave.user_id);
     const holidayDates = await fetchHolidaySet(orgId(req), leave.start_date, leave.end_date);
     workDates = buildWorkingDates(leave.start_date, leave.end_date, settings, holidayDates);
   }
@@ -1886,7 +1909,7 @@ router.post('/:id/final-approve', auth, hasPermission('leaves', 'approve'), with
       return res.status(400).json({ error: `Cannot final-approve a leave with status '${leave.status}'.`, current_status: leave.status });
     }
 
-    const settings     = await getSettings(oId);
+    const settings     = await getSettingsForUser(oId, leave.user_id);
     const holidayDates = await fetchHolidaySet(oId, leave.start_date, leave.end_date);
     const workDates    = buildWorkingDates(leave.start_date, leave.end_date, settings, holidayDates);
     const attStatus    = leave.leave_time === 'half' ? 'half_day'

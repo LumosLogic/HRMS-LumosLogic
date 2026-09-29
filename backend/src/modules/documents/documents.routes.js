@@ -126,8 +126,12 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       return res.json(await attachUserInfo(docs, oId));
     }
 
-    // Employee: own docs + visibility='all' + specifically shared docs
+    // Employee: own docs + specifically shared docs + org/branch-wide docs
     const myId = req.user.id;
+
+    // Get employee's branch for filtering org-visible documents
+    const { data: empRow } = await db.from('users').select('branch_id').eq('id', myId).eq('organization_id', oId).maybeSingle();
+    const empBranchId = empRow?.branch_id ?? null;
 
     const { data: myShares } = await db
       .from('document_shares')
@@ -136,10 +140,19 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       .eq('organization_id', oId);
 
     const sharedIds = (myShares || []).map(s => s.document_id);
-    const orFilters = [`user_id.eq.${myId}`, 'visibility.eq.all'];
-    if (sharedIds.length > 0) orFilters.push(`id.in.(${sharedIds.join(',')})`);
 
-    const { data, error } = await db
+    // Build the OR filter:
+    // - Own documents
+    // - Specifically shared documents
+    // - visibility='all' with no branch restriction (org-wide)
+    // - visibility='all' for this employee's branch
+    const orFilters = [`user_id.eq.${myId}`];
+    if (sharedIds.length > 0) orFilters.push(`id.in.(${sharedIds.join(',')})`);
+    // Include org-wide visibility='all' docs (branch_id IS NULL)
+    // Note: filtering branch-specific visibility='all' is done post-query for simplicity
+    orFilters.push('visibility.eq.all');
+
+    const { data: allDocs, error } = await db
       .from('employee_documents')
       .select('*')
       .eq('organization_id', oId)
@@ -148,7 +161,22 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       .order('created_at', { ascending: false });
 
     if (error) throw error;
-    res.json(await attachShares(data || [], oId));
+
+    // Post-filter: for visibility='all' docs, only show those that match the employee's branch scope
+    const ownAndSharedIds = new Set([myId, ...sharedIds]);
+    const filtered = (allDocs || []).filter(d => {
+      if (d.user_id === myId) return true; // own doc
+      if (sharedIds.includes(d.id)) return true; // specifically shared
+      if (d.visibility === 'all') {
+        // Org-wide (no branch restriction) — always visible
+        if (d.branch_id == null) return true;
+        // Branch-specific — only visible if employee is in that branch
+        return empBranchId != null && Number(d.branch_id) === Number(empBranchId);
+      }
+      return false;
+    });
+
+    res.json(await attachShares(filtered, oId));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -214,6 +242,10 @@ router.post('/upload', auth, hasPermission('documents', 'upload'), withBranchCon
       organization_id: oId,
       visibility:      docVisibility,
       status:          docStatus,
+      // Store branch_id for branch-scoped visibility='all' docs so employees only see relevant docs
+      branch_id:       (isAdmin(req.user.role) && docVisibility === 'all' && req.branchContext?.selectedBranchId)
+                         ? req.branchContext.selectedBranchId
+                         : null,
     }).select().single();
     if (error) throw error;
 

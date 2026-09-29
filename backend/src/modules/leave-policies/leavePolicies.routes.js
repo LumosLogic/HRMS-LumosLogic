@@ -3,6 +3,8 @@ const router  = express.Router();
 const { db, pool } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { getFilterState } = require('../../utils/branchFilter');
 
 const DEFAULT_POLICIES = [
   { leave_type: 'annual',    label: 'Annual Leave',    annual_quota: 18, carry_forward: true,  max_carry_forward: 5,  paid: true },
@@ -15,13 +17,30 @@ const DEFAULT_POLICIES = [
 ];
 
 // GET /api/leave-policies
-router.get('/', auth, async (req, res) => {
+// Returns branch-specific policies when a branch is selected,
+// falling back to org-wide policies (branch_id IS NULL) if none exist for that branch.
+router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
-    const { data, error } = await db.from('leave_policies')
-      .select('*').eq('organization_id', oId).order('leave_type');
+    const branchState = getFilterState(req.branchContext);
+    let query = db.from('leave_policies').select('*').eq('organization_id', oId).order('leave_type');
 
-    // Return defaults if table missing or no rows yet
+    if (branchState.type === 'specific') {
+      // Try branch-specific first
+      const branchId = branchState.branchId;
+      const { data: branchPolicies, error: branchErr } = await db.from('leave_policies')
+        .select('*').eq('organization_id', oId).eq('branch_id', branchId).order('leave_type');
+      if (!branchErr && branchPolicies && branchPolicies.length > 0) {
+        return res.json(branchPolicies);
+      }
+      // Fall back to org-wide (branch_id IS NULL)
+      query = query.is('branch_id', null);
+    } else {
+      // All/multi/none: show org-wide policies
+      query = query.is('branch_id', null);
+    }
+
+    const { data, error } = await query;
     if (error || !data || data.length === 0) {
       return res.json(DEFAULT_POLICIES.map(p => ({ ...p, id: null, organization_id: oId, active: true })));
     }
@@ -31,24 +50,37 @@ router.get('/', auth, async (req, res) => {
 
 // POST /api/leave-policies — atomic replace-all using a PostgreSQL transaction (admin only).
 // HIGH-19: DELETE then INSERT must be atomic — if INSERT fails, no policies should be lost.
-router.post('/', auth, hasPermission('settings', 'manage'), async (req, res) => {
+// Branch-aware: when a branch is selected, only replaces policies for that branch.
+router.post('/', auth, hasPermission('settings', 'manage'), withBranchContext, async (req, res) => {
   const oId = req.user.organization_id;
   const { policies } = req.body;
   if (!Array.isArray(policies) || policies.length === 0)
     return res.status(400).json({ error: 'policies array required and must not be empty' });
 
+  const branchState = getFilterState(req.branchContext);
+  const branchId = branchState.type === 'specific' ? branchState.branchId : null;
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
-    // BUG_238: snapshot previous policies so the replace-all can be audited
+    // BUG_238: snapshot previous policies for the same scope for audit
     const { rows: beforeRows } = await client.query(
-      `SELECT * FROM leave_policies WHERE organization_id = $1`, [oId]
+      branchId
+        ? `SELECT * FROM leave_policies WHERE organization_id = $1 AND branch_id = $2`
+        : `SELECT * FROM leave_policies WHERE organization_id = $1 AND branch_id IS NULL`,
+      branchId ? [oId, branchId] : [oId]
     );
     const beforeByType = {};
     beforeRows.forEach(r => { beforeByType[r.leave_type] = r; });
 
-    await client.query('DELETE FROM leave_policies WHERE organization_id = $1', [oId]);
+    // Delete only the scoped policies (branch-specific or org-wide)
+    await client.query(
+      branchId
+        ? `DELETE FROM leave_policies WHERE organization_id = $1 AND branch_id = $2`
+        : `DELETE FROM leave_policies WHERE organization_id = $1 AND branch_id IS NULL`,
+      branchId ? [oId, branchId] : [oId]
+    );
 
     const inserted = [];
     const auditRows = [];
@@ -56,10 +88,10 @@ router.post('/', auth, hasPermission('settings', 'manage'), async (req, res) => 
       const { leave_type, label, annual_quota, carry_forward, max_carry_forward, paid, active } = p;
       const result = await client.query(
         `INSERT INTO leave_policies
-           (organization_id, leave_type, label, annual_quota, carry_forward, max_carry_forward, paid, active)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+           (organization_id, branch_id, leave_type, label, annual_quota, carry_forward, max_carry_forward, paid, active)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
          RETURNING *`,
-        [oId, leave_type, label || leave_type, Number(annual_quota) || 0,
+        [oId, branchId, leave_type, label || leave_type, Number(annual_quota) || 0,
          !!carry_forward, Number(max_carry_forward) || 0, paid !== false, active !== false]
       );
       inserted.push(result.rows[0]);

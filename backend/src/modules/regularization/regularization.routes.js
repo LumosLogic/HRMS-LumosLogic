@@ -9,6 +9,36 @@ const { resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee } = require
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
+// BUG-115: Look up max_early_leave_count from branch override if available,
+// falling back to org-wide work_schedule. Handles pre-migration gracefully.
+async function getMaxEarlyLeave(orgId, userId) {
+  try {
+    const userRes = await pool.query(
+      `SELECT branch_id FROM users WHERE id = $1 AND organization_id = $2 LIMIT 1`,
+      [userId, orgId]
+    );
+    const branchId = userRes.rows[0]?.branch_id ?? null;
+    if (branchId) {
+      try {
+        const branchRes = await pool.query(
+          `SELECT COALESCE(max_early_leave_count, 3) AS max_allowance
+             FROM branch_work_schedule WHERE organization_id = $1 AND branch_id = $2 LIMIT 1`,
+          [orgId, branchId]
+        );
+        if (branchRes.rows.length > 0) return parseInt(branchRes.rows[0].max_allowance || 3);
+      } catch { /* table not yet created */ }
+    }
+  } catch { /* user lookup failed */ }
+  // Fallback: org-wide work_schedule
+  try {
+    const orgRes = await pool.query(
+      `SELECT COALESCE(max_early_leave_count, 3) AS max_allowance FROM work_schedule WHERE organization_id = $1 LIMIT 1`,
+      [orgId]
+    );
+    return parseInt(orgRes.rows[0]?.max_allowance || 3);
+  } catch { return 3; }
+}
+
 // GET /api/regularization
 router.get('/', auth, withBranchContext, async (req, res) => {
   try {
@@ -92,13 +122,8 @@ router.get('/usage', auth, async (req, res) => {
     const late_days        = parseInt(attRes.rows[0]?.late_days        || 0);
     const combined_count   = early_leave_days + late_days;
 
-    // Fetch max allowance from work_schedule
-    const schedRes = await pool.query(
-      `SELECT COALESCE(max_early_leave_count, 3) AS max_allowance
-         FROM work_schedule WHERE organization_id = $1 LIMIT 1`,
-      [oId]
-    );
-    const max_allowance = parseInt(schedRes.rows[0]?.max_allowance || 3);
+    // Fetch max allowance — branch override first, org-wide fallback (BUG-115)
+    const max_allowance = await getMaxEarlyLeave(oId, uid);
 
     // Approved early leave requests this month (for display)
     const elRes = await pool.query(
@@ -152,13 +177,9 @@ router.post('/', auth, async (req, res) => {
             AND date >= $3 AND date <= $4`,
         [req.user.id, oId, s, e]
       );
-      const schedRes = await pool.query(
-        `SELECT COALESCE(max_early_leave_count, 3) AS max_allowance
-           FROM work_schedule WHERE organization_id = $1 LIMIT 1`,
-        [oId]
-      );
+      // BUG-115: branch-aware max early leave allowance
       const used = parseInt(cntRes.rows[0]?.c || 0);
-      const maxAllowance = parseInt(schedRes.rows[0]?.max_allowance || 3);
+      const maxAllowance = await getMaxEarlyLeave(oId, req.user.id);
       if (used >= maxAllowance) {
         return res.status(409).json({
           error: `Early leave allowance exhausted for this month (${used}/${maxAllowance} used). Additional early departures will be treated as Half Day — please apply for Half Day leave instead.`,

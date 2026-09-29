@@ -118,4 +118,58 @@ async function getOrgContext(oId) {
   }
 }
 
-module.exports = { localDateStr, localTimeStr, flat, flatOne, getSettings, orgId, toMinutes, isWorkingDay, getRecipients, generateUniqueSlug, getOrgContext };
+/**
+ * Convenience wrapper: looks up the employee's branch_id then delegates to
+ * getEffectiveWorkSchedule. Use this in any route where you have the employee's
+ * userId but not their branch_id.
+ *
+ * Falls back to org-wide work_schedule when:
+ *   - userId is null/undefined
+ *   - user has no branch_id
+ *   - branch_work_schedule table doesn't exist yet
+ *   - no branch override exists for that branch
+ */
+async function getSettingsForUser(orgId, userId) {
+  if (userId) {
+    try {
+      const { data: user } = await db
+        .from('users')
+        .select('branch_id')
+        .eq('id', userId)
+        .eq('organization_id', orgId)
+        .maybeSingle();
+      if (user?.branch_id) {
+        return getEffectiveWorkSchedule(orgId, user.branch_id);
+      }
+    } catch { /* DB error — fall through to org default */ }
+  }
+  return getSettings(orgId);
+}
+
+/**
+ * Returns the effective work schedule for an employee.
+ * If the employee belongs to a branch that has a branch_work_schedule override,
+ * that override is returned. Otherwise the org-wide work_schedule is used.
+ *
+ * branchId = null/undefined → always returns org-wide schedule (unchanged behavior).
+ * Branch table does not exist yet (pre-migration) → falls back to org-wide schedule.
+ * No row found for branch → falls back to org-wide schedule.
+ *
+ * This is the single resolver all branch-aware consumers should call.
+ */
+async function getEffectiveWorkSchedule(orgId, branchId) {
+  if (branchId) {
+    try {
+      const { data } = await db
+        .from('branch_work_schedule')
+        .select('*')
+        .eq('organization_id', orgId)
+        .eq('branch_id', branchId)
+        .maybeSingle();
+      if (data) return data;
+    } catch { /* table not yet created — fall through to org default */ }
+  }
+  return getSettings(orgId);
+}
+
+module.exports = { localDateStr, localTimeStr, flat, flatOne, getSettings, getEffectiveWorkSchedule, getSettingsForUser, orgId, toMinutes, isWorkingDay, getRecipients, generateUniqueSlug, getOrgContext };

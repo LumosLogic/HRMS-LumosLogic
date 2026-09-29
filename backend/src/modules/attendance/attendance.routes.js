@@ -4,7 +4,7 @@ const { db } = require('../../config/db');
 const { pool } = require('../../config/db-pg-adapter');
 const { auth, isAdminRole, rootAdminOnly } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
-const { localDateStr, localTimeStr, flat, orgId, toMinutes, getSettings, isWorkingDay } = require('../../utils/helpers');
+const { localDateStr, localTimeStr, flat, orgId, toMinutes, getSettings, getEffectiveWorkSchedule, isWorkingDay } = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
 
@@ -114,7 +114,9 @@ router.post('/checkin', auth, async (req, res) => {
   try {
     const today   = localDateStr();
     const timeStr = localTimeStr();
-    const settings = await getSettings(orgId(req));
+    // Use branch-specific schedule if employee's branch has an override
+    const { data: empBranch } = await db.from('users').select('branch_id').eq('id', req.user.id).eq('organization_id', orgId(req)).maybeSingle();
+    const settings = await getEffectiveWorkSchedule(orgId(req), empBranch?.branch_id);
 
     const { data: existing } = await db.from('attendance')
       .select('*').eq('user_id', req.user.id).eq('date', today).maybeSingle();
@@ -153,7 +155,9 @@ router.post('/checkout', auth, async (req, res) => {
   try {
     const today   = localDateStr();
     const timeStr = localTimeStr();
-    const settings = await getSettings(orgId(req));
+    // Use branch-specific schedule if employee's branch has an override
+    const { data: empBranch } = await db.from('users').select('branch_id').eq('id', req.user.id).eq('organization_id', orgId(req)).maybeSingle();
+    const settings = await getEffectiveWorkSchedule(orgId(req), empBranch?.branch_id);
 
     const { data: record } = await db.from('attendance')
       .select('*').eq('user_id', req.user.id).eq('date', today).maybeSingle();

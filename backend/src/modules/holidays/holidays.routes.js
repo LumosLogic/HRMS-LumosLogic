@@ -3,14 +3,25 @@ const router  = express.Router();
 const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { getFilterState } = require('../../utils/branchFilter');
 
 // GET /api/holidays
-router.get('/', auth, async (req, res) => {
+// Returns org-wide holidays (branch_id IS NULL) + branch-specific holidays for the selected branch.
+router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { year } = req.query;
+    const branchState = getFilterState(req.branchContext);
     let q = db.from('holidays').select('*').eq('organization_id', oId).order('date');
     if (year) q = q.gte('date', `${year}-01-01`).lte('date', `${year}-12-31`);
+    // Branch filtering: show org-wide + selected branch holidays
+    if (branchState.type === 'specific') {
+      q = q.or(`branch_id.is.null,branch_id.eq.${branchState.branchId}`);
+    } else if (branchState.type === 'multi') {
+      q = q.or(`branch_id.is.null,branch_id.in.(${branchState.branchIds.join(',')})`);
+    }
+    // type=all: show everything; no filter needed
     const { data, error } = await q;
     if (error) throw error;
     res.json(data || []);
@@ -18,15 +29,18 @@ router.get('/', auth, async (req, res) => {
 });
 
 // POST /api/holidays
-router.post('/', auth, hasPermission('holidays', 'manage'), async (req, res) => {
+router.post('/', auth, hasPermission('holidays', 'manage'), withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { name, date, type, description, specific_msg } = req.body;
     if (!name || !date) return res.status(400).json({ error: 'Name and date are required' });
+    const branchId = req.branchContext?.selectedBranchId || null;
 
-    // Prevent duplicate holiday on same date (causes double-counting in leave calculations)
-    const { data: existing } = await db.from('holidays')
-      .select('id, name').eq('date', date).eq('organization_id', oId).maybeSingle();
+    // Prevent duplicate holiday on same date within the same scope (branch or org-wide)
+    let dupQ = db.from('holidays').select('id, name').eq('date', date).eq('organization_id', oId);
+    if (branchId) dupQ = dupQ.eq('branch_id', branchId);
+    else dupQ = dupQ.is('branch_id', null);
+    const { data: existing } = await dupQ.maybeSingle();
     if (existing) {
       return res.status(409).json({
         error: `A holiday already exists on ${date}: "${existing.name}". Delete or edit it first.`,
@@ -35,31 +49,27 @@ router.post('/', auth, hasPermission('holidays', 'manage'), async (req, res) => 
     }
 
     const { data, error } = await db.from('holidays')
-      .insert({ name, date, type: type || 'public', description: description || '', specific_msg: specific_msg || '', organization_id: oId })
+      .insert({ name, date, type: type || 'public', description: description || '', specific_msg: specific_msg || '', organization_id: oId, branch_id: branchId })
       .select().single();
     if (error) throw error;
 
-    // Auto-mark attendance as 'holiday' for this date (fire-and-forget):
-    // 1. Update any existing 'absent' records to 'holiday' (handles backdated holidays)
-    // 2. Insert 'holiday' records for employees who have no record at all
-    db.from('users').select('id').eq('organization_id', oId).eq('role', 'employee').eq('employee_status', 'active')
-      .then(async ({ data: employees }) => {
-        if (!employees?.length) return;
-        // Step 1: flip existing absent records to holiday
-        await db.from('attendance')
-          .update({ status: 'holiday' })
-          .eq('date', date)
-          .eq('organization_id', oId)
-          .eq('status', 'absent');
-        // Step 2: insert holiday records for employees with no record on this date
-        const { data: existing } = await db.from('attendance')
-          .select('user_id').eq('date', date).eq('organization_id', oId);
-        const markedIds = new Set((existing || []).map(r => r.user_id));
-        const toInsert = employees
-          .filter(e => !markedIds.has(e.id))
-          .map(e => ({ user_id: e.id, organization_id: oId, date, status: 'holiday' }));
-        if (toInsert.length) await db.from('attendance').insert(toInsert);
-      }).catch(() => {});
+    // Auto-mark attendance as 'holiday' — only for employees in this branch (or all if org-wide)
+    let empQ = db.from('users').select('id, branch_id').eq('organization_id', oId).eq('role', 'employee').eq('employee_status', 'active');
+    empQ.then(async ({ data: employees }) => {
+      if (!employees?.length) return;
+      let targets = employees;
+      if (branchId) targets = employees.filter(e => Number(e.branch_id) === Number(branchId));
+      if (!targets.length) return;
+      const targetIds = targets.map(e => e.id);
+      await db.from('attendance')
+        .update({ status: 'holiday' })
+        .eq('date', date).eq('organization_id', oId).eq('status', 'absent')
+        .in('user_id', targetIds);
+      const { data: marked } = await db.from('attendance').select('user_id').eq('date', date).eq('organization_id', oId).in('user_id', targetIds);
+      const markedIds = new Set((marked || []).map(r => r.user_id));
+      const toInsert = targets.filter(e => !markedIds.has(e.id)).map(e => ({ user_id: e.id, organization_id: oId, date, status: 'holiday' }));
+      if (toInsert.length) await db.from('attendance').insert(toInsert);
+    }).catch(() => {});
 
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
