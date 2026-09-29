@@ -1949,9 +1949,20 @@ router.post('/runs/:id/approve', auth, hasPermission('payroll', 'approve'), asyn
 
     res.json(updated[0]);
 
-    // Fire payslip emails if auto-email is enabled — fire-and-forget after response
+    // Publish payslips + optionally send emails — fire-and-forget after response
     setImmediate(async () => {
       try {
+        const { rows: runRow } = await pool.query(
+          `SELECT month, year FROM payroll_runs WHERE id = $1`, [runId]
+        );
+        // Always publish on approval so employees can view their payslips
+        await pool.query(
+          `UPDATE payslips SET status = 'published'
+           WHERE payroll_run_id = $1 AND organization_id = $2 AND status = 'generated'`,
+          [runId, oId]
+        );
+
+        // Only send emails if auto-email is enabled
         const { rows: [ps] } = await pool.query(
           `SELECT payslip_auto_email FROM payroll_settings WHERE organization_id = $1`,
           [oId]
@@ -1965,21 +1976,57 @@ router.post('/runs/:id/approve', auth, hasPermission('payroll', 'approve'), asyn
         );
         if (already.length) return;
 
-        // Publish all payslips in this run (generated → published)
-        const { rows: runRow } = await pool.query(
-          `SELECT month, year FROM payroll_runs WHERE id = $1`, [runId]
-        );
-        await pool.query(
-          `UPDATE payslips SET status = 'published'
-           WHERE payroll_run_id = $1 AND organization_id = $2 AND status = 'generated'`,
-          [runId, oId]
-        );
-
         await sendPayslipsBatch({ organizationId: oId, runId, month: runRow[0].month, year: runRow[0].year });
       } catch (e) {
         console.error('[payroll approve] auto-email failed:', e.message);
       }
     });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/payroll/runs/:id/reopen — Root Admin cancels approval (approved → verified)
+router.post('/runs/:id/reopen', auth, hasPermission('payroll', 'approve'), async (req, res) => {
+  try {
+    const oId   = orgId(req);
+    const runId = parseInt(req.params.id, 10);
+    if (!runId) return res.status(400).json({ error: 'Invalid run ID' });
+
+    const { rows } = await pool.query(
+      `SELECT id, status, branch_id FROM payroll_runs WHERE id = $1 AND organization_id = $2`,
+      [runId, oId]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Payroll run not found' });
+    if (await assertRunBranchAccess(req, res, rows[0])) return;
+    if (rows[0].status !== 'approved') {
+      return res.status(409).json({ error: `Only approved runs can be reopened. Current status: '${rows[0].status}'` });
+    }
+
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const { rows: updated } = await client.query(
+        `UPDATE payroll_runs
+            SET status = 'verified', approved_by = NULL, approved_at = NULL
+          WHERE id = $1 AND organization_id = $2
+         RETURNING *`,
+        [runId, oId]
+      );
+      // Revert published payslips back to generated so employees can no longer see them
+      await client.query(
+        `UPDATE payslips SET status = 'generated'
+         WHERE payroll_run_id = $1 AND organization_id = $2 AND status = 'published'`,
+        [runId, oId]
+      );
+      await client.query('COMMIT');
+
+      logPayroll({ oId, actorId: req.user.id, actorName: req.user.name,
+        action: 'payroll_reopened', entityType: 'payroll_run', entityId: runId, ip: req.ip });
+
+      res.json(updated[0]);
+    } catch (e) {
+      await client.query('ROLLBACK');
+      throw e;
+    } finally { client.release(); }
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

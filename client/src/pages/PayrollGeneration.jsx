@@ -20,12 +20,15 @@ const padZ = n  => String(n).padStart(2, '0');
 const now = new Date();
 
 const STATUS_META = {
-  draft:                  { label: 'Draft',               cls: 'bg-[#f0f3ff] text-[#3525cd]', Icon: Clock },
-  processing:             { label: 'Processing',          cls: 'bg-amber-50 text-amber-700',   Icon: Clock },
+  draft:                  { label: 'Draft',               cls: 'bg-[#f0f3ff] text-[#3525cd]',   Icon: Clock },
+  processing:             { label: 'Processing',          cls: 'bg-amber-50 text-amber-700',     Icon: Clock },
   completed:              { label: 'Generated',            cls: 'bg-emerald-50 text-emerald-700', Icon: CheckCircle2 },
-  completed_with_errors:  { label: 'Generated w/ Errors', cls: 'bg-orange-50 text-orange-700',  Icon: AlertTriangle },
-  failed:                 { label: 'Failed',              cls: 'bg-red-50 text-red-700',        Icon: AlertCircle },
-  locked:                 { label: 'Locked',              cls: 'bg-slate-100 text-slate-600',   Icon: Lock },
+  completed_with_errors:  { label: 'Generated w/ Errors', cls: 'bg-orange-50 text-orange-700',   Icon: AlertTriangle },
+  failed:                 { label: 'Failed',              cls: 'bg-red-50 text-red-700',         Icon: AlertCircle },
+  verified:               { label: 'Verified',            cls: 'bg-violet-50 text-violet-700',   Icon: CheckCircle2 },
+  approved:               { label: 'Approved',            cls: 'bg-blue-50 text-blue-700',       Icon: CheckCircle2 },
+  locked:                 { label: 'Locked',              cls: 'bg-slate-100 text-slate-600',    Icon: Lock },
+  paid:                   { label: 'Paid',                cls: 'bg-teal-50 text-teal-700',       Icon: CheckCircle2 },
 };
 
 function StatusBadge({ status }) {

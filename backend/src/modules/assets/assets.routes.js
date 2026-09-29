@@ -95,13 +95,6 @@ router.post('/', auth, hasPermission('assets', 'create'), async (req, res) => {
       .select('id').eq('organization_id', oId).eq('asset_tag', tag).maybeSingle();
     if (dupTag) return res.status(400).json({ error: `Asset tag '${tag}' is already in use. Asset tags must be unique within the organisation.` });
 
-    // BUG-010: asset name should also be unique within the org
-    if (body.name) {
-      const { data: dupName } = await db.from('assets')
-        .select('id').eq('organization_id', oId).eq('name', body.name.trim()).maybeSingle();
-      if (dupName) return res.status(400).json({ error: `An asset named "${body.name.trim()}" already exists. Please use a unique asset name.` });
-    }
-
     // ── Uniqueness: serial_number must be unique when provided ────────────────
     if (body.serial_number) {
       const { data: dupSN } = await db.from('assets')

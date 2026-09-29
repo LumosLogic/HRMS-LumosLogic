@@ -226,7 +226,7 @@ function AppRoutes() {
         <Route path="/regularization"   element={<FeatureRoute featureKey="regularization"><Regularization /></FeatureRoute>} />
         <Route path="/reports"          element={<FeatureRoute featureKey="reports"><Reports /></FeatureRoute>} />
         <Route path="/documents"        element={<FeatureRoute featureKey="documents"><Documents /></FeatureRoute>} />
-        <Route path="/payroll"                  element={<FeatureRoute featureKey="payroll"><Payroll /></FeatureRoute>} />
+        <Route path="/payroll"                  element={<Navigate to="/payroll/generate" replace />} />
         <Route path="/payroll/dashboard"        element={<FeatureRoute featureKey="payroll"><PayrollDashboard /></FeatureRoute>} />
         <Route path="/payroll/salary"           element={<FeatureRoute featureKey="payroll"><SalaryStructure /></FeatureRoute>} />
         <Route path="/payroll/settings"         element={<FeatureRoute featureKey="payroll"><PayrollSettings /></FeatureRoute>} />
@@ -276,7 +276,7 @@ function AppRoutes() {
         <Route path="/root/regularization"  element={<FeatureRoute featureKey="regularization"><Regularization /></FeatureRoute>} />
         <Route path="/root/reports"         element={<FeatureRoute featureKey="reports"><Reports /></FeatureRoute>} />
         <Route path="/root/documents"       element={<FeatureRoute featureKey="documents"><Documents /></FeatureRoute>} />
-        <Route path="/root/payroll"                    element={<FeatureRoute featureKey="payroll"><Payroll /></FeatureRoute>} />
+        <Route path="/root/payroll"                    element={<Navigate to="/root/payroll/generate" replace />} />
         <Route path="/root/payroll/dashboard"          element={<FeatureRoute featureKey="payroll"><PayrollDashboard /></FeatureRoute>} />
         <Route path="/root/payroll/salary"             element={<FeatureRoute featureKey="payroll"><SalaryStructure /></FeatureRoute>} />
         <Route path="/root/payroll/settings"           element={<FeatureRoute featureKey="payroll"><PayrollSettings /></FeatureRoute>} />

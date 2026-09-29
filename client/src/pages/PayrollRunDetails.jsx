@@ -5,6 +5,7 @@ import {
   ArrowLeft, Lock, Unlock, CheckCircle2, AlertCircle, AlertTriangle,
   Clock, ChevronRight, Users, IndianRupee, ShieldCheck, ThumbsUp,
   CreditCard, PlusCircle, Trash2, Download, ChevronDown, Mail, GitBranch,
+  RotateCcw, RefreshCw,
 } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
 import { useAuth } from '@/context/AuthContext';
@@ -208,6 +209,26 @@ export default function PayrollRunDetails() {
     onError: e => toast(e.message, 'error'),
   });
 
+  const reopenMut = useMutation({
+    mutationFn: () => apiPost(`/payroll/runs/${id}/reopen`),
+    onSuccess:  () => {
+      toast('Approval cancelled — run is now Verified', 'success');
+      qc.invalidateQueries({ queryKey: ['payroll-run', id] });
+      qc.invalidateQueries({ queryKey: ['payroll-runs'] });
+    },
+    onError: e => toast(e.message, 'error'),
+  });
+
+  const regenerateMut = useMutation({
+    mutationFn: () => apiPost('/payroll/generate', { month: run.month, year: run.year, force: true }),
+    onSuccess:  () => {
+      toast('Payroll regenerated successfully', 'success');
+      qc.invalidateQueries({ queryKey: ['payroll-run', id] });
+      qc.invalidateQueries({ queryKey: ['payroll-runs'] });
+    },
+    onError: e => toast(e.message, 'error'),
+  });
+
   const createAdjMut = useMutation({
     mutationFn: () => apiPost('/payroll/adjustments', {
       ...adjForm,
@@ -244,12 +265,14 @@ export default function PayrollRunDetails() {
 
   const fmt2 = n => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
 
-  const canLock    = run && isRootAdmin && ['completed', 'completed_with_errors', 'approved'].includes(run.status);
-  const canUnlock  = run?.status === 'locked' && isRootAdmin;
-  const canVerify  = run && ['completed', 'completed_with_errors'].includes(run.status);
-  const canApprove = run?.status === 'verified' && isRootAdmin;
-  const canPaid    = run && ['locked', 'approved'].includes(run.status) && isRootAdmin;
-  const canAddAdj  = run && !['locked', 'paid'].includes(run.status);
+  const canLock       = run && isRootAdmin && ['completed', 'completed_with_errors', 'approved'].includes(run.status);
+  const canUnlock     = run?.status === 'locked' && isRootAdmin;
+  const canVerify     = run && ['completed', 'completed_with_errors'].includes(run.status);
+  const canApprove    = run?.status === 'verified' && isRootAdmin;
+  const canReopen     = run?.status === 'approved' && isRootAdmin;
+  const canRegenerate = run && !['locked', 'paid'].includes(run.status) && isRootAdmin;
+  const canPaid       = run && ['locked', 'approved'].includes(run.status) && isRootAdmin;
+  const canAddAdj     = run && !['locked', 'paid'].includes(run.status);
 
   if (isLoading) {
     return (
@@ -340,6 +363,32 @@ export default function PayrollRunDetails() {
               disabled={approveMut.isPending}
               className="inline-flex items-center gap-2 bg-blue-600 text-white rounded-lg px-4 py-2 text-sm font-bold hover:bg-blue-700 transition-colors disabled:opacity-50">
               <ThumbsUp size={14} /> Approve
+            </button>
+          )}
+          {canReopen && (
+            <button onClick={() => setConfirmDlg({
+                title: 'Cancel Approval',
+                message: 'Revert this run back to Verified status. Employee payslips will be hidden until re-approved.',
+                onOk: () => reopenMut.mutate(),
+                danger: true,
+              })}
+              disabled={reopenMut.isPending}
+              className="inline-flex items-center gap-2 bg-amber-600 text-white rounded-lg px-4 py-2 text-sm font-bold hover:bg-amber-700 transition-colors disabled:opacity-50">
+              {reopenMut.isPending ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <RotateCcw size={14} />}
+              Cancel Approval
+            </button>
+          )}
+          {canRegenerate && (
+            <button onClick={() => setConfirmDlg({
+                title: 'Regenerate Payroll',
+                message: 'This will recalculate all payslips in this run using the latest attendance and salary data. Any manual adjustments will be preserved.',
+                onOk: () => regenerateMut.mutate(),
+                danger: true,
+              })}
+              disabled={regenerateMut.isPending}
+              className="inline-flex items-center gap-2 bg-white border border-[#c7c4d8] text-[#464555] rounded-lg px-4 py-2 text-sm font-bold hover:bg-[#f0f3ff] transition-colors disabled:opacity-50">
+              {regenerateMut.isPending ? <span className="w-4 h-4 border-2 border-[#464555]/30 border-t-[#464555] rounded-full animate-spin" /> : <RefreshCw size={14} />}
+              Regenerate
             </button>
           )}
           {canLock && (

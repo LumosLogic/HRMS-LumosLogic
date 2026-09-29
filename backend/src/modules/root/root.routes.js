@@ -582,22 +582,32 @@ router.get('/hr', auth, rootAdminOnly, withBranchContext, async (req, res) => {
 // ─── Root Admin: Create HR Admin ──────────────────────────────────────────────
 router.post('/hr', auth, rootAdminOnly, async (req, res) => {
   try {
-    const { name, email, password, department, position, avatar_color } = req.body;
+    const { name, email, password, department, position, avatar_color, branch_id } = req.body;
     if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, and password are required' });
     const hashed = bcrypt.hashSync(password, 10);
+    const oid = orgId(req);
     const { data, error } = await db.from('users')
-      .insert({ name, email: email.toLowerCase(), password: hashed, role: 'admin', department: department||'Human Resources', position: position||'HR Manager', avatar_color: avatar_color||'#3525cd', force_password_change: true, organization_id: orgId(req) })
+      .insert({ name, email: email.toLowerCase(), password: hashed, role: 'admin', department: department||'Human Resources', position: position||'HR Manager', avatar_color: avatar_color||'#3525cd', force_password_change: true, organization_id: oid })
       .select('id, name, email, role, department, position, avatar_color').single();
     if (error?.code === '23505') return res.status(400).json({ error: 'Email already exists' });
     if (error) throw new Error(error.message);
     sendMail({ to: email, subject: 'Welcome to Lumens HR — Your HR Admin Account', html: welcomeEmployeeHtml({ name, email, department: department||'Human Resources', position: position||'HR Manager' }, password) });
     // Assign hr_admin RBAC role (fire-and-forget; harmless if RBAC tables not yet migrated)
-    db.from('roles').select('id').eq('org_id', orgId(req)).eq('slug', 'hr_admin').maybeSingle()
+    db.from('roles').select('id').eq('org_id', oid).eq('slug', 'hr_admin').maybeSingle()
       .then(({ data: sysRole }) => {
         if (sysRole?.id) {
-          return db.from('user_roles').insert({ user_id: data.id, role_id: sysRole.id, org_id: orgId(req), assigned_by: req.user.id });
+          return db.from('user_roles').insert({ user_id: data.id, role_id: sysRole.id, org_id: oid, assigned_by: req.user.id });
         }
       }).catch(() => {});
+    // Auto-grant branch access if a branch was selected during creation
+    if (branch_id) {
+      pool.query(
+        `INSERT INTO hr_branch_access (user_id, org_id, branch_id, all_branches, granted_by)
+         VALUES ($1, $2, $3, FALSE, $4)
+         ON CONFLICT (user_id, org_id, branch_id) WHERE branch_id IS NOT NULL DO NOTHING`,
+        [data.id, oid, parseInt(branch_id, 10), req.user.id]
+      ).catch(() => {});
+    }
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

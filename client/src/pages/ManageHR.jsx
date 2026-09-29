@@ -9,7 +9,7 @@ import { useToast } from '@/context/ToastContext';
 import { initials } from '@/lib/utils';
 
 const AVATAR_COLORS = ['#3525cd','#4f46e5','#712ae2','#8a4cfc','#10B981','#F59E0B','#EF4444','#F97316'];
-const INITIAL = { name:'', email:'', password:'', department:'Human Resources', position:'HR Manager', avatar_color:'#3525cd' };
+const INITIAL = { name:'', email:'', password:'', department:'Human Resources', position:'HR Manager', avatar_color:'#3525cd', branch_id:'' };
 
 function HRFormModal({ open, onClose, editing }) {
   const qc = useQueryClient();
@@ -18,6 +18,12 @@ function HRFormModal({ open, onClose, editing }) {
   const [showPw, setShowPw] = useState(false);
 
   React.useEffect(() => { if (open) setForm(editing ? { ...editing, password: '' } : INITIAL); }, [editing, open]);
+
+  const { data: branches = [] } = useQuery({
+    queryKey: ['branches-for-hr-form'],
+    queryFn:  () => apiGet('/branches'),
+    enabled:  open && !editing,
+  });
 
   const save = useMutation({
     mutationFn: () => {
@@ -91,6 +97,16 @@ function HRFormModal({ open, onClose, editing }) {
             <label className="form-label">Position</label>
             <input className="form-control" value={form.position} onChange={e => set('position', e.target.value)} />
           </div>
+          {!editing && branches.length > 0 && (
+            <div className="col-span-2">
+              <label className="form-label">Assign to Branch <span className="font-normal text-[#777587] normal-case tracking-normal">(optional)</span></label>
+              <select className="form-control" value={form.branch_id} onChange={e => set('branch_id', e.target.value)}>
+                <option value="">— No branch assigned —</option>
+                {branches.map(b => <option key={b.id} value={b.id}>{b.name}</option>)}
+              </select>
+              <p className="text-xs text-[#777587] mt-1">HR Admin will automatically receive access to this branch's employee data.</p>
+            </div>
+          )}
         </div>
       </div>
     </Modal>

@@ -182,9 +182,10 @@ async function canAdminAccessUser(branchContext, userId, oId) {
     'SELECT branch_id FROM users WHERE id = $1 AND organization_id = $2 LIMIT 1',
     [userId, oId]
   );
-  const bid = rows[0]?.branch_id ?? null;
-  if (state.type === 'specific') return bid === state.branchId;
-  if (state.type === 'multi')    return state.branchIds.includes(bid);
+  // Normalise to Number: pg returns BIGINT columns as strings; branchIds are Numbers.
+  const bid = rows[0]?.branch_id != null ? Number(rows[0].branch_id) : null;
+  if (state.type === 'specific') return bid === Number(state.branchId);
+  if (state.type === 'multi')    return state.branchIds.map(Number).includes(bid);
   return false;
 }
 
