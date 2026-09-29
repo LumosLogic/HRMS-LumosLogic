@@ -180,7 +180,7 @@ export function OrgCalendarPanel({ initialDate, initialDayModal = null, initialD
   return (
     <div>
       {/* Toolbar */}
-      <div className="card px-5 py-3.5 mb-5 flex items-center gap-3 flex-wrap">
+      <div className="card px-5 py-3.5 mb-5 flex items-center gap-3 flex-wrap" style={{ overflow: 'visible' }}>
         <div className="flex items-center gap-2 relative" ref={monthPickerRef}>
           <button className="btn btn-outline btn-icon p-1.5" onClick={navPrev}><ChevronLeft size={18} /></button>
           <button className="text-base font-black min-w-[200px] text-center tracking-tight hover:opacity-80 transition-opacity cursor-pointer px-2 py-1 rounded-lg hover:bg-[#f0f3ff]"
@@ -190,7 +190,7 @@ export function OrgCalendarPanel({ initialDate, initialDayModal = null, initialD
           </button>
           <button className="btn btn-outline btn-icon p-1.5" onClick={navNext}><ChevronRight size={18} /></button>
           {monthPickerOpen && (
-            <div className="absolute top-full left-0 mt-2 z-50 bg-white border border-[#c7c4d8] rounded-xl shadow-xl p-4 min-w-[280px]">
+            <div className="absolute top-full left-0 mt-2 z-[9999] bg-white border border-[#c7c4d8] rounded-xl shadow-xl p-4 min-w-[280px]">
               <div className="flex items-center gap-2 mb-3">
                 <input type="number" className="form-control py-1 text-sm w-24 text-center font-bold"
                   value={date.getFullYear()} min={2020} max={2030}

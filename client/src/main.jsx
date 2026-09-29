@@ -20,6 +20,15 @@ const queryClient = new QueryClient({
   },
 });
 
+// BUG_220: Prevent mouse-wheel scroll from changing number input values globally.
+// When a number input is focused and the user scrolls, blur it so the scroll
+// moves the page instead of incrementing/decrementing the field value.
+document.addEventListener('wheel', () => {
+  if (document.activeElement && document.activeElement.type === 'number') {
+    document.activeElement.blur();
+  }
+}, { passive: true });
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>

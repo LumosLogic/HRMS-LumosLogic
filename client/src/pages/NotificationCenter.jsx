@@ -204,12 +204,19 @@ export default function NotificationCenter() {
         <div className="flex items-center gap-2">
           {/* Push notification toggle */}
           {isEmployee && isSupported && (
-            <button onClick={pushEnabled ? unsubscribe : requestAndSubscribe}
-              title={pushEnabled ? 'Disable push notifications' : 'Enable push notifications'}
-              className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-bold border transition-all ${pushEnabled ? 'bg-emerald-50 text-emerald-700 border-emerald-200 hover:bg-emerald-100' : 'bg-amber-50 text-amber-700 border-amber-200 hover:bg-amber-100'}`}>
-              {pushEnabled ? <Bell size={13} /> : <BellOff size={13} />}
-              {pushEnabled ? 'Push On' : 'Push Off'}
-            </button>
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-[#c7c4d8] bg-white">
+              {pushEnabled ? <Bell size={13} className="text-emerald-600" /> : <BellOff size={13} className="text-[#9ca3af]" />}
+              <span className="text-xs font-semibold text-[#464555]">Push</span>
+              <button
+                onClick={pushEnabled ? unsubscribe : requestAndSubscribe}
+                title={pushEnabled ? 'Disable push notifications' : 'Enable push notifications'}
+                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors duration-200 focus:outline-none ${pushEnabled ? 'bg-emerald-500' : 'bg-[#c7c4d8]'}`}>
+                <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow-sm transition-transform duration-200 ${pushEnabled ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
+              </button>
+              <span className={`text-xs font-bold ${pushEnabled ? 'text-emerald-600' : 'text-[#9ca3af]'}`}>
+                {pushEnabled ? 'On' : 'Off'}
+              </span>
+            </div>
           )}
           {unread > 0 && activeTab === 'active' && (
             <button className="btn btn-outline" onClick={() => readAllMut.mutate()} disabled={readAllMut.isPending}>

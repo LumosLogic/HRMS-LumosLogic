@@ -30,6 +30,9 @@ function hasPermission(module, action) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
 
+    // Root admin always has all permissions — no DB lookup needed.
+    if (req.user.role === 'root_admin') return next();
+
     try {
       const permissions = await resolvePermissions(
         req.user.id,
@@ -63,6 +66,8 @@ function hasAnyPermission(permissionList) {
     if (!req.user) {
       return res.status(401).json({ error: 'Unauthorized' });
     }
+
+    if (req.user.role === 'root_admin') return next();
 
     try {
       const permissions = await resolvePermissions(

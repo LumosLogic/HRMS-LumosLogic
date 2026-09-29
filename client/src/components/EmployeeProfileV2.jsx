@@ -1,11 +1,11 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowLeft, Pencil, UserCheck, Umbrella, Home, Key, Download, Plus,
   Trash2, User, Briefcase, GraduationCap, CreditCard, Shield, Calendar,
   BarChart3, Settings, Phone, Mail, MapPin, Heart, Users, FileText,
-  Building2, Award, BookOpen, Activity, AlertCircle, CheckCircle2,
+  Building2, Award, BookOpen, Activity, AlertCircle, AlertTriangle, CheckCircle2,
   ChevronDown, ChevronUp, Loader2, X, Save, Eye, EyeOff, Banknote,
   Globe, Fingerprint, Clock, AlarmClock, Timer, Coffee,
   History, TrendingUp, TrendingDown, Upload, CheckSquare, XCircle,
@@ -122,7 +122,7 @@ const TABS_ALL = [
 // ─── Section: Personal Tab ───────────────────────────────────────────────────
 // Uses inline editing: clicking Edit Section reveals the form within the card itself.
 
-function PersonalTab({ empId, isAdmin }) {
+function PersonalTab({ empId, isAdmin, onUnsavedChange }) {
   const toast = useToast();
   const qc = useQueryClient();
   const [editSection, setEditSection] = useState(null); // 'basic'|'address'|'health' — null = view mode
@@ -150,12 +150,12 @@ function PersonalTab({ empId, isAdmin }) {
 
   const saveMut = useMutation({
     mutationFn: (body) => apiPut(`/profile/${empId}/personal`, body),
-    onSuccess: () => { toast('Saved', 'success'); qc.invalidateQueries({ queryKey: ['epv2-personal', empId] }); qc.invalidateQueries({ queryKey: ['epv2-overview', empId] }); setEditSection(null); },
+    onSuccess: () => { toast('Saved', 'success'); qc.invalidateQueries({ queryKey: ['epv2-personal', empId] }); qc.invalidateQueries({ queryKey: ['epv2-overview', empId] }); setEditSection(null); onUnsavedChange?.(false); },
     onError: e => toast(e.message, 'error'),
   });
   const saveHealthMut = useMutation({
     mutationFn: (body) => apiPut(`/profile/${empId}/health`, body),
-    onSuccess: () => { toast('Saved', 'success'); qc.invalidateQueries({ queryKey: ['epv2-health', empId] }); setEditSection(null); },
+    onSuccess: () => { toast('Saved', 'success'); qc.invalidateQueries({ queryKey: ['epv2-health', empId] }); setEditSection(null); onUnsavedChange?.(false); },
     onError: e => toast(e.message, 'error'),
   });
   const ecMut = useMutation({
@@ -181,12 +181,12 @@ function PersonalTab({ empId, isAdmin }) {
 
   if (pLoad) return <LoadingSection />;
 
-  const openBasic   = () => { setForm({ ...personal }); setEditSection('basic'); };
-  const openAddress = () => { setForm({ ...personal }); setEditSection('address'); };
+  const openBasic   = () => { setForm({ ...personal }); setEditSection('basic');   onUnsavedChange?.(true); };
+  const openAddress = () => { setForm({ ...personal }); setEditSection('address'); onUnsavedChange?.(true); };
   // BUG_199: pre-seed the Health edit form with the Basic Info blood group so a
   // fresh health record starts consistent with what Basic Information shows.
-  const openHealth  = () => { setForm({ blood_group: personal.blood_group || '', ...health });   setEditSection('health'); };
-  const cancelEdit  = () => setEditSection(null);
+  const openHealth  = () => { setForm({ blood_group: personal.blood_group || '', ...health }); setEditSection('health'); onUnsavedChange?.(true); };
+  const cancelEdit  = () => { setEditSection(null); onUnsavedChange?.(false); };
   const openEc     = (rec = {}) => { setForm({ contact_name: rec.contact_name || '', relationship: rec.relationship || '', mobile_number: rec.mobile_number || '', alternate_number: rec.alternate_number || '', email: rec.email || '', address: rec.address || '', is_primary: rec.is_primary || false }); setEcModal(rec); };
   const openFamily = (rec = {}) => { setForm({ relationship: rec.relationship||'', name: rec.name||'', date_of_birth: rec.date_of_birth||'', gender: rec.gender||'', occupation: rec.occupation||'', contact_number: rec.contact_number||'', dependent: rec.dependent||false }); setFamilyModal(rec); };
 
@@ -206,11 +206,23 @@ function PersonalTab({ empId, isAdmin }) {
     </div>
   );
 
+  // BUG_241: compact Save/Cancel shown in the section card header (same position as Edit button)
+  const TopSaveActions = ({ onSave, onCancel, isPending }) => (
+    <div className="flex items-center gap-1.5">
+      <button className="btn btn-outline py-0.5 px-2 text-xs h-auto" onClick={onCancel}>Cancel</button>
+      <button className="btn btn-primary py-0.5 px-2 text-xs h-auto" onClick={onSave} disabled={isPending}>
+        {isPending ? <Loader2 size={11} className="animate-spin" /> : <><Save size={11} />Save</>}
+      </button>
+    </div>
+  );
+
   return (
     <div className="space-y-5">
       {/* ── Basic Information ── */}
       <SectionCard title="Basic Information" icon={User}
-        action={isAdmin && editSection !== 'basic' && <AdminBtn onClick={openBasic} />}>
+        action={isAdmin && (editSection === 'basic'
+          ? <TopSaveActions onSave={() => saveMut.mutate(form)} onCancel={cancelEdit} isPending={saveMut.isPending} />
+          : <AdminBtn onClick={openBasic} />)}>
         {editSection === 'basic' ? (
           <div>
             <div className="grid grid-cols-2 gap-3">
@@ -281,7 +293,9 @@ function PersonalTab({ empId, isAdmin }) {
 
       {/* ── Addresses ── */}
       <SectionCard title="Addresses" icon={MapPin}
-        action={isAdmin && editSection !== 'address' && <AdminBtn onClick={openAddress} />}>
+        action={isAdmin && (editSection === 'address'
+          ? <TopSaveActions onSave={() => saveMut.mutate(form)} onCancel={cancelEdit} isPending={saveMut.isPending} />
+          : <AdminBtn onClick={openAddress} />)}>
         {editSection === 'address' ? (
           <div className="space-y-4">
             <p className="text-xs font-black text-[#777587] uppercase tracking-wider">Current Address</p>
@@ -370,7 +384,9 @@ function PersonalTab({ empId, isAdmin }) {
 
       {/* ── Health Information ── */}
       <SectionCard title="Health Information" icon={Heart}
-        action={isAdmin && editSection !== 'health' && <AdminBtn onClick={openHealth} />}>
+        action={isAdmin && (editSection === 'health'
+          ? <TopSaveActions onSave={() => saveHealthMut.mutate(form)} onCancel={cancelEdit} isPending={saveHealthMut.isPending} />
+          : <AdminBtn onClick={openHealth} />)}>
         {editSection === 'health' ? (
           <div>
             <div className="grid grid-cols-2 gap-3">
@@ -595,7 +611,7 @@ function deriveWeeklyOff(weeklyOffDay, workSchedule) {
   return offDays.map(d => DOW_SHORT[d]).join(', ') + ' (Company Default)';
 }
 
-function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
+function ProfessionalTab({ empId, isAdmin, onEdit, emp, onUnsavedChange }) {
   const toast = useToast();
   const qc = useQueryClient();
   const { selectedBranchId } = useBranch();
@@ -611,6 +627,7 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
     queryKey: ['branches'],
     queryFn: () => apiGet('/branches'),
     staleTime: 5 * 60 * 1000,
+    enabled: branchingEnabled,
   });
   const { data: departments = [] } = useQuery({
     queryKey: ['departments'],
@@ -631,7 +648,7 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
       toast('Organisation structure updated', 'success');
       qc.invalidateQueries({ queryKey: ['epv2-professional', empId] });
       qc.invalidateQueries({ queryKey: ['epv2-overview',     empId] });
-      setOrgStructEditing(false);
+      setOrgStructEditing(false); onUnsavedChange?.(false);
     },
     onError: e => toast(e.message, 'error'),
   });
@@ -642,7 +659,7 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
       toast('Employment details updated', 'success');
       qc.invalidateQueries({ queryKey: ['epv2-professional', empId] });
       qc.invalidateQueries({ queryKey: ['epv2-overview',     empId] });
-      setEmpDetailsEditing(false);
+      setEmpDetailsEditing(false); onUnsavedChange?.(false);
     },
     onError: e => toast(e.message, 'error'),
   });
@@ -704,7 +721,7 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
       weekly_off_day:     prof.weekly_off_day     || '',
       work_hours_per_day: prof.work_hours_per_day || 8,
     });
-    setOrgStructEditing(true);
+    setOrgStructEditing(true); onUnsavedChange?.(true);
   };
 
   const openSkill = (rec = {}) => { setForm({ skill_name: rec.skill_name||'', skill_category: rec.skill_category||'technical', proficiency_level: rec.proficiency_level||'intermediate', years_of_experience: rec.years_of_experience||'', can_read: rec.can_read||false, can_write: rec.can_write||false, can_speak: rec.can_speak||false }); setSkillModal(rec); };
@@ -720,27 +737,35 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
       {/* Employment Details — inline editing */}
       <SectionCard title="Employment Details" icon={Briefcase}
-        action={isAdmin && !empDetailsEditing && <AdminBtn onClick={() => {
-          setForm({
-            employee_id:     prof.employee_id     || '',
-            department_ids:  prof.departments?.map(d => d.id) || [],
-            position:        prof.position        || '',
-            grade:           prof.grade           || '',
-            pay_cadre:       prof.pay_cadre       || '',
-            cost_centre:     prof.cost_centre     || '',
-            division:        prof.division        || '',
-            sub_division:    prof.sub_division    || '',
-            employment_type: prof.employment_type || '',
-            work_mode:       prof.work_mode       || '',
-            employee_status: prof.employee_status || '',
-            reporting_to:    prof.reporting_to    || '',
-            hod_id:          prof.hod_id          || '',
-            confirmation_date: prof.confirmation_date?.slice(0,10) || '',
-            probation_applicable: prof.probation_applicable || false,
-            probation_months:    prof.probation_months     || '',
-          });
-          setEmpDetailsEditing(true);
-        }} />}>
+        action={isAdmin && (empDetailsEditing
+          ? <div className="flex items-center gap-1.5">
+              <button className="btn btn-outline py-0.5 px-2 text-xs h-auto" onClick={() => { setEmpDetailsEditing(false); onUnsavedChange?.(false); }}>Cancel</button>
+              <button className="btn btn-primary py-0.5 px-2 text-xs h-auto" onClick={() => { const { employee_id: _eid, ...saveable } = form; empDetailsMut.mutate(saveable); }} disabled={empDetailsMut.isPending}>
+                {empDetailsMut.isPending ? <Loader2 size={11} className="animate-spin" /> : <><Save size={11} />Save</>}
+              </button>
+            </div>
+          : <AdminBtn onClick={() => {
+              setForm({
+                employee_id:     prof.employee_id     || '',
+                department_ids:  prof.departments?.map(d => d.id) || [],
+                position:        prof.position        || '',
+                grade:           prof.grade           || '',
+                pay_cadre:       prof.pay_cadre       || '',
+                cost_centre:     prof.cost_centre     || '',
+                division:        prof.division        || '',
+                sub_division:    prof.sub_division    || '',
+                employment_type: prof.employment_type || '',
+                work_mode:       prof.work_mode       || '',
+                employee_status: prof.employee_status || '',
+                reporting_to:    prof.reporting_to    || '',
+                hod_id:          prof.hod_id          || '',
+                confirmation_date: prof.confirmation_date?.slice(0,10) || '',
+                probation_applicable: prof.probation_applicable || false,
+                probation_months:    prof.probation_months     || '',
+              });
+              setEmpDetailsEditing(true); onUnsavedChange?.(true);
+            }} />
+        )}>
         {empDetailsEditing ? (
           <div>
             <div className="grid grid-cols-2 gap-3">
@@ -794,7 +819,7 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
               )}
             </div>
             <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-[#f0f3ff]">
-              <button className="btn btn-outline" onClick={() => setEmpDetailsEditing(false)}>Cancel</button>
+              <button className="btn btn-outline" onClick={() => { setEmpDetailsEditing(false); onUnsavedChange?.(false); }}>Cancel</button>
               <button className="btn btn-primary" onClick={() => {
                 // BUG_224/225: exclude employee_id (read-only, system-generated) from the save payload
                 const { employee_id: _eid, ...saveable } = form;
@@ -823,7 +848,16 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
 
       {/* Org Structure */}
       <SectionCard title="Organisation Structure" icon={Users}
-        action={isAdmin && !orgStructEditing && <AdminBtn onClick={openOrgStruct} />}>
+        action={isAdmin && (orgStructEditing
+          ? <div className="flex items-center gap-1.5">
+              <button className="btn btn-outline py-0.5 px-2 text-xs h-auto" onClick={() => { setOrgStructEditing(false); onUnsavedChange?.(false); }}>Cancel</button>
+              <button className="btn btn-primary py-0.5 px-2 text-xs h-auto" onClick={() => orgStructMut.mutate(form)} disabled={orgStructMut.isPending}>
+                {orgStructMut.isPending ? <Loader2 size={11} className="animate-spin" /> : <><Save size={11} />Save</>}
+              </button>
+            </div>
+          : <AdminBtn onClick={openOrgStruct} />
+        )}>
+
         {orgStructEditing ? (
           <div>
             <div className="grid grid-cols-2 gap-3">
@@ -863,7 +897,7 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp }) {
               </div>
             </div>
             <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-[#f0f3ff]">
-              <button className="btn btn-outline" onClick={() => setOrgStructEditing(false)}>Cancel</button>
+              <button className="btn btn-outline" onClick={() => { setOrgStructEditing(false); onUnsavedChange?.(false); }}>Cancel</button>
               <button className="btn btn-primary" onClick={() => orgStructMut.mutate(form)} disabled={orgStructMut.isPending}>
                 {orgStructMut.isPending ? <><Loader2 size={13} className="animate-spin mr-1" />Saving…</> : <><Save size={13} className="mr-1" />Save</>}
               </button>
@@ -2589,7 +2623,20 @@ export default function EmployeeProfileV2({ emp, onBack, onEdit }) {
   const branchingEnabled = useFeature('branches');
 
   const now = new Date();
-  const [currentTab, setCurrentTab] = useState('overview');
+  const [currentTab,       setCurrentTab]       = useState('overview');
+  // BUG_241: track unsaved edits so tab-switching shows a warning
+  const [hasUnsaved,       setHasUnsaved]       = useState(false);
+  const [pendingTabId,     setPendingTabId]     = useState(null);
+  const [showDiscardWarn,  setShowDiscardWarn]  = useState(false);
+
+  function handleTabChange(tabId) {
+    if (hasUnsaved && tabId !== currentTab) {
+      setPendingTabId(tabId);
+      setShowDiscardWarn(true);
+    } else {
+      setCurrentTab(tabId);
+    }
+  }
 
   const curMonth = now.getMonth() + 1;
   const curYear  = now.getFullYear();
@@ -2811,7 +2858,7 @@ export default function EmployeeProfileV2({ emp, onBack, onEdit }) {
               const Icon     = tab.icon;
               const isActive = currentTab === tab.id;
               return (
-                <button key={tab.id} onClick={() => setCurrentTab(tab.id)}
+                <button key={tab.id} onClick={() => handleTabChange(tab.id)}
                   className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-xl text-[0.8rem] font-semibold text-left transition-all mb-0.5 last:mb-0 ${
                     isActive
                       ? 'bg-[#3525cd] text-white shadow-sm'
@@ -2834,7 +2881,7 @@ export default function EmployeeProfileV2({ emp, onBack, onEdit }) {
               const Icon     = tab.icon;
               const isActive = currentTab === tab.id;
               return (
-                <button key={tab.id} onClick={() => setCurrentTab(tab.id)}
+                <button key={tab.id} onClick={() => handleTabChange(tab.id)}
                   className={`flex items-center gap-1.5 px-4 py-3 text-sm font-semibold whitespace-nowrap border-b-2 transition-colors flex-shrink-0 ${
                     isActive
                       ? 'border-[#3525cd] text-[#3525cd]'
@@ -2893,8 +2940,8 @@ export default function EmployeeProfileV2({ emp, onBack, onEdit }) {
                 )}
               </div>
             )}
-            {currentTab === 'personal'     && <PersonalTab                 empId={emp.id} isAdmin={isAdmin} />}
-            {currentTab === 'professional' && <ProfessionalTab             empId={emp.id} isAdmin={isAdmin} onEdit={onEdit} emp={emp} />}
+            {currentTab === 'personal'     && <PersonalTab                 empId={emp.id} isAdmin={isAdmin} onUnsavedChange={setHasUnsaved} />}
+            {currentTab === 'professional' && <ProfessionalTab             empId={emp.id} isAdmin={isAdmin} onEdit={onEdit} emp={emp} onUnsavedChange={setHasUnsaved} />}
             {currentTab === 'education'    && <EducationTab                empId={emp.id} isAdmin={isAdmin} />}
             {currentTab === 'compensation' && <CompensationTab             empId={emp.id} isAdmin={isAdmin} onEdit={onEdit} emp={emp} />}
             {currentTab === 'compliance'   && <ComplianceTab               empId={emp.id} isAdmin={isAdmin} onEdit={onEdit} emp={emp} />}
@@ -2905,6 +2952,36 @@ export default function EmployeeProfileV2({ emp, onBack, onEdit }) {
           </div>
         </div>
       </div>
+
+      {/* BUG_241: Unsaved changes warning — shown when navigating tabs while editing */}
+      {showDiscardWarn && (
+        <div className="fixed inset-0 z-[9999] flex items-center justify-center bg-black/40 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl border border-[#c7c4d8] shadow-2xl p-6 w-full max-w-sm mx-4">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-10 h-10 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0">
+                <AlertTriangle size={20} className="text-amber-600" />
+              </div>
+              <div>
+                <p className="text-sm font-bold text-[#151c27]">Unsaved Changes</p>
+                <p className="text-xs text-[#777587] mt-0.5">You have unsaved changes in this section.</p>
+              </div>
+            </div>
+            <div className="flex gap-3">
+              <button className="flex-1 btn btn-outline text-sm" onClick={() => setShowDiscardWarn(false)}>
+                Stay &amp; Save
+              </button>
+              <button className="flex-1 btn btn-primary text-sm bg-rose-600 hover:bg-rose-700 border-rose-600"
+                onClick={() => {
+                  setShowDiscardWarn(false);
+                  setHasUnsaved(false);
+                  setCurrentTab(pendingTabId);
+                }}>
+                Discard Changes
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
