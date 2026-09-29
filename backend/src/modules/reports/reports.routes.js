@@ -8,26 +8,30 @@ const { withBranchContext } = require('../../middleware/branchContext');
 const { resolveEmployeeIds, getFilterState, getBranchUserSQLFilter } = require('../../utils/branchFilter');
 
 const CSV_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+const CSV_BOM = '﻿'; // UTF-8 BOM — tells Excel to interpret as UTF-8
+
 function fmtDateForCSV(ds) {
   if (!ds) return '';
   const s = String(ds).slice(0, 10);
   const d = new Date(s + 'T12:00:00');
   if (isNaN(d.getTime())) return s;
-  return `${String(d.getDate()).padStart(2,'0')}-${CSV_MONTHS[d.getMonth()]}-${d.getFullYear()}`;
+  // Wrap in Excel formula prefix so Excel treats the value as text, not a date serial.
+  // This prevents the "######" column-width issue when Excel auto-formats dates.
+  const formatted = `${String(d.getDate()).padStart(2,'0')}-${CSV_MONTHS[d.getMonth()]}-${d.getFullYear()}`;
+  return `="${formatted}"`;
 }
 
 function toCSV(rows, cols) {
-  const header = cols.map(c => c.label).join(',');
+  const header = cols.map(c => `"${c.label}"`).join(',');
   const lines  = rows.map(r => cols.map(c => {
     let v = r[c.key] ?? '';
-    // Format ISO date strings as DD-MMM-YYYY so Excel won't auto-convert them
     if (c.isDate && v && typeof v === 'string' && /^\d{4}-\d{2}-\d{2}/.test(v)) {
       v = fmtDateForCSV(v);
     }
     const s = String(v);
     return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
   }).join(','));
-  return [header, ...lines].join('\n');
+  return CSV_BOM + [header, ...lines].join('\n');
 }
 
 // ── Deployment-aware joining date SQL expression ──────────────────────────────

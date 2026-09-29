@@ -296,7 +296,7 @@ export default function HolidaysPage() {
                           <div className="font-black text-[#151c27] truncate">{h.name}</div>
                           {h.description && <div className="text-xs text-[#777587] mt-0.5 truncate">{h.description}</div>}
                         </div>
-                        <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+                        <div className="flex items-center gap-1.5 flex-shrink-0 flex-nowrap justify-end">
                           <span className={`badge ${cfg.bg} ${cfg.text} ${cfg.border} flex items-center gap-1 border`}>
                             {cfg.icon}<span className="hidden sm:inline">{cfg.label}</span>
                           </span>

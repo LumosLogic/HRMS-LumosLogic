@@ -2325,11 +2325,13 @@ function fmtDateForCSV(dateStr) {
   const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
   const d = new Date(String(dateStr).slice(0, 10) + 'T12:00:00');
   if (isNaN(d.getTime())) return String(dateStr);
-  return `${String(d.getDate()).padStart(2,'0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
+  // Excel formula prefix prevents auto-date-conversion and the resulting ###### display
+  const formatted = `${String(d.getDate()).padStart(2,'0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
+  return `="${formatted}"`;
 }
 
 function exportEmployeesCSV(rows, filename = 'employees.csv') {
-  const headers = 'Name,Email,Department,Position,Employment Type,Status,Work Mode,Joining Date';
+  const headers = '"Name","Email","Department","Position","Employment Type","Status","Work Mode","Joining Date"';
   const lines = rows.map(e =>
     [
       e.name,
@@ -2344,8 +2346,8 @@ function exportEmployeesCSV(rows, filename = 'employees.csv') {
       .map(v => `"${(v || '').toString().replace(/"/g, '""')}"`)
       .join(',')
   );
-  const csv = [headers, ...lines].join('\n');
-  const blob = new Blob([csv], { type: 'text/csv' });
+  const csv = '﻿' + [headers, ...lines].join('\n');   // BOM + quoted headers
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url  = URL.createObjectURL(blob);
   const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
   URL.revokeObjectURL(url);

@@ -745,7 +745,8 @@ function downloadSalaryStructuresCSV(employees) {
     const fmtD = ds => {
       if (!ds) return '';
       const d = new Date(String(ds).slice(0, 10) + 'T12:00:00');
-      return isNaN(d.getTime()) ? String(ds) : `${String(d.getDate()).padStart(2,'0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
+      if (isNaN(d.getTime())) return String(ds);
+      return `="${String(d.getDate()).padStart(2,'0')}-${months[d.getMonth()]}-${d.getFullYear()}"`;
     };
     return [
       e.employee_id || e.id || '',
@@ -766,7 +767,7 @@ function downloadSalaryStructuresCSV(employees) {
     return s.includes(',') || s.includes('"') || s.includes('\n') ? `"${s.replace(/"/g, '""')}"` : s;
   };
 
-  const csv = [headers, ...rows].map(r => r.map(escape).join(',')).join('\r\n');
+  const csv = '﻿' + [headers, ...rows].map(r => r.map(escape).join(',')).join('\r\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url  = URL.createObjectURL(blob);
   const a    = document.createElement('a');

@@ -1359,9 +1359,10 @@ function LeaveSummaryTable({ employees, leaves, policies, filterStart, filterEnd
             <Download size={13} />Export CSV
           </button>
           {cyclePeriod && (
-            <div className="flex items-center gap-1.5 text-[0.7rem] font-semibold text-[#464555] bg-[#f8f9ff] border border-[#e7eefe] rounded-lg px-3 py-1.5">
-              <Calendar size={12} className="text-[#3525cd]" />
-              Leave Year: <span className="text-[#3525cd] font-black">{cyclePeriod}</span>
+            <div className="flex items-center gap-1.5 text-[0.7rem] font-semibold text-[#464555] bg-[#f8f9ff] border border-[#e7eefe] rounded-lg px-3 py-1.5 min-w-0 max-w-full sm:max-w-none flex-wrap">
+              <Calendar size={12} className="text-[#3525cd] flex-shrink-0" />
+              <span className="whitespace-nowrap">Leave Year:</span>
+              <span className="text-[#3525cd] font-black whitespace-nowrap">{cyclePeriod}</span>
             </div>
           )}
         </div>

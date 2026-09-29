@@ -239,6 +239,45 @@ function PunchLogRow({ employee_pin, user_id, date, name, colSpan }) {
 // ── Pagination bar ─────────────────────────────────────────────────────────────
 const PAGE_SIZE_OPTIONS = [10, 25, 50, 100];
 
+// Bug-018: checkbox dropdown — replaces the unintuitive native <select multiple>
+function LeaveTypeDropdown({ types, selected, onChange }) {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    function handleClick(e) { if (ref.current && !ref.current.contains(e.target)) setOpen(false); }
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+  const toggle = t => onChange(selected.includes(t) ? selected.filter(x => x !== t) : [...selected, t]);
+  const label = selected.length === 0 ? 'All Types' : selected.length === 1
+    ? selected[0].charAt(0).toUpperCase() + selected[0].slice(1)
+    : `${selected.length} Types`;
+  return (
+    <div className="relative" ref={ref}>
+      <button onClick={() => setOpen(o => !o)}
+        className="form-control w-auto text-xs py-1.5 flex items-center gap-2 cursor-pointer min-w-[110px]">
+        <span className="flex-1 text-left">{label}</span>
+        <ChevronDown size={11} className={`transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-full mt-1 z-[200] bg-white border border-[#c7c4d8] rounded-xl shadow-xl py-1.5 min-w-[150px]">
+          {selected.length > 0 && (
+            <button className="w-full px-3 py-1 text-left text-[0.7rem] text-rose-500 font-semibold hover:bg-rose-50"
+              onClick={() => onChange([])}>Clear all</button>
+          )}
+          {types.map(t => (
+            <label key={t} className="flex items-center gap-2.5 px-3 py-1.5 hover:bg-[#f0f3ff] cursor-pointer">
+              <input type="checkbox" checked={selected.includes(t)} onChange={() => toggle(t)}
+                className="accent-[#3525cd] cursor-pointer" />
+              <span className="text-xs font-semibold text-[#464555] capitalize">{t}</span>
+            </label>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Pagination({ page, totalPages, totalCount, pageSize, onPageChange, onPageSize, label = 'records' }) {
   const delta = 2;
   const start = Math.max(1, page - delta);
@@ -836,19 +875,12 @@ export default function Reports() {
                 <option value="rejected">Rejected</option>
                 <option value="cancelled">Cancelled</option>
               </select>
-              <select
-                multiple
-                size={Math.min(LEAVE_TYPES.length + 1, 5)}
-                value={leaveTypeFilter ? leaveTypeFilter.split(',') : []}
-                onChange={e => {
-                  const vals = Array.from(e.target.selectedOptions, o => o.value);
-                  setLeaveTypeFilter(vals.join(','));
-                }}
-                title="Hold Ctrl/Cmd to select multiple types"
-                className="form-control w-auto text-xs"
-              >
-                {LEAVE_TYPES.map(t => <option key={t} value={t} className="capitalize">{t}</option>)}
-              </select>
+              {/* Bug-018: checkbox dropdown replaces native multi-select */}
+              <LeaveTypeDropdown
+                types={LEAVE_TYPES}
+                selected={leaveTypeFilter ? leaveTypeFilter.split(',').filter(Boolean) : []}
+                onChange={vals => setLeaveTypeFilter(vals.join(','))}
+              />
             </>
           )}
 

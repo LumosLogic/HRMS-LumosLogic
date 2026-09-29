@@ -20,6 +20,11 @@ router.get('/', auth, withBranchContext, async (req, res) => {
     // adapter's not_in wraps with (IS NULL OR NOT IN) so NULL-status = active employees included
     const branchState = getFilterState(req.branchContext);
 
+    // Bug-001: allEmpCount includes ALL statuses for the Total Employees KPI.
+    // empQuery (below) keeps the active-only filter for attendance/activity use.
+    let allEmpCountQuery = db.from('users')
+      .select('id').eq('role', 'employee').eq('organization_id', orgId(req));
+
     let empQuery = db.from('users')
       .select('id, name, avatar_color, department, created_at')
       .eq('role', 'employee').eq('organization_id', orgId(req))
@@ -36,13 +41,19 @@ router.get('/', auth, withBranchContext, async (req, res) => {
           myToday: null, today, isToday, newJoiners: [],
         });
       }
-      if (branchState.type === 'specific') empQuery = empQuery.eq('branch_id', branchState.branchId);
-      else if (branchState.type === 'multi') empQuery = empQuery.in('branch_id', branchState.branchIds);
+      if (branchState.type === 'specific') {
+        empQuery = empQuery.eq('branch_id', branchState.branchId);
+        allEmpCountQuery = allEmpCountQuery.eq('branch_id', branchState.branchId);
+      } else if (branchState.type === 'multi') {
+        empQuery = empQuery.in('branch_id', branchState.branchIds);
+        allEmpCountQuery = allEmpCountQuery.in('branch_id', branchState.branchIds);
+      }
       // 'all': no additional filter
     }
 
     const { data: allEmployees } = await empQuery;
-    const totalEmployees = (allEmployees || []).length;
+    const { data: allEmpData }   = await allEmpCountQuery;
+    const totalEmployees = (allEmpData || []).length;   // Bug-001: counts ALL statuses
     const empIds         = (allEmployees || []).map(e => e.id);
 
     // ── 2. Selected date attendance — employees only ─────────────────────────

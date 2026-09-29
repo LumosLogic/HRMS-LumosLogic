@@ -233,13 +233,14 @@ export function OrgCalendarPanel({ initialDate, initialDayModal = null, initialD
               const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
               const fmtD = ds => {
                 const d = new Date(ds + 'T12:00:00');
-                return isNaN(d.getTime()) ? ds : `${String(d.getDate()).padStart(2,'0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
+                if (isNaN(d.getTime())) return ds;
+                return `="${String(d.getDate()).padStart(2,'0')}-${months[d.getMonth()]}-${d.getFullYear()}"`;
               };
               const rows = [['Date','Employee','Status','Check In','Check Out']];
               Object.entries(grouped).forEach(([d, recs]) => {
                 recs.forEach(r => rows.push([fmtD(d), r.name || '', r.status || '', r.check_in || '', r.check_out || '']));
               });
-              const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+              const csv = '﻿' + rows.map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
               const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
               const url = URL.createObjectURL(blob);
               const a = document.createElement('a');
@@ -349,20 +350,20 @@ function AdminCellContent({ ds, records, total }) {
   if (isFuture) {
     if (onLeave + half + wfh === 0) return null;
     return (
-      <div className="flex flex-col gap-0.5 mt-0.5">
-        {onLeave > 0 && <span className="text-[0.6rem] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">{onLeave} Leave</span>}
-        {half    > 0 && <span className="text-[0.6rem] font-bold px-1.5 py-0.5 rounded bg-cyan-100  text-cyan-700">{half} Half Day</span>}
-        {wfh     > 0 && <span className="text-[0.6rem] font-bold px-1.5 py-0.5 rounded bg-blue-100  text-blue-700">{wfh} WFH</span>}
+      <div className="flex flex-col gap-0.5 mt-0.5 overflow-hidden">
+        {onLeave > 0 && <span className="text-[0.6rem] font-bold px-1 py-0.5 rounded bg-amber-100 text-amber-700 truncate whitespace-nowrap">{onLeave} Leave</span>}
+        {half    > 0 && <span className="text-[0.6rem] font-bold px-1 py-0.5 rounded bg-cyan-100  text-cyan-700 truncate whitespace-nowrap">{half} Half</span>}
+        {wfh     > 0 && <span className="text-[0.6rem] font-bold px-1 py-0.5 rounded bg-blue-100  text-blue-700 truncate whitespace-nowrap">{wfh} WFH</span>}
       </div>
     );
   }
   return (
-    <div className="flex flex-col gap-0.5 mt-0.5">
-      {present > 0 && <span className="text-[0.6rem] font-bold px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700">{present} Present</span>}
-      {onLeave > 0 && <span className="text-[0.6rem] font-bold px-1.5 py-0.5 rounded bg-amber-100   text-amber-700">{onLeave} Leave</span>}
-      {absent  > 0 && <span className="text-[0.6rem] font-bold px-1.5 py-0.5 rounded bg-rose-100    text-rose-700">{absent} Absent</span>}
-      {half    > 0 && <span className="text-[0.6rem] font-bold px-1.5 py-0.5 rounded bg-cyan-100    text-cyan-700">{half} Half Day</span>}
-      {wfh     > 0 && <span className="text-[0.6rem] font-bold px-1.5 py-0.5 rounded bg-blue-100    text-blue-700">{wfh} WFH</span>}
+    <div className="flex flex-col gap-0.5 mt-0.5 overflow-hidden">
+      {present > 0 && <span className="text-[0.6rem] font-bold px-1 py-0.5 rounded bg-emerald-100 text-emerald-700 truncate whitespace-nowrap">{present} Present</span>}
+      {onLeave > 0 && <span className="text-[0.6rem] font-bold px-1 py-0.5 rounded bg-amber-100   text-amber-700 truncate whitespace-nowrap">{onLeave} Leave</span>}
+      {absent  > 0 && <span className="text-[0.6rem] font-bold px-1 py-0.5 rounded bg-rose-100    text-rose-700 truncate whitespace-nowrap">{absent} Absent</span>}
+      {half    > 0 && <span className="text-[0.6rem] font-bold px-1 py-0.5 rounded bg-cyan-100    text-cyan-700 truncate whitespace-nowrap">{half} Half</span>}
+      {wfh     > 0 && <span className="text-[0.6rem] font-bold px-1 py-0.5 rounded bg-blue-100    text-blue-700 truncate whitespace-nowrap">{wfh} WFH</span>}
     </div>
   );
 }

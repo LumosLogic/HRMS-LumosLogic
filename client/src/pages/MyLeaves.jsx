@@ -677,7 +677,8 @@ export default function MyLeaves() {
     const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
     const d = new Date(String(dateStr).slice(0, 10) + 'T12:00:00');
     if (isNaN(d.getTime())) return String(dateStr);
-    return `${String(d.getDate()).padStart(2,'0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
+    const formatted = `${String(d.getDate()).padStart(2,'0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
+    return `="${formatted}"`;
   }
   function exportCSV() {
     const headers = ['Type', 'Status', 'From', 'To', 'Days', 'Applied Date', 'Reason'];
@@ -690,7 +691,7 @@ export default function MyLeaves() {
       const reason = l.reason ? `"${l.reason.replace(/"/g, '""')}"` : '';
       return [type, l.status, fmtDateForCSV(l.start_date), fmtDateForCSV(l.end_date), wdays, appliedDate, reason].join(',');
     });
-    const csv = [headers.join(','), ...rows].join('\n');
+    const csv = '﻿' + [headers.join(','), ...rows].join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url  = URL.createObjectURL(blob);
     const link = document.createElement('a');

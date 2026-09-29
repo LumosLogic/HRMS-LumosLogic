@@ -724,7 +724,7 @@ function SharedDocumentsTab({ onUploadClick }) {
             <p className="text-sm font-black text-[#151c27]">Shared Documents ({filtered.length})</p>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <table className="w-full text-left text-xs min-w-[560px]">
               <thead className="bg-[#f9f9ff] border-b border-[#c7c4d8]">
                 <tr>
                   {[
@@ -1781,7 +1781,7 @@ function VerificationQueueTab() {
             </p>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <table className="w-full text-left text-xs min-w-[560px]">
               <thead className="bg-[#f9f9ff] border-b border-[#c7c4d8]">
                 <tr>
                   {['EMPLOYEE', 'DOCUMENT', 'UPLOADED ON', 'STATUS', 'REVIEWED BY', 'ACTIONS'].map(h => (
@@ -2580,7 +2580,7 @@ function EmployeeDocumentsDashboard() {
             <p className="text-sm font-black text-[#151c27]">My Submitted Documents ({uploadedDocs.length})</p>
           </div>
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+            <table className="w-full text-left text-xs min-w-[560px]">
               <thead className="bg-[#f9f9ff] border-b border-[#c7c4d8]">
                 <tr>
                   {['DOCUMENT', 'UPLOADED ON', 'EXPIRY', 'VERSION', 'STATUS', 'REVIEWED BY', 'ACTIONS'].map(h => (
