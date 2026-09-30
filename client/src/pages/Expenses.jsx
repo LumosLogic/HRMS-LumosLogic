@@ -526,47 +526,52 @@ export default function ExpensesPage() {
         ))}
       </div>
 
-      {/* Filter tabs */}
-      <div className="flex gap-2 mb-3 flex-wrap">
+      {/* BUG_255: Filter tabs — uniform height, padding, and consistent selected/unselected state */}
+      <div className="flex items-center gap-2 mb-3 flex-wrap">
         {[
           { key: 'all',              label: 'All' },
           { key: 'pending',          label: 'Pending' },
           { key: 'manager_approved', label: 'Mgr Approved' },
           { key: 'approved',         label: 'Approved' },
           { key: 'rejected',         label: 'Rejected' },
-        ].map(f => (
-          <button key={f.key} onClick={() => setFilter(f.key)}
-            className={`px-4 py-1.5 rounded-full text-xs font-bold border transition-all ${filter === f.key ? 'bg-[#3525cd] text-white border-[#3525cd] shadow-sm' : 'bg-white text-[#464555] border-[#c7c4d8] hover:border-[#3525cd]/40'}`}>
-            {f.label}
-          </button>
-        ))}
+        ].map(f => {
+          const cnt = f.key === 'all' ? allExpenses.length : allExpenses.filter(e => e.status === f.key).length;
+          return (
+            <button key={f.key} onClick={() => setFilter(f.key)}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition-all whitespace-nowrap ${filter === f.key ? 'bg-[#3525cd] text-white border-[#3525cd] shadow-sm' : 'bg-white text-[#464555] border-[#c7c4d8] hover:border-[#3525cd]/40 hover:text-[#3525cd]'}`}>
+              {f.label}
+              {cnt > 0 && <span className={`text-[0.6rem] font-black px-1.5 py-0.5 rounded-full ${filter === f.key ? 'bg-white/20 text-white' : 'bg-[#f0f3ff] text-[#3525cd]'}`}>{cnt}</span>}
+            </button>
+          );
+        })}
       </div>
 
-      {/* ENH_EXP_002: Advanced search/filter bar */}
+      {/* BUG_256: Search/filter bar — consistent styling matching other modules */}
       {(() => {
         const isAdvancedFilterActive = !!(expSearch || expCatFilt || expAmtMin || expAmtMax || expDateFrom || expDateTo);
         return (
-          <div className="flex flex-wrap gap-2 mb-4 p-3 bg-[#f9f9ff] border border-[#e7eefe] rounded-xl">
-            <div className="relative flex-1 min-w-[160px]">
-              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#777587]" />
-              <input className="form-control pl-8 py-1.5 text-xs" placeholder="Search by name, ID…"
+          <div className="flex flex-wrap items-center gap-2 mb-4">
+            {/* BUG_256: search bar consistent with other modules */}
+            <div className="relative flex-1 min-w-[200px]">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#777587] pointer-events-none" />
+              <input className="form-control pl-9 py-2 text-sm" placeholder="Search by title, ID…"
                 value={expSearch} onChange={e => setExpSearch(e.target.value)} />
             </div>
-            <select className="form-control py-1.5 text-xs w-auto" value={expCatFilt} onChange={e => setExpCatFilt(e.target.value)}>
+            <select className="form-control py-2 text-sm w-auto" value={expCatFilt} onChange={e => setExpCatFilt(e.target.value)}>
               <option value="">All Categories</option>
               {CATEGORIES.map(c => <option key={c} value={c}>{CAT_LABELS[c]}</option>)}
             </select>
             <div className="flex items-center gap-1.5">
-              <input type="number" className="form-control py-1.5 text-xs w-24" placeholder="Min ₹" value={expAmtMin} onChange={e => setExpAmtMin(e.target.value)} />
+              <input type="number" className="form-control py-2 text-sm w-24" placeholder="Min ₹" value={expAmtMin} onChange={e => setExpAmtMin(e.target.value)} />
               <span className="text-xs text-[#777587]">–</span>
-              <input type="number" className="form-control py-1.5 text-xs w-24" placeholder="Max ₹" value={expAmtMax} onChange={e => setExpAmtMax(e.target.value)} />
+              <input type="number" className="form-control py-2 text-sm w-24" placeholder="Max ₹" value={expAmtMax} onChange={e => setExpAmtMax(e.target.value)} />
             </div>
-            <DateInput value={expDateFrom} onChange={setExpDateFrom} className="py-1.5 text-xs w-auto" placeholder="From date" title="Date from" />
-            <DateInput value={expDateTo} onChange={setExpDateTo} className="py-1.5 text-xs w-auto" placeholder="To date" title="Date to" />
+            <DateInput value={expDateFrom} onChange={setExpDateFrom} className="py-2 text-sm w-auto" placeholder="From date" title="Date from" />
+            <DateInput value={expDateTo} onChange={setExpDateTo} className="py-2 text-sm w-auto" placeholder="To date" title="Date to" />
             {isAdvancedFilterActive && (
-              <button className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-600 border border-rose-200 bg-rose-50 hover:bg-rose-100 transition-colors"
+              <button className="flex items-center gap-1 px-3 py-2 rounded-lg text-xs font-bold text-rose-600 border border-rose-200 bg-rose-50 hover:bg-rose-100 transition-colors"
                 onClick={() => { setExpSearch(''); setExpCatFilt(''); setExpAmtMin(''); setExpAmtMax(''); setExpDateFrom(''); setExpDateTo(''); }}>
-                <X size={11} />Clear
+                <X size={12} />Clear
               </button>
             )}
           </div>

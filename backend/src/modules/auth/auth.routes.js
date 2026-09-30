@@ -48,14 +48,25 @@ router.post('/login', rateLimiter(LIMITS.LOGIN), async (req, res) => {
     if (user.status === 'inactive') {
       return res.status(403).json({ error: 'Your account has been deactivated. Please contact HR to restore access.' });
     }
-    // Block terminated/inactive employees. 'resigned' is excluded — they are in notice period
-    // and must retain login access until their last working day (handled by a daily cron).
+    // Block terminated/inactive employees.
     const blockedEmployeeStatuses = ['inactive', 'terminated'];
     if (blockedEmployeeStatuses.includes(user.employee_status)) {
       const msg = user.employee_status === 'terminated'
         ? 'Your access has been revoked. Please contact HR for assistance.'
         : 'Your account is inactive. Please contact HR to restore access.';
       return res.status(403).json({ error: msg });
+    }
+    // BUG_219: block resigned employees whose last working day has passed
+    if (user.employee_status === 'resigned') {
+      const today = new Date().toISOString().split('T')[0];
+      const { data: exitReq } = await db.from('exit_requests')
+        .select('last_working_day').eq('user_id', user.id).eq('status', 'approved')
+        .order('created_at', { ascending: false }).limit(1);
+      const lwd = exitReq?.[0]?.last_working_day;
+      if (lwd && lwd < today) {
+        db.from('users').update({ employee_status: 'inactive', status: 'inactive' }).eq('id', user.id).then(() => {});
+        return res.status(403).json({ error: 'Your notice period has ended. System access has been revoked. Please contact HR for assistance.' });
+      }
     }
 
     // Record successful login (fire and forget)

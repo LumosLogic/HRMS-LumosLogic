@@ -38,8 +38,12 @@ router.get('/', auth, withBranchContext, async (req, res) => {
           // No employees in branch — show only branch-owned unassigned assets
           q = q.or(`branch_id.eq.${bid},branch_id.is.null`).is('assigned_to', null);
         } else if (empIds !== null) {
-          // Show assets assigned to branch employees OR unassigned assets owned by this branch OR unowned (org-wide)
-          q = q.or(`assigned_to.in.(${empIds.join(',')}),branch_id.eq.${bid},and(assigned_to.is.null,branch_id.is.null)`);
+          // BUG_257: pg-adapter OR parser splits by comma, so nested and() sub-expressions
+          // break parsing. Use a broad OR and let in-JS post-filter handle the refinement.
+          // Fetch: (1) assets assigned to this branch's employees, (2) branch-owned assets,
+          // (3) unassigned org-wide assets — then return all of them.
+          const empOr = `assigned_to.in.(${empIds.join(',')})`;
+          q = q.or(`${empOr},branch_id.eq.${bid},branch_id.is.null`);
         }
       } else if (empIds !== null && empIds.length === 0) {
         q = q.is('assigned_to', null);

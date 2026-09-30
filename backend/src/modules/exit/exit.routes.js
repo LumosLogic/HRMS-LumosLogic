@@ -228,12 +228,11 @@ router.put('/:id', auth, hasPermission('exit', 'manage'), async (req, res) => {
       // On approval: mark employee as resigned (notice period active, not yet blocked).
       // A daily cron will transition resigned→inactive once last_working_day passes.
       if (updates.status === 'approved') {
-        db.from('users')
+        // BUG_218: await this update so the status change is guaranteed before responding.
+        await db.from('users')
           .update({ employee_status: 'resigned' })
           .eq('id', current.user_id)
-          .eq('organization_id', oId)
-          .then(() => {})
-          .catch(() => {});
+          .eq('organization_id', oId);
 
         // Notify branch-scoped admins of the approved exit — rewritten to avoid messy chaining
         ;(async () => {
@@ -256,12 +255,20 @@ router.put('/:id', auth, hasPermission('exit', 'manage'), async (req, res) => {
           } catch { /* fire-and-forget */ }
         })();
 
-        // Trigger offboarding checklist (requires phase_d_offboarding_checklists.sql migration)
-        initOffboarding(current.user_id, oId).catch(() => {});
+        // Trigger offboarding checklist — idempotent; table guaranteed by startup migration
+        initOffboarding(current.user_id, oId).catch(e =>
+          console.error('[exit] initOffboarding failed:', e.message)
+        );
       }
     }
     res.json(data);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    // BUG_155: never expose raw DB errors (column/relation errors) to the client
+    const safe = /column|relation|does not exist|syntax error/i.test(err.message)
+      ? 'Unable to update exit request. Please contact your administrator.'
+      : (err.message || 'Server error');
+    res.status(500).json({ error: safe });
+  }
 });
 
 // DELETE /api/exit/:id — employee can withdraw their own pending resignation; admin can delete any pending.

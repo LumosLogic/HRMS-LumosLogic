@@ -2408,6 +2408,7 @@ export default function Employees() {
   // BUG_059: statusFilter is now a Set of selected statuses (default: active + probation)
   const [statusFilter,  setStatusFilter] = useState(DEFAULT_STATUS_FILTER);
   const [typeFilter,    setTypeFilter]   = useState('');
+  const [branchFilter,  setBranchFilter] = useState('');
   const [sortBy,        setSortBy]       = useState('name');
   const [sortDir,      setSortDir]      = useState('asc');
   const [viewMode,     setViewMode]     = useState('card');

@@ -59,18 +59,29 @@ async function auth(req, res, next) {
       });
     }
 
-    // BUG_181: For employee-role tokens, do a lightweight DB check on status.
+    // BUG_181/219: For employee-role tokens, do a lightweight DB check on status.
     // Only employees need this check — admins/root_admins are managed differently.
-    // Cache miss is acceptable because status changes are rare.
     if (decoded.role === 'employee') {
       try {
         const { rows } = await pool.query(
-          `SELECT employee_status FROM users WHERE id = $1 LIMIT 1`,
+          `SELECT u.employee_status,
+                  (SELECT last_working_day FROM exit_requests
+                    WHERE user_id = u.id AND status = 'approved'
+                    ORDER BY created_at DESC LIMIT 1) AS last_working_day
+           FROM users u WHERE u.id = $1 LIMIT 1`,
           [decoded.id]
         );
         const status = rows[0]?.employee_status;
-        if (status && INACTIVE_STATUSES.includes(status)) {
+        const lwd    = rows[0]?.last_working_day;
+        const today  = new Date().toISOString().split('T')[0];
+        // BUG_219: block resigned employees whose notice period has ended
+        const isExpiredResignation = status === 'resigned' && lwd && lwd < today;
+        if (status && (INACTIVE_STATUSES.includes(status) || isExpiredResignation)) {
           _blockedUsers.add(String(decoded.id)); // cache for subsequent requests
+          // Lazily transition to inactive if cron hasn't run yet
+          if (isExpiredResignation) {
+            pool.query(`UPDATE users SET employee_status='inactive', status='inactive' WHERE id=$1`, [decoded.id]).catch(() => {});
+          }
           return res.status(401).json({
             error: 'Your account is currently inactive. Please contact HR/Admin for assistance.',
             code: 'ACCOUNT_INACTIVE',

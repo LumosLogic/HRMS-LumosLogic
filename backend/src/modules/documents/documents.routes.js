@@ -112,7 +112,9 @@ router.get('/', auth, withBranchContext, async (req, res) => {
           const numId = Number(userId);
           if (!empIds.includes(numId)) return res.json([]);
         }
-        query = query.eq('user_id', Number(userId));
+        // BUG_210: also include org-wide shared docs (visibility='all') so they
+        // appear in the employee's profile Compliance tab alongside their own uploads.
+        query = query.or(`user_id.eq.${Number(userId)},visibility.eq.all`);
       } else {
         // Admin browsing all documents — apply branch filter
         const empIds = await resolveEmployeeIds(req.branchContext, oId);

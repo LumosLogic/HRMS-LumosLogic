@@ -100,6 +100,14 @@
   .leave-badge-paternity { @apply bg-[#e7eefe]  text-[#3525cd]   border-[#c7c4d8]; }
   .leave-badge-default   { @apply bg-[#f0f3ff]  text-[#3525cd]   border-[#c7c4d8]; }
 
+  /* ── Remove number input spinners globally (BUG_220) ── */
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type=number] { -moz-appearance: textfield; appearance: textfield; }
+
   /* ── Form controls ── */
   .form-control {
     @apply w-full px-3 py-2.5 border border-[#c7c4d8] rounded-lg text-sm font-medium

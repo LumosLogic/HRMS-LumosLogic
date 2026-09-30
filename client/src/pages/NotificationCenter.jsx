@@ -21,7 +21,7 @@ function getTypeLink(isEmployee, isRootAdmin) {
     announcement:   isEmployee ? '/portal/announcements' : `${prefix}/announcements`,
     asset:          isEmployee ? '/portal/home'          : `${prefix}/assets`,
     // BUG_231: employees should go to their own documents section, not the HR verification queue
-    document:       isEmployee ? '/portal/my-profile?tab=documents' : '/documents?tab=verification',
+    document:       isEmployee ? '/portal/documents' : '/documents?tab=verification',
     leave:          isEmployee ? '/portal/leaves'        : `${prefix}/leaves`,
   };
 }

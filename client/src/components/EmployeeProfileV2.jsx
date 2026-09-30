@@ -1547,9 +1547,10 @@ function ComplianceTab({ empId, isAdmin, onEdit, emp }) {
   const qc = useQueryClient();
   const [docModal,    setDocModal]    = useState(null);
   const [immiModal,   setImmiModal]   = useState(null);
+  const [immiErrors,  setImmiErrors]  = useState({});
   const [statEditing, setStatEditing] = useState(false);
   const [form, setForm] = useState({});
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const set = (k, v) => { setForm(f => ({ ...f, [k]: v })); setImmiErrors(e => ({ ...e, [k]: '' })); };
 
   const statMut = useMutation({
     mutationFn: (body) => apiPut(`/profile/${empId}/statutory`, body),
@@ -1743,18 +1744,21 @@ function ComplianceTab({ empId, isAdmin, onEdit, emp }) {
         action={<AdminBtn onClick={() => openImmi()} label={immigration.length ? 'Edit' : 'Add'} />}>
         {immigration.length === 0 ? <EmptyState icon={Globe} text="No immigration records" /> : (
           immigration.map(i => (
-            <div key={i.id} className="space-y-1">
-              <InfoRow label="Citizenship"       value={i.citizenship} />
-              <InfoRow label="Immigration Type"  value={i.immigration_type} />
+            <div key={i.id} className="grid grid-cols-2 md:grid-cols-3 gap-x-6 gap-y-1 p-3 rounded-xl border border-[#f0f3ff] bg-[#fafaff]">
+              {/* BUG_226: format raw enum values to human-readable labels */}
+              <InfoRow label="Citizenship"       value={i.citizenship ? i.citizenship.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : null} />
+              <InfoRow label="Immigration Type"  value={i.immigration_type ? i.immigration_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : null} />
               <InfoRow label="Immigration No."   value={i.immigration_no} />
               <InfoRow label="Passport Number"   value={i.passport_number} />
-              <InfoRow label="Visa Type"         value={i.visa_type} />
+              <InfoRow label="Visa Type"         value={i.visa_type ? i.visa_type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : null} />
               <InfoRow label="Issue Date"        value={i.issue_date ? fmtDate(i.issue_date) : null} />
               <InfoRow label="Expiry Date"       value={i.expiry_date ? fmtDate(i.expiry_date) : null} />
-              <InfoRow label="Country"           value={i.country} />
+              <InfoRow label="Country"           value={i.country ? i.country.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : null} />
               {i.remarks && <InfoRow label="Remarks" value={i.remarks} />}
               {immigration.length > 1 && (
-                <button onClick={() => delImmi.mutate(i.id)} className="text-xs text-rose-500 mt-2 flex items-center gap-1"><Trash2 size={11}/>Remove</button>
+                <div className="col-span-full mt-2">
+                  <button onClick={() => delImmi.mutate(i.id)} className="text-xs text-rose-500 flex items-center gap-1"><Trash2 size={11}/>Remove</button>
+                </div>
               )}
             </div>
           ))
@@ -1776,21 +1780,26 @@ function ComplianceTab({ empId, isAdmin, onEdit, emp }) {
         </div>
       </Modal>
 
-      {/* Immigration Modal — BUG_212: validation */}
-      <Modal open={immiModal !== null} onClose={() => setImmiModal(null)} title="Immigration Details" size="lg"
-        footer={<div className="flex justify-end gap-3"><button className="btn btn-outline" onClick={() => setImmiModal(null)}>Cancel</button><button className="btn btn-primary" disabled={immiMut.isPending} onClick={() => {
-          const errs = [];
-          if (!(form.citizenship||'').trim()) { errs.push('Citizenship is required.'); }
-          if (form.passport_number && !/^[A-Z0-9]{6,20}$/i.test(form.passport_number)) { errs.push('Passport Number must be 6–20 alphanumeric characters.'); }
-          if (form.immigration_no && !/^[A-Z0-9\-\/]{3,30}$/i.test(form.immigration_no)) { errs.push('Immigration No. must be 3–30 alphanumeric characters.'); }
-          if (form.issue_date && form.expiry_date && form.expiry_date < form.issue_date) { errs.push('Expiry Date cannot be before Issue Date.'); }
-          if (form.issue_date && form.issue_date > new Date().toISOString().split('T')[0]) { errs.push('Issue Date cannot be in the future.'); }
-          if (errs.length) { toast(errs[0], 'error'); return; }
+      {/* Immigration Modal — BUG_212: validation with inline error messages */}
+      <Modal open={immiModal !== null} onClose={() => { setImmiModal(null); setImmiErrors({}); }} title="Immigration Details" size="lg"
+        footer={<div className="flex justify-end gap-3"><button className="btn btn-outline" onClick={() => { setImmiModal(null); setImmiErrors({}); }}>Cancel</button><button className="btn btn-primary" disabled={immiMut.isPending} onClick={() => {
+          const e = {};
+          if (!(form.citizenship||'').trim()) e.citizenship = 'Citizenship is required.';
+          if (form.passport_number && !/^[A-Z0-9]{6,20}$/i.test(form.passport_number)) e.passport_number = 'Must be 6–20 alphanumeric characters.';
+          if (form.immigration_no && !/^[A-Z0-9\-\/]{3,30}$/i.test(form.immigration_no)) e.immigration_no = 'Must be 3–30 alphanumeric characters.';
+          if (form.issue_date && form.issue_date > new Date().toISOString().split('T')[0]) e.issue_date = 'Issue Date cannot be in the future.';
+          if (form.issue_date && form.expiry_date && form.expiry_date < form.issue_date) e.expiry_date = 'Expiry Date cannot be before Issue Date.';
+          if (Object.keys(e).length) { setImmiErrors(e); toast('Please fix the validation errors.', 'error'); return; }
+          setImmiErrors({});
           immiMut.mutate(form);
         }}>{immiMut.isPending ? 'Saving…' : 'Save'}</button></div>}>
         <div className="grid grid-cols-2 gap-4">
-          {[['citizenship','Citizenship *'],['immigration_type','Immigration Type'],['immigration_no','Immigration No.'],['passport_number','Passport Number'],['visa_type','Visa Type'],['issue_date','Issue Date','date'],['expiry_date','Expiry Date','date'],['country','Country'],['remarks','Remarks']].map(([k,l,t])=>(
-            <div key={k}><label className="form-label">{l}</label><input className="form-control" type={t||'text'} value={form[k]||''} onChange={e=>set(k,e.target.value)}/></div>
+          {[['citizenship','Citizenship','text',true],['immigration_type','Immigration Type','text',false],['immigration_no','Immigration No.','text',false],['passport_number','Passport Number','text',false],['visa_type','Visa Type','text',false],['issue_date','Issue Date','date',false],['expiry_date','Expiry Date','date',false],['country','Country','text',false],['remarks','Remarks','text',false]].map(([k,l,t,req])=>(
+            <div key={k}>
+              <label className="form-label">{l}{req && <span className="text-rose-500 ml-0.5">*</span>}</label>
+              <input className={`form-control ${immiErrors[k] ? 'border-rose-400 focus:border-rose-500' : ''}`} type={t} value={form[k]||''} onChange={e=>set(k,e.target.value)}/>
+              {immiErrors[k] && <p className="text-[0.7rem] text-rose-500 mt-1">{immiErrors[k]}</p>}
+            </div>
           ))}
         </div>
       </Modal>
@@ -2496,8 +2505,9 @@ function LeaveBalanceSection({ empId, isAdmin }) {
           <div className="space-y-4">
             {/* ── Balance Table ── */}
             <div className="rounded-xl border border-[#e7eefe] overflow-hidden">
+              {/* BUG_227: fixed column widths so values align with headers across all rows */}
               {/* Header */}
-              <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 px-3 py-2 bg-[#fafaff] border-b border-[#f0f3ff]">
+              <div className="grid grid-cols-[1fr_4rem_4rem_4rem_5rem] gap-x-2 px-3 py-2 bg-[#fafaff] border-b border-[#f0f3ff]">
                 {['Leave Type','Allocated','Adj.','Used','Available'].map(h => (
                   <p key={h} className="text-[0.62rem] font-black uppercase tracking-wider text-[#9ca3af] text-right first:text-left">{h}</p>
                 ))}
@@ -2510,7 +2520,7 @@ function LeaveBalanceSection({ empId, isAdmin }) {
                 const isDeficit = available < 0;
                 return (
                   <div key={b.leave_type}
-                    className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-x-4 px-3 py-2.5 border-b border-[#f0f3ff] last:border-0 items-center hover:bg-[#fafaff] transition-colors">
+                    className="grid grid-cols-[1fr_4rem_4rem_4rem_5rem] gap-x-2 px-3 py-2.5 border-b border-[#f0f3ff] last:border-0 items-center hover:bg-[#fafaff] transition-colors">
                     {/* Leave type */}
                     <span className="text-sm font-semibold text-[#151c27]">{b.label}</span>
                     {/* Allocated */}

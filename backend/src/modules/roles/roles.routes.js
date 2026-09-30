@@ -188,15 +188,16 @@ router.put('/user/:userId', auth, hasPermission('roles', 'manage'), async (req, 
       .maybeSingle();
     if (!targetUser) return res.status(404).json({ error: 'User not found in this organization' });
 
-    // Ensure all provided roles belong to this org
+    // BUG_243: Ensure all provided roles belong to this org.
+    // Use a fetch instead of count-only so it works reliably across all adapter paths.
     if (safeRoleIds.length > 0) {
-      const { count } = await db
+      const { data: orgRoles, error: orgRolesErr } = await db
         .from('roles')
-        .select('id', { count: 'exact', head: true })
+        .select('id')
         .in('id', safeRoleIds)
         .eq('org_id', oId);
 
-      if (count !== safeRoleIds.length) {
+      if (!orgRolesErr && orgRoles !== null && orgRoles.length !== safeRoleIds.length) {
         return res.status(400).json({ error: 'One or more roles do not belong to this organization' });
       }
     }

@@ -34,9 +34,10 @@ router.post('/:id/nominees', auth, async (req, res) => {
     if (percentage_share) {
       const { data: existing } = await db.from('employee_nominees')
         .select('percentage_share').eq('employee_id', empId).eq('organization_id', orgId(req));
-      const total = (existing || []).reduce((s, r) => s + (r.percentage_share || 0), 0);
-      if (total + parseFloat(percentage_share) > 100)
-        return res.status(400).json({ error: `Total nominee share would exceed 100% (current: ${total}%)` });
+      const total = (existing || []).reduce((s, r) => s + (parseFloat(r.percentage_share) || 0), 0);
+      const newTotal = Math.round((total + parseFloat(percentage_share)) * 100) / 100;
+      if (newTotal > 100)
+        return res.status(400).json({ error: `Total nominee share would exceed 100% (current: ${Math.round(total * 100) / 100}%, adding: ${parseFloat(percentage_share)}% — total would be ${newTotal}%)` });
     }
 
     const { data, error } = await db.from('employee_nominees').insert({
