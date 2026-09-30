@@ -1,9 +1,11 @@
 const express = require('express');
 const router  = express.Router();
-const { db } = require('../../config/db');
+const { db, pool } = require('../../config/db');
 const { auth, adminOnly } = require('../../middleware/auth');
 const { orgId } = require('../../utils/helpers');
 const { sendPushToUsers } = require('../../services/pushService');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { getFilterState } = require('../../utils/branchFilter');
 
 // ─── Push: VAPID status — let frontend know if push is server-configured ─────
 router.get('/vapid-status', auth, (req, res) => {
@@ -18,10 +20,13 @@ router.post('/subscribe', auth, async (req, res) => {
   try {
     const { subscription, endpoint, userAgent } = req.body;
     if (!subscription || !endpoint) return res.status(400).json({ error: 'Subscription and endpoint required' });
-    await db.from('push_subscriptions').upsert(
+    // push_subscriptions has UNIQUE(endpoint), not UNIQUE(user_id).
+    // Conflict on endpoint so each browser/device subscription is preserved independently.
+    const { error } = await db.from('push_subscriptions').upsert(
       { user_id: req.user.id, endpoint, subscription, user_agent: userAgent || null, organization_id: orgId(req) },
-      { onConflict: 'user_id' }
+      { onConflict: 'endpoint' }
     );
+    if (error) return res.status(500).json({ error: 'Failed to save push subscription.' });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -35,7 +40,7 @@ router.delete('/unsubscribe', auth, async (req, res) => {
 });
 
 // ─── Push: Send Notification (admin) ─────────────────────────────────────────
-router.post('/send', auth, adminOnly, async (req, res) => {
+router.post('/send', auth, adminOnly, withBranchContext, async (req, res) => {
   try {
     const { title, body, url, target_user_id } = req.body;
     if (!title?.trim() || !body?.trim()) return res.status(400).json({ error: 'Title and body required' });
@@ -46,13 +51,28 @@ router.post('/send', auth, adminOnly, async (req, res) => {
       if (!u) return res.status(404).json({ error: 'User not found' });
       userIds = [u.id];
     } else {
-      // BUG_135/177: broadcast to all should reach active employees only
-      // (exclude root_admins, HR admins, and inactive/resigned/terminated employees)
-      const { data: users } = await db.from('users').select('id')
-        .eq('organization_id', oId)
-        .eq('role', 'employee')
-        .not('employee_status', 'in', ['inactive', 'resigned', 'terminated']);
-      userIds = (users || []).map(u => u.id);
+      // Broadcast: respect branch context so preview count matches actual send count
+      const branchState = getFilterState(req.branchContext);
+      if (branchState.type === 'none') {
+        userIds = [];
+      } else {
+        const params = [oId];
+        let branchClause = '';
+        if (branchState.type === 'specific') {
+          params.push(branchState.branchId);
+          branchClause = `AND branch_id = $${params.length}`;
+        } else if (branchState.type === 'multi') {
+          params.push(branchState.branchIds);
+          branchClause = `AND branch_id = ANY($${params.length}::bigint[])`;
+        }
+        const { rows } = await pool.query(
+          `SELECT id FROM users WHERE organization_id = $1 AND role = 'employee'
+           AND (employee_status IS NULL OR employee_status NOT IN ('inactive','resigned','terminated'))
+           ${branchClause}`,
+          params
+        );
+        userIds = rows.map(u => u.id);
+      }
     }
     if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
       return res.status(503).json({ error: 'Push notifications are not configured. Please set VAPID keys in server settings.' });

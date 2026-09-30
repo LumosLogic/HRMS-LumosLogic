@@ -39,13 +39,17 @@ export function usePushNotification(userId) {
     try {
       const reg = await navigator.serviceWorker.ready;
       const existing = await reg.pushManager.getSubscription();
-      if (existing) {
-        await apiPost('/push/subscribe', {
-          subscription: existing.toJSON(),
-          endpoint:     existing.endpoint,
+      const sub = existing ?? await reg.pushManager.subscribe({
+        userVisibleOnly:      true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+      if (sub) {
+        setSubscribed(true);
+        apiPost('/push/subscribe', {
+          subscription: sub.toJSON(),
+          endpoint:     sub.endpoint,
           userAgent:    navigator.userAgent,
         }).catch(() => {});
-        setSubscribed(true);
       }
     } catch {}
   }

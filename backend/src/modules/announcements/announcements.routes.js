@@ -175,16 +175,24 @@ router.post('/', auth, hasPermission('announcements', 'create'), async (req, res
 
     const { data: users } = await db.from('users').select('id, email, name, role').eq('organization_id', oId);
     if (users?.length) {
-      // In-app notifications — all org users regardless of target_audience
-      await db.from('notifications').insert(users.map(u => ({
-        user_id:         u.id,
-        title:           `📢 ${title}`,
-        message:         content.length > 100 ? content.substring(0, 100) + '…' : content,
-        type:            'announcement',
-        reference_id:    data.id,
-        reference_type:  'announcement',
-        organization_id: oId,
-      })));
+      // In-app notifications — filtered by target_audience so HR-only announcements
+      // do not appear in employee notification bells, and vice-versa.
+      const notifRecipients = users.filter(u => {
+        if (safeAudience === 'employees') return u.role === 'employee';
+        if (safeAudience === 'hr')        return u.role === 'admin' || u.role === 'root_admin';
+        return true; // 'all'
+      });
+      if (notifRecipients.length) {
+        await db.from('notifications').insert(notifRecipients.map(u => ({
+          user_id:         u.id,
+          title:           `📢 ${title}`,
+          message:         content.length > 100 ? content.substring(0, 100) + '…' : content,
+          type:            'announcement',
+          reference_id:    data.id,
+          reference_type:  'announcement',
+          organization_id: oId,
+        })));
+      }
 
       // Email — respect target_audience; fire-and-forget (don't block response)
       const audience = target_audience || 'all';

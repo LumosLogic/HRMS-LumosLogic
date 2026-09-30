@@ -353,7 +353,7 @@ async function runScheduledAnnouncementPublisher() {
   try {
     const nowIso = new Date().toISOString();
     const { data: due } = await db.from('announcements')
-      .select('id, organization_id, title, content, published_notified')
+      .select('id, organization_id, title, content, target_audience, published_notified')
       .not('scheduled_at', 'is', null)
       .lte('scheduled_at', nowIso);
     if (!due?.length) return;
@@ -361,9 +361,15 @@ async function runScheduledAnnouncementPublisher() {
     for (const ann of due) {
       if (ann.published_notified) continue; // already fanned out
       const oId = ann.organization_id;
-      const { data: users } = await db.from('users').select('id').eq('organization_id', oId);
-      if (users?.length) {
-        await db.from('notifications').insert(users.map(u => ({
+      const audience = ann.target_audience || 'all';
+      const { data: users } = await db.from('users').select('id, role').eq('organization_id', oId);
+      const notifRecipients = (users || []).filter(u => {
+        if (audience === 'employees') return u.role === 'employee';
+        if (audience === 'hr')        return u.role === 'admin' || u.role === 'root_admin';
+        return true; // 'all'
+      });
+      if (notifRecipients.length) {
+        await db.from('notifications').insert(notifRecipients.map(u => ({
           user_id:         u.id,
           title:           `📢 ${ann.title}`,
           message:         ann.content && ann.content.length > 100 ? ann.content.substring(0, 100) + '…' : (ann.content || ''),
