@@ -106,6 +106,15 @@ export default function LeavePolicies() {
         return;
       }
     }
+    // Guard: no two policies may share the same leave_type
+    const typesSeen = new Set();
+    for (const p of policies) {
+      if (typesSeen.has(p.leave_type)) {
+        toast(`Duplicate leave type "${p.leave_type}". Rename one of the cloned policies before saving.`, 'error');
+        return;
+      }
+      typesSeen.add(p.leave_type);
+    }
     // BUG_149: warn if any quota is being reduced mid-year
     const reduced = policies.filter(p => {
       const saved = savedPolicies.find(s => s.leave_type === p.leave_type);
@@ -126,8 +135,20 @@ export default function LeavePolicies() {
   // EHN_LP_004: Clone a policy
   function clonePolicy(idx) {
     const source = policies[idx];
-    const cloned = { ...source, leave_type: `${source.leave_type}_copy_${Date.now()}`, label: `${source.label} (Copy)`, _isNew: true };
-    setPolicies(p => [...p, cloned]);
+    // Build a guaranteed-unique leave_type: timestamp + 4-char random hex.
+    // This prevents collisions when two clones are created within the same millisecond.
+    const rand = Math.random().toString(36).slice(2, 6);
+    let baseType = source.leave_type.replace(/_copy_[a-z0-9]+$/i, ''); // strip prior _copy_ suffix for re-clones
+    let candidate = `${baseType}_copy_${Date.now()}${rand}`;
+    // Final safety: ensure no existing policy already has this type (loop until unique)
+    setPolicies(prev => {
+      const existing = new Set(prev.map(p => p.leave_type));
+      while (existing.has(candidate)) {
+        candidate = `${baseType}_copy_${Date.now()}${Math.random().toString(36).slice(2, 6)}`;
+      }
+      const cloned = { ...source, id: undefined, leave_type: candidate, label: `${source.label} (Copy)`, _isNew: true };
+      return [...prev, cloned];
+    });
     setDirty(true);
     toast(`Cloned "${source.label}" — edit and save`, 'success');
   }

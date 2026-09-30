@@ -60,6 +60,16 @@ router.post('/', auth, hasPermission('settings', 'manage'), withBranchContext, a
   const branchState = getFilterState(req.branchContext);
   const branchId = branchState.type === 'specific' ? branchState.branchId : null;
 
+  // Guard: detect duplicate leave_type values in the incoming payload before touching the DB.
+  const typesSeen = new Set();
+  for (const p of policies) {
+    if (!p.leave_type) return res.status(400).json({ error: 'Each policy must have a leave_type.' });
+    if (typesSeen.has(p.leave_type)) {
+      return res.status(400).json({ error: `Duplicate leave type "${p.leave_type}" in the submitted policies. Each leave type must be unique.` });
+    }
+    typesSeen.add(p.leave_type);
+  }
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -131,7 +141,12 @@ router.post('/', auth, hasPermission('settings', 'manage'), withBranchContext, a
     res.json(inserted);
   } catch (err) {
     await client.query('ROLLBACK');
-    res.status(500).json({ error: err.message });
+    const isUniqueViolation = err.code === '23505' || /unique constraint/i.test(err.message);
+    res.status(isUniqueViolation ? 400 : 500).json({
+      error: isUniqueViolation
+        ? 'Two leave policies have the same type. Please rename one of the cloned policies before saving.'
+        : err.message
+    });
   } finally {
     client.release();
   }
