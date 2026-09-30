@@ -283,7 +283,7 @@ export default function HolidaysPage() {
                     const dayNum = d.getDate();
                     const isPast = h.date < today;
                     return (
-                      <div key={h.id} className={`card p-4 flex items-center gap-4 hover:shadow-card-hover transition-all duration-200 ${isPast ? 'opacity-60' : ''}`}>
+                      <div key={h.id} className={`card p-4 flex flex-wrap items-center gap-x-4 gap-y-2 hover:shadow-card-hover transition-all duration-200 ${isPast ? 'opacity-60' : ''}`}>
                         {/* Date badge */}
                         <div className="flex-shrink-0 w-14 text-center">
                           <div className="text-[0.6rem] font-black uppercase tracking-widest text-[#777587]">{dow}</div>
@@ -292,11 +292,11 @@ export default function HolidaysPage() {
                         </div>
                         {/* Divider */}
                         <div className="w-px h-10 flex-shrink-0 bg-[#e7eefe]" />
-                        <div className="flex-1 min-w-0">
+                        <div className="flex-1 min-w-[140px]">
                           <div className="font-black text-[#151c27] truncate">{h.name}</div>
                           {h.description && <div className="text-xs text-[#777587] mt-0.5 truncate">{h.description}</div>}
                         </div>
-                        <div className="flex items-center gap-1.5 flex-shrink-0 flex-nowrap justify-end">
+                        <div className="flex items-center gap-1.5 flex-shrink-0 flex-wrap justify-end">
                           <span className={`badge ${cfg.bg} ${cfg.text} ${cfg.border} flex items-center gap-1 border`}>
                             {cfg.icon}<span className="hidden sm:inline">{cfg.label}</span>
                           </span>

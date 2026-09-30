@@ -57,7 +57,7 @@ function HRFormModal({ open, onClose, editing }) {
         </div>
       }
     >
-      <div className="space-y-4">
+      <form className="space-y-4" autoComplete="off" onSubmit={(e) => e.preventDefault()}>
         <div className="flex items-center gap-4">
           <div className="w-14 h-14 rounded-full flex items-center justify-center text-lg font-black text-white flex-shrink-0"
             style={{ background: form.avatar_color }}>
@@ -78,12 +78,12 @@ function HRFormModal({ open, onClose, editing }) {
           </div>
           <div className="col-span-2">
             <label className="form-label">Official Email</label>
-            <input className="form-control" type="email" autoComplete="new-password" name="hr-admin-email" value={form.email} onChange={e => set('email', e.target.value)} placeholder="hr@company.com" />
+            <input className="form-control" type="email" autoComplete="off" name="hr-admin-email" value={form.email} onChange={e => set('email', e.target.value)} placeholder="hr@company.com" />
           </div>
           <div className="col-span-2">
             <label className="form-label">{editing ? 'New Password (leave blank to keep)' : 'Password'}</label>
             <div className="relative">
-              <input className="form-control pr-10" type={showPw ? 'text' : 'password'} value={form.password} onChange={e => set('password', e.target.value)} placeholder="Min. 6 characters" />
+              <input className="form-control pr-10" type={showPw ? 'text' : 'password'} autoComplete="new-password" name="hr-admin-password" value={form.password} onChange={e => set('password', e.target.value)} placeholder="Min. 6 characters" />
               <button type="button" onClick={() => setShowPw(s => !s)} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#777587] hover:text-[#151c27]">
                 {showPw ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
@@ -108,7 +108,7 @@ function HRFormModal({ open, onClose, editing }) {
             </div>
           )}
         </div>
-      </div>
+      </form>
     </Modal>
   );
 }

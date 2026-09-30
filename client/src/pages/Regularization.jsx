@@ -5,7 +5,7 @@ import { Plus, ClipboardList, CheckCircle2, XCircle, Clock, ChevronRight, Chevro
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
-import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { apiGet, apiPost, apiPut, apiDelete, apiDownload } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { Avatar } from '@/components/ui/Avatar';
@@ -812,47 +812,6 @@ function fmtUpdated(dateStr) {
   }
 }
 
-function fmtDateForCSV(dateStr) {
-  if (!dateStr) return '';
-  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-  const d = new Date(String(dateStr).slice(0, 10) + 'T12:00:00');
-  if (isNaN(d.getTime())) return String(dateStr);
-  return `${String(d.getDate()).padStart(2,'0')}-${months[d.getMonth()]}-${d.getFullYear()}`;
-}
-
-function exportCSV(rows) {
-  const headers = ['Date', 'Requester', 'Department', 'Req Check-in', 'Req Check-out', 'Actual Check-in', 'Actual Check-out', 'Reason', 'Status', 'Submitted', 'Reviewer Notes'];
-  const escape = v => {
-    if (v == null) return '';
-    const s = String(v);
-    if (s.includes(',') || s.includes('"') || s.includes('\n')) return `"${s.replace(/"/g, '""')}"`;
-    return s;
-  };
-  const lines = [
-    headers.join(','),
-    ...rows.map(r => [
-      fmtDateForCSV(r.date),
-      r.user_name || '',
-      r.user_department || '',
-      r.requested_check_in || '',
-      r.requested_check_out || '',
-      r.actual_check_in || '',
-      r.actual_check_out || '',
-      r.reason || '',
-      r.status || '',
-      r.created_at ? fmtDateForCSV(r.created_at) : '',
-      r.reviewer_notes || '',
-    ].map(escape).join(',')),
-  ];
-  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `regularization_${new Date().toISOString().split('T')[0]}.csv`;
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 export default function Regularization() {
   const { isAdmin, isEmployee, isRootAdmin } = useAuth();
   const { selectedBranchId } = useBranch();
@@ -1020,6 +979,29 @@ export default function Regularization() {
   const visibleRows = filtered.slice((page - 1) * rowsPerPage, page * rowsPerPage);
   const remaining   = 0; // legacy — pagination replaces load-more
 
+  async function handleExport() {
+    try {
+      const qs = {
+        ...(filter !== 'all' ? { status: filter } : {}),
+        ...(typeFilter !== 'all' ? { type: typeFilter } : {}),
+        ...(dateFrom ? { dateFrom } : {}),
+        ...(dateTo ? { dateTo } : {}),
+        ...(employeeId ? { employeeId } : {}),
+      };
+      const blob = await apiDownload('/regularization/export', qs);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `regularization_${new Date().toISOString().split('T')[0]}.xlsx`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  }
+
   return (
     <div className={wrap}>
       <div className="page-header">
@@ -1029,7 +1011,7 @@ export default function Regularization() {
         </div>
         <div className="flex items-center gap-2 flex-wrap justify-end">
           {filtered.length > 0 && (
-            <button className="btn btn-outline btn-sm" onClick={() => exportCSV(filtered)} title="Export filtered requests as CSV">
+            <button className="btn btn-outline btn-sm" onClick={handleExport} title="Export requests as Excel">
               <Download size={13} />Export
             </button>
           )}

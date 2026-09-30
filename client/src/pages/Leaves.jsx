@@ -494,9 +494,9 @@ function LeaveCard({ leave: l, isAdmin, user, onApprove, onReject, onRevert, onC
   return (
     <div id={`leave-${l.id}`} className={`card px-4 py-3.5 hover:border-[#3525cd] hover:shadow-card-hover hover:translate-x-0.5 transition-all duration-150 ${sc.border || ''} ${lit ? 'bg-[#f0f3ff] ring-4 ring-[#3525cd] ring-offset-2 border-[#3525cd]/40' : (sc.bg || '')}`}>
       {/* BUG_234: flex-row header + full-width comment thread below — comments no longer squeeze the details */}
-      <div className="flex items-start gap-3.5">
+      <div className="flex flex-wrap items-start gap-3.5">
       <Avatar name={l.name} color={l.avatar_color} size={36} />
-      <div className="flex-1 min-w-0">
+      <div className="flex-1 min-w-[200px]">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="text-sm font-black">{l.name}</span>
           {/* WFH is not a leave type — show WFH badge only, never the leave_type badge */}
@@ -636,7 +636,7 @@ function LeaveCard({ leave: l, isAdmin, user, onApprove, onReject, onRevert, onC
         </div>
       </div>
 
-      <div className="flex items-center gap-1.5 shrink-0">
+      <div className="flex items-center gap-1.5 shrink-0 flex-wrap">
         {/* ENH_LEAVES_004 + BUG_236: consistent comment-count formatting */}
         <button className="btn btn-outline btn-sm text-xs py-1 px-2 flex items-center gap-1" onClick={() => setShowComments(c => !c)}>
           💬 {comments.length > 0 ? `${comments.length} ` : ''}Comments
@@ -1368,7 +1368,46 @@ function LeaveSummaryTable({ employees, leaves, policies, filterStart, filterEnd
         </div>
       </div>
 
-      <div className="card overflow-x-auto">
+      {/* Mobile: card list (avoids horizontal-scroll table) */}
+      <div className="md:hidden space-y-3">
+        {sorted.length === 0 ? (
+          <div className="card p-6 text-center text-xs text-[#9ca3af]">No employees found</div>
+        ) : sorted.map(emp => (
+          <div key={emp.id} className="card p-4">
+            <div className="flex items-center gap-2.5 mb-3">
+              <Avatar name={emp.name} color={emp.avatar_color} size={32} />
+              <div className="flex-1 min-w-0">
+                <p className="font-bold text-sm text-[#151c27] truncate">{emp.name}</p>
+                {emp.department && <p className="text-[0.65rem] text-[#777587] truncate">{emp.department}</p>}
+              </div>
+              <span className="font-black text-[#3525cd] bg-[#f0f3ff] px-2.5 py-1 rounded-full text-sm">{emp.totalApproved}</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              {activePolicies.map(p => {
+                const used = emp.byType[p.leave_type] || 0;
+                const bal  = emp.balByType[p.leave_type];
+                const rem  = bal ? bal.remaining : null;
+                return (
+                  <div key={p.leave_type} className="flex items-center justify-between bg-[#f9f9ff] border border-[#f0f3ff] rounded-lg px-2.5 py-1.5">
+                    <span className="text-[0.7rem] font-semibold capitalize text-[#464555]">{p.leave_type}</span>
+                    <span className="text-[0.7rem] font-bold text-[#151c27]">{used} used{rem !== null ? <span className="text-[#9ca3af] font-normal"> · {rem} left</span> : null}</span>
+                  </div>
+                );
+              })}
+              <div className="flex items-center justify-between bg-blue-50 border border-blue-100 rounded-lg px-2.5 py-1.5">
+                <span className="text-[0.7rem] font-semibold text-blue-700">WFH</span>
+                <span className="text-[0.7rem] font-bold text-blue-600">{emp.totalWfh}</span>
+              </div>
+              <div className="flex items-center justify-between bg-amber-50 border border-amber-100 rounded-lg px-2.5 py-1.5">
+                <span className="text-[0.7rem] font-semibold text-amber-700">Pending</span>
+                <span className="text-[0.7rem] font-bold text-amber-600">{emp.totalPending}</span>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="hidden md:block card overflow-x-auto">
         <table className="w-full text-xs min-w-[600px]">
           <thead>
             <tr className="border-b border-[#e5e7f0] bg-[#f8f9ff]">

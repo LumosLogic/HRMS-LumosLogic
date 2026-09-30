@@ -277,6 +277,7 @@ async function runStartupMigrations() {
     `ALTER TABLE exit_requests ADD COLUMN IF NOT EXISTS clearance_finance BOOLEAN DEFAULT FALSE`,
     `ALTER TABLE exit_requests ADD COLUMN IF NOT EXISTS clearance_admin BOOLEAN DEFAULT FALSE`,
     `ALTER TABLE exit_requests ADD COLUMN IF NOT EXISTS rehire_eligible TEXT DEFAULT NULL`,
+    `ALTER TABLE exit_requests ADD COLUMN IF NOT EXISTS rejection_reason TEXT DEFAULT NULL`,
     // BUG_155: offboarding_checklists table (phase_d migration — idempotent)
     `CREATE TABLE IF NOT EXISTS offboarding_checklists (
       id               BIGSERIAL PRIMARY KEY,
@@ -295,6 +296,18 @@ async function runStartupMigrations() {
     )`,
     `CREATE INDEX IF NOT EXISTS offboarding_checklists_user_idx ON offboarding_checklists(user_id)`,
     `CREATE INDEX IF NOT EXISTS offboarding_checklists_org_idx  ON offboarding_checklists(organization_id)`,
+    // Bug-004/048: backfill regularization actual check-in/out from attendance (idempotent)
+    `ALTER TABLE attendance_regularization ADD COLUMN IF NOT EXISTS actual_check_in  VARCHAR(8)`,
+    `ALTER TABLE attendance_regularization ADD COLUMN IF NOT EXISTS actual_check_out VARCHAR(8)`,
+    `UPDATE attendance_regularization ar
+       SET actual_check_in  = COALESCE(ar.actual_check_in,  a.check_in),
+           actual_check_out = COALESCE(ar.actual_check_out, a.check_out)
+      FROM attendance a
+     WHERE ar.user_id = a.user_id
+       AND ar.date = a.date
+       AND ar.organization_id = a.organization_id
+       AND (ar.actual_check_in IS NULL OR ar.actual_check_out IS NULL)
+       AND (a.check_in IS NOT NULL OR a.check_out IS NOT NULL)`,
   ];
   for (const sql of migrations) {
     await pool.query(sql).catch(e => console.warn('[startup-migration] skipped:', e.message));

@@ -104,8 +104,8 @@ export default function Departments() {
 
   // Total members across all depts (from junction table counts)
   const totalAssigned = depts.reduce((s, d) => s + (d.member_count || 0), 0);
-  // Active employees only (exclude resigned, terminated, inactive)
-  const activeEmployees = employees.filter(e => !['resigned', 'terminated', 'inactive'].includes(e.employee_status));
+  // Active employees only (exclude resigned, terminated, inactive, and HR admins)
+  const activeEmployees = employees.filter(e => e.role === 'employee' && !['resigned', 'terminated', 'inactive'].includes(e.employee_status));
 
   const delMut = useMutation({
     mutationFn: id => apiDelete(`/departments/${id}`),

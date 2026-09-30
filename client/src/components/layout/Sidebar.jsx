@@ -127,6 +127,11 @@ function PayrollGroup({ onClose, isAdmin, isRootAdmin, prefix = '', featureKey =
   // All hooks must be called before any conditional return
   const [open, setOpen] = useState(isChildActive);
 
+  // Auto-expand when a payroll child route becomes active (e.g. via dashboard quick actions)
+  useEffect(() => {
+    if (isChildActive) setOpen(true);
+  }, [isChildActive]);
+
   if (!payrollEnabled) return null;
   // BUG_172: hide entire payroll dropdown if user lacks payroll.view
   if (permissionsLoaded && !isRootAdmin && !hasPermission('payroll', 'view')) return null;
@@ -264,9 +269,13 @@ export function Sidebar({ onClose, prefix = '', onMenuClick, onSearchOpen }) {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      if (!navRef.current) return;
-      const activeLink = navRef.current.querySelector('a[aria-current="page"]');
-      if (activeLink) activeLink.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      const navEl = navRef.current;
+      if (!navEl) return;
+      const activeLink = navEl.querySelector('a[aria-current="page"]');
+      if (!activeLink) return;
+      const linkTop   = activeLink.offsetTop;
+      const navHeight = navEl.clientHeight;
+      navEl.scrollTop = Math.max(0, linkTop - navHeight / 2 + activeLink.offsetHeight / 2);
     }, 150);
     return () => clearTimeout(timer);
   }, [location.pathname]);

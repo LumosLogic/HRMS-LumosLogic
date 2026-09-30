@@ -1,4 +1,4 @@
-import React, { useState, useContext } from 'react';
+import React, { useState, useContext, useEffect, useRef } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
 import {
   LayoutDashboard, Calendar, FileText, Users, Settings, LogOut, ShieldCheck,
@@ -105,6 +105,11 @@ function RootPayrollGroup({ onClose }) {
   // All hooks must be called before any conditional return
   const [open, setOpen] = useState(isChildActive);
 
+  // Auto-expand when a payroll child route becomes active (e.g. via Action Center)
+  useEffect(() => {
+    if (isChildActive) setOpen(true);
+  }, [isChildActive]);
+
   if (!payrollEnabled) return null;
 
   return (
@@ -194,6 +199,23 @@ function RootSidebar({ onClose, onMenuClick, onSearchOpen }) {
   const featureFlags = useContext(FeatureFlagContext);
   const flagsLoaded  = useContext(FeatureFlagsLoadedContext);
   const navigate = useNavigate();
+  const location = useLocation();
+  const navRef   = useRef(null);
+
+  // Auto-scroll the sidebar so the active module is visible (e.g. after
+  // navigating from the dashboard Action Center quick actions).
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const navEl = navRef.current;
+      if (!navEl) return;
+      const activeLink = navEl.querySelector('a[aria-current="page"]');
+      if (!activeLink) return;
+      const linkTop   = activeLink.offsetTop;
+      const navHeight = navEl.clientHeight;
+      navEl.scrollTop = Math.max(0, linkTop - navHeight / 2 + activeLink.offsetHeight / 2);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [location.pathname]);
 
   const { data: countData } = useQuery({
     queryKey: ['notif-count-root'],
@@ -239,7 +261,7 @@ function RootSidebar({ onClose, onMenuClick, onSearchOpen }) {
       <BranchSelector />
 
       {/* Nav */}
-      <nav className="flex-1 p-3 overflow-y-auto space-y-1">
+      <nav ref={navRef} className="flex-1 p-3 overflow-y-auto space-y-1">
         {NAV_SECTIONS.map(sec => {
           // Finance sentinel — render dropdown in correct position
           if (sec.id === 'tour-nav-finance') {

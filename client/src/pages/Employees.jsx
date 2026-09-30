@@ -1569,12 +1569,12 @@ function EmployeeFormModal({ open, onClose, employee, onSaved, departments = [],
                   </div>
                   <div>
                     <label className="form-label">Personal Email</label>
-                    <input className="form-control" type="email" placeholder="personal@gmail.com" value={form.personal_email} onChange={e => set('personal_email', e.target.value)} />
+                    <input className="form-control" type="email" autoComplete="off" name="employee-personal-email" placeholder="personal@gmail.com" value={form.personal_email} onChange={e => set('personal_email', e.target.value)} />
                   </div>
                 </div>
                 <div>
                   <label className="form-label">Company Email <span className="text-rose-500">*</span></label>
-                  <input className="form-control" type="email" value={form.email} onChange={e => set('email', e.target.value)} />
+                  <input className="form-control" type="email" autoComplete="off" name="employee-company-email" value={form.email} onChange={e => set('email', e.target.value)} />
                 </div>
               </div>
 
@@ -2045,7 +2045,7 @@ function EmployeeFormModal({ open, onClose, employee, onSaved, departments = [],
                   {/* autoComplete="new-password" prevents browser autofill from targeting the search bar as the "username" field */}
                   <input className="form-control pr-10" type={showPw ? 'text' : 'password'}
                     placeholder="New password…"
-                    autoComplete="new-password"
+                    autoComplete="new-password" name="employee-reset-password"
                     value={form.password} onChange={e => set('password', e.target.value)} />
                   <button type="button" onClick={() => setShowPw(s => !s)}
                     className="absolute right-3 top-1/2 -translate-y-1/2 text-[#777587] hover:text-[#151c27] p-1">
@@ -2106,7 +2106,7 @@ function EmployeeFormModal({ open, onClose, employee, onSaved, departments = [],
             </div>
             <div>
               <label className="form-label">Company Email <span className="text-rose-500">*</span></label>
-              <input className="form-control" type="email" placeholder="john@company.com" autoComplete="off" value={form.email} onChange={e => set('email', e.target.value)} required />
+              <input className="form-control" type="email" placeholder="john@company.com" autoComplete="off" name="new-employee-company-email" value={form.email} onChange={e => set('email', e.target.value)} required />
             </div>
           </div>
 

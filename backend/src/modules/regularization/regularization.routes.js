@@ -1,5 +1,6 @@
 const express = require('express');
 const router  = express.Router();
+const XLSX    = require('xlsx');
 const { db, pool } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
@@ -146,6 +147,80 @@ router.get('/usage', auth, async (req, res) => {
       exhausted: early_leave_days >= max_allowance,
       early_leave_requests: elRes.rows,
     });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// GET /api/regularization/export — downloadable .xlsx (fixed column widths, readable dates)
+router.get('/export', auth, withBranchContext, async (req, res) => {
+  try {
+    const oId = req.user.organization_id;
+    const uid = req.user.id;
+    let q = db.from('attendance_regularization')
+      .select('*')
+      .eq('organization_id', oId)
+      .order('created_at', { ascending: false });
+    if (!isAdmin(req.user.role)) {
+      q = q.eq('user_id', uid);
+    } else {
+      const empIds = await resolveEmployeeIds(req.branchContext, oId);
+      if (empIds !== null && empIds.length === 0) return res.json([]);
+      if (empIds !== null) q = q.in('user_id', empIds);
+    }
+
+    // Optional filters mirroring the on-screen filters
+    const { status, type, dateFrom, dateTo, employeeId } = req.query;
+    if (status && ['pending', 'approved', 'rejected'].includes(status)) q = q.eq('status', status);
+    if (type && ['check_time', 'early_leave'].includes(type)) q = q.eq('type', type);
+    if (dateFrom) q = q.gte('date', dateFrom);
+    if (dateTo)   q = q.lte('date', dateTo);
+    if (employeeId && isAdmin(req.user.role)) q = q.eq('user_id', parseInt(employeeId, 10));
+
+    const { data, error } = await q;
+    if (error) throw error;
+
+    const rows = data || [];
+    const userIds     = [...new Set(rows.map(r => r.user_id).filter(Boolean))];
+    const reviewerIds = [...new Set(rows.map(r => r.reviewed_by).filter(Boolean))];
+    const allIds      = [...new Set([...userIds, ...reviewerIds])];
+    const { data: users } = await db.from('users')
+      .select('id, name, avatar_color, department, position')
+      .in('id', allIds);
+    const userMap = {};
+    (users || []).forEach(u => { userMap[u.id] = u; });
+
+    // Format a date string as DD/MM/YYYY — accepts both 'YYYY-MM-DD' and ISO timestamps.
+    const fmtDate = (value) => {
+      if (!value) return '';
+      const m = String(value).match(/^(\d{4})-(\d{2})-(\d{2})/);
+      return m ? `${m[3]}/${m[2]}/${m[1]}` : String(value);
+    };
+
+    const HEADERS = ['Date', 'Requester', 'Department', 'Req Check-in', 'Req Check-out', 'Actual Check-in', 'Actual Check-out', 'Reason', 'Status', 'Submitted', 'Reviewer Notes'];
+    const COL_WIDTHS = [12, 18, 16, 13, 13, 13, 13, 28, 11, 12, 28];
+
+    const sheetData = rows.map(r => ({
+      'Date':            fmtDate(r.date),
+      'Requester':       userMap[r.user_id]?.name || '',
+      'Department':      userMap[r.user_id]?.department || '',
+      'Req Check-in':    r.requested_check_in || '',
+      'Req Check-out':   r.requested_check_out || '',
+      'Actual Check-in': r.actual_check_in || '',
+      'Actual Check-out': r.actual_check_out || '',
+      'Reason':          r.reason || '',
+      'Status':          r.status || '',
+      'Submitted':       fmtDate(r.created_at),
+      'Reviewer Notes':  r.reviewer_notes || '',
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(sheetData, { header: HEADERS });
+    ws['!cols'] = HEADERS.map((_, i) => ({ wch: COL_WIDTHS[i] }));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Regularization');
+    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="regularization_${new Date().toISOString().split('T')[0]}.xlsx"`);
+    res.send(buf);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

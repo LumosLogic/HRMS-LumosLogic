@@ -143,7 +143,8 @@ router.put('/:id', auth, hasPermission('exit', 'manage'), async (req, res) => {
     const oId = req.user.organization_id;
     // Explicit field whitelist — prevents mass assignment of user_id, reviewed_by, reviewed_at, etc.
     const { resignation_date, reason, notice_period_days, last_working_day, notes, status,
-            clearance_it, clearance_hr, clearance_finance, clearance_admin } = req.body;
+            clearance_it, clearance_hr, clearance_finance, clearance_admin,
+            rehire_eligible, rejection_reason } = req.body;
     const updates = {};
     if (resignation_date   !== undefined) updates.resignation_date   = resignation_date;
     if (reason             !== undefined) updates.reason             = reason || '';
@@ -155,6 +156,9 @@ router.put('/:id', auth, hasPermission('exit', 'manage'), async (req, res) => {
     if (clearance_hr      !== undefined) updates.clearance_hr      = !!clearance_hr;
     if (clearance_finance !== undefined) updates.clearance_finance = !!clearance_finance;
     if (clearance_admin   !== undefined) updates.clearance_admin   = !!clearance_admin;
+    // BUG_043: rehire eligibility + rejection reason must be persisted (previously dropped)
+    if (rehire_eligible  !== undefined) updates.rehire_eligible  = rehire_eligible;
+    if (rejection_reason !== undefined) updates.rejection_reason = rejection_reason || '';
     if (status             !== undefined) {
       if (!['approved', 'rejected', 'completed'].includes(status))
         return res.status(400).json({ error: "status must be 'approved', 'rejected', or 'completed'" });
@@ -263,9 +267,11 @@ router.put('/:id', auth, hasPermission('exit', 'manage'), async (req, res) => {
     }
     res.json(data);
   } catch (err) {
-    // BUG_155: never expose raw DB errors (column/relation errors) to the client
+    // BUG_043: log the real error server-side so schema issues are diagnosable,
+    // but keep the client-facing message clear and user-friendly.
+    console.error('[exit] update error:', err.message);
     const safe = /column|relation|does not exist|syntax error/i.test(err.message)
-      ? 'Unable to update exit request. Please contact your administrator.'
+      ? 'We could not save your changes due to a system configuration issue. Please try again, or contact support if the problem persists.'
       : (err.message || 'Server error');
     res.status(500).json({ error: safe });
   }
