@@ -83,7 +83,7 @@ export function AttCorrectionModal({ emp, dateStr, existingRecord, isSynthetic, 
       .finally(() => setPunchLoading(false));
   }, [emp.id, dateStr]);
 
-  // Live gross-hours preview
+  // Live gross-hours preview + Bug_011/012: auto-compute status from hours
   const grossHoursLabel = useMemo(() => {
     if (!form.check_in || !form.check_out) return null;
     const [h1, m1] = form.check_in.split(':').map(Number);
@@ -92,6 +92,25 @@ export function AttCorrectionModal({ emp, dateStr, existingRecord, isSynthetic, 
     if (diff <= 0) return null;
     const h = Math.floor(diff / 60), m = diff % 60;
     return h > 0 ? `${h}h ${m}m` : `${m}m`;
+  }, [form.check_in, form.check_out]);
+
+  // Auto-recalculate status whenever check_in or check_out changes.
+  // Uses the same half_day/full_day thresholds the checkout API applies (4h / 8h defaults).
+  // Admin can still override by changing the Status dropdown after times are set.
+  useEffect(() => {
+    if (!form.check_in || !form.check_out) return;
+    const [h1, m1] = form.check_in.split(':').map(Number);
+    const [h2, m2] = form.check_out.split(':').map(Number);
+    const diffHours = ((h2 * 60 + m2) - (h1 * 60 + m1)) / 60;
+    if (diffHours <= 0) return;
+    // Match backend defaults: half_day < 4.5h, early_leave < 8h, else present
+    const AUTO_HALF_DAY  = 4.5;
+    const AUTO_FULL_DAY  = 8;
+    let autoStatus;
+    if (diffHours < AUTO_HALF_DAY)  autoStatus = 'half_day';
+    else if (diffHours < AUTO_FULL_DAY) autoStatus = 'early_leave';
+    else                            autoStatus = 'present';
+    setForm(f => ({ ...f, status: autoStatus }));
   }, [form.check_in, form.check_out]);
 
   // ── Case A / B: normal save (no leave involved) ──────────────────────────────
@@ -384,13 +403,19 @@ export function AttendanceDayModal({ dateStr, initialTab = 'all', onClose, onRef
 
   const dayRecords = Object.values(grouped);
   const present  = dayRecords.filter(r => r.status === 'present' || r.status === 'early_leave').length;
-  const absent   = dayRecords.filter(r => r.status === 'absent').length;
   const onLeave  = dayRecords.filter(r => r.status === 'on_leave').length;
   const wfh      = dayRecords.filter(r => r.status === 'wfh').length;
   const halfDay  = dayRecords.filter(r => r.status === 'half_day').length;
 
   const isFutureDay = dateStr > todayStr();
   const displayEmps = isAdmin ? employees : employees.filter(e => e.id === user?.id);
+
+  // Bug_005: absent count = employees with explicit 'absent' record + employees with NO record.
+  // Both groups are practically absent on past/current working days.
+  const noRecordCount = !isFutureDay
+    ? displayEmps.filter(emp => !grouped[emp.id]).length
+    : 0;
+  const absent = dayRecords.filter(r => r.status === 'absent').length + noRecordCount;
 
   const filteredEmps = activeTab === 'all'
     ? (isFutureDay
@@ -404,7 +429,8 @@ export function AttendanceDayModal({ dateStr, initialTab = 'all', onClose, onRef
         if (activeTab === 'present')  return rec && (rec.status === 'present' || rec.status === 'early_leave') && !rec?._synthetic;
         if (activeTab === 'on_leave') return rec && (rec.status === 'on_leave' || rec.status === 'half_day');
         if (activeTab === 'wfh')      return rec && rec.status === 'wfh';
-        if (activeTab === 'absent')   return rec && rec.status === 'absent';
+        // Bug_005: absent tab shows both explicit absent records AND employees with no record
+        if (activeTab === 'absent')   return (rec && rec.status === 'absent') || (!rec && !isFutureDay);
         if (activeTab === 'none')     return !rec;
         return true;
       });
@@ -466,9 +492,10 @@ export function AttendanceDayModal({ dateStr, initialTab = 'all', onClose, onRef
                       </span>
                     )}
                     {absent > 0 && (
-                      <span className="inline-flex items-center gap-1 text-[0.7rem] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200">
+                      <button onClick={() => setActiveTab('absent')}
+                        className="inline-flex items-center gap-1 text-[0.7rem] font-bold px-2 py-0.5 rounded-full bg-rose-100 text-rose-700 border border-rose-200 hover:bg-rose-200 transition-colors cursor-pointer">
                         <XCircle size={11} /> {absent} Absent
-                      </span>
+                      </button>
                     )}
                   </div>
                 </div>

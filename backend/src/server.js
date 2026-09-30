@@ -269,6 +269,32 @@ async function runStartupMigrations() {
     `ALTER TABLE announcements ADD COLUMN IF NOT EXISTS published_notified BOOLEAN NOT NULL DEFAULT false`,
     // Expense duplicate filename tracking
     `ALTER TABLE expenses ADD COLUMN IF NOT EXISTS receipt_filename TEXT DEFAULT NULL`,
+    // BUG_155: exit_requests clearance + notes columns (missing from full_schema.sql baseline)
+    `ALTER TABLE exit_requests ADD COLUMN IF NOT EXISTS notes TEXT DEFAULT ''`,
+    `ALTER TABLE exit_requests ADD COLUMN IF NOT EXISTS exit_interview_notes TEXT DEFAULT ''`,
+    `ALTER TABLE exit_requests ADD COLUMN IF NOT EXISTS clearance_it BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE exit_requests ADD COLUMN IF NOT EXISTS clearance_hr BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE exit_requests ADD COLUMN IF NOT EXISTS clearance_finance BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE exit_requests ADD COLUMN IF NOT EXISTS clearance_admin BOOLEAN DEFAULT FALSE`,
+    `ALTER TABLE exit_requests ADD COLUMN IF NOT EXISTS rehire_eligible TEXT DEFAULT NULL`,
+    // BUG_155: offboarding_checklists table (phase_d migration — idempotent)
+    `CREATE TABLE IF NOT EXISTS offboarding_checklists (
+      id               BIGSERIAL PRIMARY KEY,
+      user_id          BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      organization_id  BIGINT NOT NULL,
+      title            TEXT NOT NULL,
+      description      TEXT DEFAULT '',
+      due_date         DATE,
+      assigned_to      TEXT NOT NULL DEFAULT 'hr'
+                       CHECK (assigned_to IN ('employee','hr','it','manager','finance')),
+      order_index      INTEGER NOT NULL DEFAULT 99,
+      completed        BOOLEAN NOT NULL DEFAULT FALSE,
+      completed_at     TIMESTAMPTZ,
+      completed_by     BIGINT REFERENCES users(id),
+      created_at       TIMESTAMPTZ DEFAULT NOW()
+    )`,
+    `CREATE INDEX IF NOT EXISTS offboarding_checklists_user_idx ON offboarding_checklists(user_id)`,
+    `CREATE INDEX IF NOT EXISTS offboarding_checklists_org_idx  ON offboarding_checklists(organization_id)`,
   ];
   for (const sql of migrations) {
     await pool.query(sql).catch(e => console.warn('[startup-migration] skipped:', e.message));

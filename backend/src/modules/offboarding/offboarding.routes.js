@@ -6,6 +6,7 @@ const { hasPermission } = require('../../middleware/permissions');
 const { orgId } = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { resolveEmployeeIds } = require('../../utils/branchFilter');
+const { initOffboarding } = require('./offboardingService');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
@@ -38,8 +39,37 @@ router.get('/', auth, withBranchContext, async (req, res) => {
 
     const { data, error } = await query;
     if (error) throw error;
+
+    // BUG_155: auto-init for exits already in 'approved' state (no tasks yet).
+    // initOffboarding is idempotent — safe to call if tasks were somehow missed at
+    // approval time (table didn't exist, silent error, or pre-migration approval).
+    if (userId && (!data || data.length === 0)) {
+      const { data: approvedExit } = await db.from('exit_requests')
+        .select('id')
+        .eq('user_id', parseInt(userId, 10))
+        .eq('organization_id', oId)
+        .eq('status', 'approved')
+        .maybeSingle();
+      if (approvedExit) {
+        await initOffboarding(parseInt(userId, 10), oId);
+        const { data: fresh, error: freshErr } = await db
+          .from('offboarding_checklists')
+          .select('*, users!offboarding_checklists_user_id_fkey(id, name, avatar_color, position)')
+          .eq('organization_id', oId)
+          .eq('user_id', parseInt(userId, 10))
+          .order('order_index', { ascending: true });
+        if (freshErr) throw freshErr;
+        return res.json(fresh || []);
+      }
+    }
+
     res.json(data || []);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    const safe = /column|relation|does not exist/i.test(err.message)
+      ? 'Offboarding tasks are temporarily unavailable. Please contact your administrator.'
+      : (err.message || 'Server error');
+    res.status(500).json({ error: safe });
+  }
 });
 
 // GET /api/offboarding/overview — HR: grouped view per departing employee

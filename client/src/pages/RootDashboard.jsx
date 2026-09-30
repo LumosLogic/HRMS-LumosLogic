@@ -400,6 +400,7 @@ export default function RootDashboard() {
   const trendOptions = {
     responsive: true,
     maintainAspectRatio: false,
+    layout: { padding: { bottom: 8 } },
     plugins: {
       legend: { display: false },
       tooltip: {

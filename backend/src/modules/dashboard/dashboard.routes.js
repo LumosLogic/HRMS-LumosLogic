@@ -131,7 +131,28 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       .eq('organization_id', orgId(req));
     if (empIds.length > 0) pendingLeavesQuery = pendingLeavesQuery.in('user_id', empIds);
 
-    const { count: pendingLeaves } = await pendingLeavesQuery;
+    const { count: pendingLeaveCount } = await pendingLeavesQuery;
+
+    // Bug_023: dashboard "Pending Approvals" must match what PendingApprovals page shows.
+    // That page includes regularizations (status='pending') and expenses (status='pending').
+    let pendingRegCount = 0;
+    let pendingExpCount = 0;
+    if (isAdminRole(req.user.role)) {
+      let regQuery = db.from('attendance_regularization')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'pending').eq('organization_id', orgId(req));
+      if (empIds.length > 0) regQuery = regQuery.in('user_id', empIds);
+      const { count: rc } = await regQuery;
+      pendingRegCount = rc || 0;
+
+      let expQuery = db.from('expenses')
+        .select('*', { count: 'exact', head: true })
+        .eq('status', 'pending').eq('organization_id', orgId(req));
+      if (empIds.length > 0) expQuery = expQuery.in('user_id', empIds);
+      const { count: ec } = await expQuery;
+      pendingExpCount = ec || 0;
+    }
+    const pendingLeaves = (pendingLeaveCount || 0) + pendingRegCount + pendingExpCount;
 
     let pendingLeaveList;
     if (isAdminRole(req.user.role)) {
