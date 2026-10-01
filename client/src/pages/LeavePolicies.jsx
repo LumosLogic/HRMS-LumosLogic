@@ -108,6 +108,24 @@ export default function LeavePolicies() {
         return;
       }
     }
+    // BUG-132: Leave Name is editable — it must be filled in, and unique. Only new or
+    // changed names are checked, so existing policies that already share a name never
+    // block an unrelated change (e.g. toggling Active/Inactive — BUG-131).
+    const nameCount = {};
+    policies.forEach(p => { const k = (p.label || '').trim().toLowerCase(); nameCount[k] = (nameCount[k] || 0) + 1; });
+    for (const p of policies) {
+      const name = (p.label || '').trim();
+      if (!name) {
+        toast('Leave Name cannot be empty.', 'error');
+        return;
+      }
+      const saved = savedPolicies.find(s => s.leave_type === p.leave_type);
+      const unchanged = saved && (saved.label || '').trim().toLowerCase() === name.toLowerCase();
+      if (!unchanged && nameCount[name.toLowerCase()] > 1) {
+        toast(`Leave Name "${name}" is already used by another policy. Please use a unique name.`, 'error');
+        return;
+      }
+    }
     // Guard: no two policies may share the same leave_type
     const typesSeen = new Set();
     for (const p of policies) {
@@ -235,6 +253,15 @@ export default function LeavePolicies() {
                   <div className={`absolute top-0.5 w-4 h-4 bg-white rounded-full shadow transition-transform ${p.active ? 'translate-x-5' : 'translate-x-0.5'}`} />
                 </div>
               </label>
+            </div>
+
+            {/* BUG-132: editable Leave Name (display name only — the leave type key is unchanged,
+                so existing leaves, balances and payroll keep working) */}
+            <div className="mb-4">
+              <label className="form-label">Leave Name</label>
+              <input type="text" className="form-control" maxLength={100} value={p.label ?? ''}
+                onChange={e => update(i, 'label', e.target.value)}
+                placeholder="e.g. Annual Leave" />
             </div>
 
             <div className="grid grid-cols-2 gap-4 mb-4">

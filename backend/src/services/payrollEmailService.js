@@ -83,6 +83,8 @@ async function fetchRichData(organizationId, userId, payslipId) {
       WHERE lp.organization_id = $2
         AND lp.active = true AND lp.annual_quota > 0
         AND (lp.leave_type ILIKE 'casual%' OR lp.label ILIKE '%casual%')
+        AND (lp.branch_id IS NULL OR lp.branch_id = (SELECT u.branch_id FROM users u WHERE u.id = $1))
+      ORDER BY (lp.branch_id IS NULL)
       LIMIT 1
     `, [userId, organizationId]).catch(() => ({ rows: [] })),
   ]);

@@ -62,6 +62,9 @@ function ExpenseModal({ open, onClose, expense, allExpenses = [] }) {
     const n = parseFloat(val);
     if (!val) { setAmountErr('Amount is required'); return false; }
     if (isNaN(n) || n <= 0) { setAmountErr('Enter a positive amount'); return false; }
+    // BUG_220: currency validation — at most 2 decimal places, sane upper bound
+    if (!/^\d+(\.\d{1,2})?$/.test(String(val).trim())) { setAmountErr('Amount can have at most 2 decimal places (e.g. 89.98)'); return false; }
+    if (n > 10000000) { setAmountErr('Amount cannot exceed ₹1,00,00,000'); return false; }
     setAmountErr('');
     return true;
   }

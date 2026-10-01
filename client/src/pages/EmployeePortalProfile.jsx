@@ -16,6 +16,7 @@ import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { formatWeeklyOff } from '@/components/ui/WeeklyOffSelect';
 import { fmtDate, fmtTime, initials } from '@/lib/utils';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -331,7 +332,7 @@ function ProfilePrintModal({ empId, open, onClose }) {
               <Row label="Joining Date"     value={ov?.joining_date ? fmtDate(ov.joining_date) : null} />
               <Row label="Work Location"    value={ov?.location} />
               <Row label="Work Hours/Day"   value={ov?.work_hours_per_day != null ? `${ov.work_hours_per_day} hrs` : null} />
-              <Row label="Weekly Off"       value={ov?.weekly_off_day} />
+              <Row label="Weekly Off"       value={formatWeeklyOff(ov?.weekly_off_day)} />
               {branchesEnabled && <Row label="Branch" value={ov?.branch?.name} />}
               <Row label="Reporting To"     value={ov?.manager?.name} />
               <Row label="HOD"              value={ov?.hod?.name} />

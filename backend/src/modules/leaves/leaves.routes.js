@@ -12,6 +12,31 @@ const { resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee } = require
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 
+// Leave policy rows that apply to an employee: their branch's override for each type when it
+// exists, otherwise the org-wide row. A branch override and an org-wide row of the same type can
+// now coexist (fix_leave_policy_unique_per_branch_2026_10_01.sql), so lookups by type must not
+// assume a single row. Returns rows for the requested active/leaveType filters.
+async function getEffectivePolicies(oId, userId, { leaveType = null, activeOnly = true } = {}) {
+  try {
+    const { rows } = await pool.query(
+      // Pick the effective row per type FIRST (branch override beats org-wide, even if the
+      // override is inactive), then apply the active filter to that row.
+      `SELECT e.* FROM (
+         SELECT DISTINCT ON (p.leave_type) p.id, p.leave_type, p.label, p.annual_quota, p.paid, p.active
+           FROM leave_policies p
+          WHERE p.organization_id = $1
+            AND ($2::text IS NULL OR p.leave_type = $2)
+            AND (p.branch_id IS NULL
+                 OR p.branch_id = (SELECT u.branch_id FROM users u WHERE u.id = $4 AND u.organization_id = $1))
+          ORDER BY p.leave_type, (p.branch_id IS NULL)
+       ) e
+       WHERE (NOT $3::boolean OR e.active = true)`,
+      [oId, leaveType, activeOnly, userId]
+    );
+    return rows;
+  } catch { return []; }
+}
+
 async function fetchHolidaySet(oId, startDate, endDate) {
   try {
     const { data } = await db
@@ -327,8 +352,7 @@ router.get('/date-check', auth, async (req, res) => {
       }
     }
 
-    const { data: policies } = await db.from('leave_policies')
-      .select('leave_type, annual_quota').eq('organization_id', orgId(req)).eq('active', true);
+    const policies = await getEffectivePolicies(orgId(req), req.user.id);
     const { data: orgRow } = await db.from('organizations')
       .select('total_annual_leaves').eq('id', orgId(req)).maybeSingle();
     const policyQuotas = {};
@@ -552,8 +576,7 @@ router.post('/balance/adjust', auth, hasPermission('leaves', 'manage'), withBran
         return res.status(403).json({ error: "You do not have access to this employee's branch." });
     }
 
-    const { data: policy } = await db.from('leave_policies')
-      .select('id').eq('organization_id', oId).eq('leave_type', leave_type).eq('active', true).maybeSingle();
+    const [policy] = await getEffectivePolicies(oId, parseInt(userId), { leaveType: leave_type });
     if (!policy) return res.status(400).json({ error: 'Leave type not found in active policies' });
 
     const { data, error } = await db.from('leave_balance_adjustments').insert({
@@ -929,9 +952,7 @@ router.post('/', auth, async (req, res) => {
 
         if (newDays > 0) {
           // Fetch quota for this leave type
-          const { data: policy } = await db.from('leave_policies')
-            .select('annual_quota').eq('organization_id', oId)
-            .eq('leave_type', leave_type || 'casual').eq('active', true).maybeSingle();
+          const [policy] = await getEffectivePolicies(oId, targetUserId, { leaveType: leave_type || 'casual' });
 
           if (policy && policy.annual_quota > 0) {
             const now     = new Date();

@@ -291,6 +291,13 @@ export default function Register() {
                   onChange={handleCompanyChange} />
               </div>
               {fieldErrors.company_name && <p className="text-[0.72rem] text-rose-600 mt-1">{fieldErrors.company_name}</p>}
+              {/* BUG_248: a long name scrolls inside the single-line input, so also show the
+                  complete value (wrapped) once it is longer than the visible field width. */}
+              {form.company_name.length > 28 && (
+                <p className="text-[0.72rem] text-[#464555] mt-1 break-words">
+                  <span className="font-semibold text-[#777587]">Full name: </span>{form.company_name}
+                </p>
+              )}
             </div>
 
             {/* Contact Name */}

@@ -552,9 +552,19 @@ async function fetchAllData(oId, uId, month, year) {
               l.leave_type, l.leave_time,
               COALESCE(lp.paid, true) AS paid
          FROM leaves l
-         LEFT JOIN leave_policies lp
-                ON lp.leave_type        = l.leave_type
-               AND lp.organization_id   = l.organization_id
+         -- One policy row per leave: the employee's branch override if it exists, else the
+         -- org-wide row. (Both can now exist for the same type — see
+         -- fix_leave_policy_unique_per_branch_2026_10_01.sql — so a plain join would duplicate leaves.)
+         LEFT JOIN LATERAL (
+                SELECT p.paid
+                  FROM leave_policies p
+                 WHERE p.organization_id = l.organization_id
+                   AND p.leave_type      = l.leave_type
+                   AND (p.branch_id IS NULL
+                        OR p.branch_id = (SELECT u.branch_id FROM users u WHERE u.id = l.user_id))
+                 ORDER BY (p.branch_id IS NULL)
+                 LIMIT 1
+              ) lp ON TRUE
         WHERE l.user_id         = $1
           AND l.organization_id = $2
           AND l.status          = 'approved'

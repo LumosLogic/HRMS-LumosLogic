@@ -817,8 +817,10 @@ router.post('/:id/members', auth, hasPermission('roles', 'manage'), async (req, 
         await client.query('ROLLBACK');
         return res.status(400).json({ error: `${user.name} already has the "${role.name}" role` });
       }
-      // BUG_194/243: promote users.role so the member actually gains the role
-      await syncUserRoleFromRoles(client, userId, oId);
+      // BUG_194/243: promote users.role so the member actually gains the role.
+      // Only for system roles — adding a custom role must never recompute (and possibly
+      // demote) the user's base role.
+      if (role.is_system_role) await syncUserRoleFromRoles(client, userId, oId);
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK');
@@ -847,16 +849,15 @@ router.delete('/:id/members/:userId', auth, hasPermission('roles', 'manage'), as
 
     // Prevent root admin from removing themselves from the Root Admin role
     // Fix: include org_id filter so we're only reading our org's role
-    if (userId === req.user.id) {
-      const { data: role } = await db
-        .from('roles')
-        .select('slug')
-        .eq('id', roleId)
-        .eq('org_id', oId)    // FIXED: must include org_id guard
-        .maybeSingle();
-      if (role?.slug === 'root_admin') {
-        return res.status(400).json({ error: 'You cannot remove yourself from the Root Admin role.' });
-      }
+    // (the role is also needed below to decide whether users.role must be re-synced)
+    const { data: role } = await db
+      .from('roles')
+      .select('slug, is_system_role')
+      .eq('id', roleId)
+      .eq('org_id', oId)    // FIXED: must include org_id guard
+      .maybeSingle();
+    if (userId === req.user.id && role?.slug === 'root_admin') {
+      return res.status(400).json({ error: 'You cannot remove yourself from the Root Admin role.' });
     }
 
     const client = await pool.connect();
@@ -866,8 +867,9 @@ router.delete('/:id/members/:userId', auth, hasPermission('roles', 'manage'), as
         `DELETE FROM user_roles WHERE role_id = $1 AND user_id = $2 AND org_id = $3`,
         [roleId, userId, oId]
       );
-      // BUG_194/243: demote users.role if the removed system role was authoritative
-      await syncUserRoleFromRoles(client, userId, oId);
+      // BUG_194/243: demote users.role if the removed system role was authoritative.
+      // Removing a custom role never touches the user's base role.
+      if (role?.is_system_role) await syncUserRoleFromRoles(client, userId, oId);
       await client.query('COMMIT');
     } catch (err) {
       await client.query('ROLLBACK');

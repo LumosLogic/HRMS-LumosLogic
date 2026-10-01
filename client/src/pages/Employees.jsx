@@ -11,6 +11,7 @@ import EmployeeProfileV2 from '@/components/EmployeeProfileV2';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { Avatar } from '@/components/ui/Avatar';
+import WeeklyOffSelect from '@/components/ui/WeeklyOffSelect';
 import { RoleBadge, StatusBadge, LeaveTypeBadge } from '@/components/ui/Badge';
 import {
   fmtDate, fmtDateRange,
@@ -1953,15 +1954,8 @@ function EmployeeFormModal({ open, onClose, employee, onSaved, departments = [],
               <div>
                 <p className="text-[0.7rem] font-black text-[#464555] uppercase tracking-wider mb-2">Work Schedule</p>
                 <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="form-label">Weekly Off Day</label>
-                    <select className="form-control" value={form.weekly_off_day} onChange={e => set('weekly_off_day', e.target.value)}>
-                      <option value="">— Default —</option>
-                      {['Mon','Tue','Wed','Thu','Fri','Sat','Sun'].map(d => (
-                        <option key={d} value={d}>{d}</option>
-                      ))}
-                    </select>
-                  </div>
+                  {/* BUG_260: multi-select; none selected = default (org schedule) */}
+                  <WeeklyOffSelect label="Weekly Off Day(s)" value={form.weekly_off_day || ''} onChange={v => set('weekly_off_day', v)} />
                   <div>
                     <label className="form-label">Work Hours / Day</label>
                     <input className="form-control" type="number" min={1} max={24} placeholder="8"

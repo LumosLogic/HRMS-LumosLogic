@@ -58,6 +58,20 @@ router.get('/', auth, withBranchContext, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// BUG_220: currency validation for expense amounts — a positive rupee amount with at most
+// 2 decimal places (paise) and a sane upper bound. Returns an error message or null.
+const MAX_EXPENSE_AMOUNT = 10000000; // ₹1 crore
+function validateExpenseAmount(amount) {
+  const raw = String(amount ?? '').trim();
+  if (!raw) return 'Amount is required. Please enter the expense amount.';
+  if (!/^\d+(\.\d+)?$/.test(raw)) return 'Amount must be a valid number (digits and an optional decimal point only).';
+  if (!/^\d+(\.\d{1,2})?$/.test(raw)) return 'Amount can have at most 2 decimal places (e.g. 89.98).';
+  const n = Number(raw);
+  if (n <= 0) return 'Amount must be greater than zero. Please enter a valid expense amount.';
+  if (n > MAX_EXPENSE_AMOUNT) return `Amount cannot exceed ₹${MAX_EXPENSE_AMOUNT.toLocaleString('en-IN')}.`;
+  return null;
+}
+
 // POST /api/expenses — any authenticated user can submit their own expense claim.
 // Admins can submit on behalf of another user by passing user_id in the body.
 router.post('/', auth, async (req, res) => {
@@ -66,8 +80,8 @@ router.post('/', auth, async (req, res) => {
     const { title, category, amount, expense_date, description, receipt_url, receipt_filename, merchant_name, receipt_number, user_id } = req.body;
     if (!title || !title.trim()) return res.status(400).json({ error: 'Expense title is required. Please enter a description of the expense.' });
     if (!expense_date) return res.status(400).json({ error: 'Expense date is required. Please select the date when this expense was incurred.' });
-    if (!amount) return res.status(400).json({ error: 'Amount is required. Please enter the expense amount.' });
-    if (Number(amount) <= 0) return res.status(400).json({ error: 'Amount must be greater than zero. Please enter a valid expense amount.' });
+    const amountErr = validateExpenseAmount(amount);
+    if (amountErr) return res.status(400).json({ error: amountErr });
 
     // Employees always submit for themselves; admins may specify a target user.
     let targetUserId = req.user.id;
@@ -283,6 +297,8 @@ router.put('/:id', auth, withBranchContext, async (req, res) => {
       return res.status(403).json({ error: "You do not have access to this employee's branch" });
     if (exp.status !== 'pending' && !isAdmin(req.user.role)) return res.status(400).json({ error: 'Cannot edit a reviewed expense' });
     const { title, category, amount, expense_date, description, receipt_url, merchant_name, receipt_number } = req.body;
+    const amountErr = validateExpenseAmount(amount);
+    if (amountErr) return res.status(400).json({ error: amountErr });
     const { data, error } = await db.from('expenses')
       .update({
         title, category, amount: Number(amount), expense_date,

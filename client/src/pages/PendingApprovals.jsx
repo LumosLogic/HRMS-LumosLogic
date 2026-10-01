@@ -167,7 +167,7 @@ function ExpenseReviewModal({ open, onClose, expense, onDone }) {
 export default function PendingApprovals() {
   const toast = useToast();
   const qc    = useQueryClient();
-  const { selectedBranchId } = useBranch();
+  const { selectedBranchId, accessibleBranches, hasAllBranches, isRootAdmin, branchesLoaded } = useBranch();
 
   const [tab,         setTab]         = useState('all');
   const [search,      setSearch]      = useState('');
@@ -494,6 +494,17 @@ export default function PendingApprovals() {
           {historyTab ? 'Back to Pending' : 'Approval History'}
         </button>
       </div>
+
+      {/* BUG_251: branch-limited HR admins only see approvals of their assigned branches —
+          say so explicitly, so a missing request is not mistaken for a bug. */}
+      {branchesLoaded && !isRootAdmin && !hasAllBranches && (accessibleBranches || []).length > 0 && (
+        <div className="rounded-xl border border-[#c7c4d8] bg-[#f0f3ff] px-4 py-2.5 text-xs text-[#464555]">
+          <span className="font-bold text-[#3525cd]">Branch access: </span>
+          you can review approval requests from employees in{' '}
+          <strong>{accessibleBranches.map(b => b.name).join(', ')}</strong>.
+          Requests from other branches are only visible to HR admins assigned to those branches.
+        </div>
+      )}
 
       {/* Summary Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">

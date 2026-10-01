@@ -1069,7 +1069,7 @@ export function ApplyLeaveModal({ employees, isAdmin, allLeaves, policies, onClo
                   <>
                     <div className="mb-3">
                       <label className="form-label">WFH Date</label>
-                      <input type="date" className="form-control" value={f.wfh_date} onChange={e => update(i, 'wfh_date', e.target.value)} />
+                      <DateInput value={f.wfh_date} onChange={v => update(i, 'wfh_date', v)} />
                     </div>
                     <div className="mb-3">
                       <label className="form-label">Duration</label>
@@ -1190,8 +1190,8 @@ function EditLeaveModal({ leave: l, isAdmin, onClose, onSuccess }) {
                 </div>
               )}
               <div className="grid grid-cols-2 gap-3">
-                <div><label className="form-label">Start Date</label><input type="date" className="form-control" value={form.start} disabled={!canEdit} onChange={e => setForm(f => ({ ...f, start: e.target.value }))} /></div>
-                <div><label className="form-label">End Date</label><input type="date" className="form-control" value={form.end} disabled={!canEdit} onChange={e => setForm(f => ({ ...f, end: e.target.value }))} /></div>
+                <div><label className="form-label">Start Date</label><DateInput value={form.start} disabled={!canEdit} onChange={v => setForm(f => ({ ...f, start: v }))} /></div>
+                <div><label className="form-label">End Date</label><DateInput value={form.end} disabled={!canEdit} onChange={v => setForm(f => ({ ...f, end: v }))} /></div>
               </div>
               <div><label className="form-label">Reason <span className="text-rose-500">*</span></label><textarea className="form-control" rows="2" value={form.reason} disabled={!canEdit} onChange={e => setForm(f => ({ ...f, reason: e.target.value }))} /></div>
               {!canEdit && <p className="text-xs text-amber-600 flex items-center gap-1.5"><AlertTriangle size={12} /> Approved leave — only admin can edit</p>}

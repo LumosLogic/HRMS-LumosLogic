@@ -70,6 +70,16 @@ router.post('/', auth, hasPermission('settings', 'manage'), withBranchContext, a
     typesSeen.add(p.leave_type);
   }
 
+  // BUG-132: the Leave Name (label) is editable — it must be non-empty and reasonably short.
+  // (Uniqueness is checked below, only for names that are new/changed in this save, so
+  //  policies that already share a name never block an unrelated change such as Active/Inactive.)
+  for (const p of policies) {
+    const name = String(p.label ?? '').trim();
+    if (!name) return res.status(400).json({ error: 'Leave Name cannot be empty.' });
+    if (name.length > 100) return res.status(400).json({ error: `Leave Name "${name.slice(0, 30)}…" is too long (max 100 characters).` });
+    p.label = name;
+  }
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -83,6 +93,23 @@ router.post('/', auth, hasPermission('settings', 'manage'), withBranchContext, a
     );
     const beforeByType = {};
     beforeRows.forEach(r => { beforeByType[r.leave_type] = r; });
+
+    // BUG-132: reject a duplicate Leave Name only when the name is new or changed.
+    // "Known" = a name this leave type already has in any scope of the org.
+    const { rows: knownRows } = await client.query(
+      `SELECT leave_type, lower(label) AS label FROM leave_policies WHERE organization_id = $1`, [oId]
+    );
+    const known = new Set(knownRows.map(r => `${r.leave_type}|${r.label}`));
+    const nameCount = {};
+    policies.forEach(p => { const k = p.label.toLowerCase(); nameCount[k] = (nameCount[k] || 0) + 1; });
+    for (const p of policies) {
+      const k = p.label.toLowerCase();
+      if (nameCount[k] > 1 && !known.has(`${p.leave_type}|${k}`)) {
+        const e = new Error(`Leave Name "${p.label}" is used by more than one policy. Please give each leave policy a unique name.`);
+        e.code = 'LP_NAME_DUP';
+        throw e;
+      }
+    }
 
     // Delete only the scoped policies (branch-specific or org-wide)
     await client.query(
@@ -150,10 +177,11 @@ router.post('/', auth, hasPermission('settings', 'manage'), withBranchContext, a
     res.json(inserted);
   } catch (err) {
     await client.query('ROLLBACK');
+    if (err.code === 'LP_NAME_DUP') return res.status(400).json({ error: err.message });
     const isUniqueViolation = err.code === '23505' || /unique constraint/i.test(err.message);
     res.status(isUniqueViolation ? 400 : 500).json({
       error: isUniqueViolation
-        ? 'Two leave policies have the same type. Please rename one of the cloned policies before saving.'
+        ? 'A leave policy with the same leave type already exists for this scope. Please refresh the page and try again.'
         : err.message
     });
   } finally {
@@ -172,6 +200,21 @@ router.put('/:id', auth, hasPermission('settings', 'manage'), async (req, res) =
     const { data: before } = await db.from('leave_policies')
       .select('*').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
     if (!before) return res.status(404).json({ error: 'Leave policy not found' });
+
+    // BUG-132: validate a renamed Leave Name (non-empty, unique within the same scope)
+    if (fields.label !== undefined) {
+      const name = String(fields.label ?? '').trim();
+      if (!name) return res.status(400).json({ error: 'Leave Name cannot be empty.' });
+      if (name.length > 100) return res.status(400).json({ error: 'Leave Name is too long (max 100 characters).' });
+      fields.label = name;
+      const { rows: clash } = await pool.query(
+        `SELECT id FROM leave_policies
+          WHERE organization_id = $1 AND id <> $2 AND lower(label) = lower($3)
+            AND branch_id IS NOT DISTINCT FROM $4 LIMIT 1`,
+        [oId, before.id, name, before.branch_id ?? null]
+      );
+      if (clash.length) return res.status(400).json({ error: `A leave policy named "${name}" already exists.` });
+    }
 
     const { data, error } = await db.from('leave_policies')
       .update(fields).eq('id', req.params.id).eq('organization_id', oId)

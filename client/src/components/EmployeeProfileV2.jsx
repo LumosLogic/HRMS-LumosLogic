@@ -19,6 +19,7 @@ import { apiGet, apiPost, apiPut, apiPatch, apiDelete } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { Avatar } from '@/components/ui/Avatar';
 import { StatusBadge } from '@/components/ui/Badge';
+import WeeklyOffSelect, { formatWeeklyOff } from '@/components/ui/WeeklyOffSelect';
 import { fmtDate, MONTHS, countWorkingDaysInRange, countLeaveDaysInRange } from '@/lib/utils';
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -179,13 +180,22 @@ function PersonalTab({ empId, isAdmin, onUnsavedChange }) {
     onError: e => toast(e.message, 'error'),
   });
 
+  // BUG_259: raise "unsaved changes" only when the form really differs from what was
+  // loaded when Edit was clicked (opening an edit section alone is not a change).
+  const formBaseline = useRef(null);
+  useEffect(() => {
+    if (!editSection) return;
+    onUnsavedChange?.(formBaseline.current !== null && JSON.stringify(form) !== formBaseline.current);
+  }, [form, editSection]); // eslint-disable-line react-hooks/exhaustive-deps
+
   if (pLoad) return <LoadingSection />;
 
-  const openBasic   = () => { setForm({ ...personal }); setEditSection('basic');   onUnsavedChange?.(true); };
-  const openAddress = () => { setForm({ ...personal }); setEditSection('address'); onUnsavedChange?.(true); };
+  const startEdit   = (initial, section) => { formBaseline.current = JSON.stringify(initial); setForm(initial); setEditSection(section); };
+  const openBasic   = () => startEdit({ ...personal }, 'basic');
+  const openAddress = () => startEdit({ ...personal }, 'address');
   // BUG_199: pre-seed the Health edit form with the Basic Info blood group so a
   // fresh health record starts consistent with what Basic Information shows.
-  const openHealth  = () => { setForm({ blood_group: personal.blood_group || '', ...health }); setEditSection('health'); onUnsavedChange?.(true); };
+  const openHealth  = () => startEdit({ blood_group: personal.blood_group || '', ...health }, 'health');
   const cancelEdit  = () => { setEditSection(null); onUnsavedChange?.(false); };
   const openEc     = (rec = {}) => { setForm({ contact_name: rec.contact_name || '', relationship: rec.relationship || '', mobile_number: rec.mobile_number || '', alternate_number: rec.alternate_number || '', email: rec.email || '', address: rec.address || '', is_primary: rec.is_primary || false }); setEcModal(rec); };
   const openFamily = (rec = {}) => { setForm({ relationship: rec.relationship||'', name: rec.name||'', date_of_birth: rec.date_of_birth||'', gender: rec.gender||'', occupation: rec.occupation||'', contact_number: rec.contact_number||'', dependent: rec.dependent||false }); setFamilyModal(rec); };
@@ -601,7 +611,7 @@ function DeptMultiSelect({ departments = [], value = [], onChange }) {
 const DOW_SHORT = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
 function deriveWeeklyOff(weeklyOffDay, workSchedule) {
-  if (weeklyOffDay) return weeklyOffDay; // employee-specific override wins
+  if (weeklyOffDay) return formatWeeklyOff(weeklyOffDay); // employee-specific override wins
   // Fall back to org-level work schedule: off days = days NOT in work_days
   const workDayNums = workSchedule?.work_days
     ? workSchedule.work_days.split(',').map(Number)
@@ -713,15 +723,25 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp, onUnsavedChange }) {
     onError: e => toast(e.message, 'error'),
   });
 
+  // BUG_259: "unsaved changes" must reflect real edits only. Opening an edit section just
+  // snapshots the form; the flag is raised when the form differs from that snapshot.
+  const formBaseline = useRef(null);
+  useEffect(() => {
+    if (!orgStructEditing && !empDetailsEditing) return;
+    onUnsavedChange?.(formBaseline.current !== null && JSON.stringify(form) !== formBaseline.current);
+  }, [form, orgStructEditing, empDetailsEditing]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const openOrgStruct = () => {
-    setForm({
+    const initial = {
       joining_date:       prof.joining_date?.slice(0, 10) || '',
       branch_id:          prof.branch_id || '',
       location:           prof.location  || '',
       weekly_off_day:     prof.weekly_off_day     || '',
       work_hours_per_day: prof.work_hours_per_day || 8,
-    });
-    setOrgStructEditing(true); onUnsavedChange?.(true);
+    };
+    formBaseline.current = JSON.stringify(initial);
+    setForm(initial);
+    setOrgStructEditing(true);
   };
 
   const openSkill = (rec = {}) => { setForm({ skill_name: rec.skill_name||'', skill_category: rec.skill_category||'technical', proficiency_level: rec.proficiency_level||'intermediate', years_of_experience: rec.years_of_experience||'', can_read: rec.can_read||false, can_write: rec.can_write||false, can_speak: rec.can_speak||false }); setSkillModal(rec); };
@@ -745,7 +765,7 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp, onUnsavedChange }) {
               </button>
             </div>
           : <AdminBtn onClick={() => {
-              setForm({
+              const initial = {
                 employee_id:     prof.employee_id     || '',
                 department_ids:  prof.departments?.map(d => d.id) || [],
                 position:        prof.position        || '',
@@ -762,8 +782,10 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp, onUnsavedChange }) {
                 confirmation_date: prof.confirmation_date?.slice(0,10) || '',
                 probation_applicable: prof.probation_applicable || false,
                 probation_months:    prof.probation_months     || '',
-              });
-              setEmpDetailsEditing(true); onUnsavedChange?.(true);
+              };
+              formBaseline.current = JSON.stringify(initial);
+              setForm(initial);
+              setEmpDetailsEditing(true);
             }} />
         )}>
         {empDetailsEditing ? (
@@ -884,13 +906,8 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp, onUnsavedChange }) {
                 <label className="form-label">Work Location</label>
                 <input className="form-control" placeholder="e.g. Ahmedabad, Gujarat" value={form.location || ''} onChange={e => set('location', e.target.value)} />
               </div>
-              <div>
-                <label className="form-label">Weekly Off</label>
-                <select className="form-control" value={form.weekly_off_day || ''} onChange={e => set('weekly_off_day', e.target.value)}>
-                  <option value="">— Select —</option>
-                  {['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map(d => <option key={d} value={d}>{d}</option>)}
-                </select>
-              </div>
+              {/* BUG_260: multi-select — several weekly-off days (stored comma-separated) */}
+              <WeeklyOffSelect value={form.weekly_off_day || ''} onChange={v => set('weekly_off_day', v)} />
               <div>
                 <label className="form-label">Work Hours/Day</label>
                 <input type="number" className="form-control" min="1" max="24" value={form.work_hours_per_day || ''} onChange={e => set('work_hours_per_day', Number(e.target.value))} />
@@ -2261,13 +2278,8 @@ function SystemTab({ emp, onEdit }) {
                 <label className="form-label">Work Hours / Day</label>
                 <input type="number" className="form-control" min="1" max="24" value={form.work_hours_per_day||8} onChange={e=>set('work_hours_per_day',Number(e.target.value))}/>
               </div>
-              <div>
-                <label className="form-label">Weekly Off</label>
-                <select className="form-control" value={form.weekly_off_day||''} onChange={e=>set('weekly_off_day',e.target.value)}>
-                  <option value="">— None / Use org schedule —</option>
-                  {['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'].map(d=><option key={d} value={d}>{d}</option>)}
-                </select>
-              </div>
+              {/* BUG_260: multi-select; none selected = use the org schedule */}
+              <WeeklyOffSelect value={form.weekly_off_day||''} onChange={v=>set('weekly_off_day',v)} />
               <div>
                 <label className="form-label">Device / Biometric PIN</label>
                 <input className="form-control" value={form.device_enrollment_id||''} onChange={e=>set('device_enrollment_id',e.target.value)} placeholder="Enrollment ID"/>
@@ -2300,7 +2312,7 @@ function SystemTab({ emp, onEdit }) {
             <InfoRow label="Salary On"        value={emp.salary_on} />
             <InfoRow label="Salary Structure" value={emp.salary_structure} />
             <InfoRow label="Work Hours / Day" value={emp.work_hours_per_day ? `${emp.work_hours_per_day}h` : null} />
-            <InfoRow label="Weekly Off"       value={emp.weekly_off_day} />
+            <InfoRow label="Weekly Off"       value={formatWeeklyOff(emp.weekly_off_day)} />
             <InfoRow label="Device PIN"       value={emp.device_enrollment_id} />
             <InfoRow label="Avatar Colour" value={emp.avatar_color ? (
               <span className="flex items-center gap-2">

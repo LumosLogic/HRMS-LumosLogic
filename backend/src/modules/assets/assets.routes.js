@@ -112,6 +112,14 @@ function sanitiseAssetBody(body) {
   return body;
 }
 
+// BUG_189: never expose raw database errors (column/constraint/relation names) to the user.
+function safeAssetError(err, action) {
+  console.error(`[assets] ${action} error:`, err?.message);
+  return /column|relation|does not exist|violates|constraint|syntax error/i.test(err?.message || '')
+    ? 'We could not save the asset due to a system configuration issue. Please try again, or contact support if the problem persists.'
+    : (err?.message || 'Server error');
+}
+
 // POST /api/assets
 router.post('/', auth, hasPermission('assets', 'create'), withBranchContext, async (req, res) => {
   try {
@@ -156,7 +164,7 @@ router.post('/', auth, hasPermission('assets', 'create'), withBranchContext, asy
     const { data, error } = await db.from('assets').insert(body).select().single();
     if (error) throw error;
     res.json(data);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { res.status(500).json({ error: safeAssetError(err, 'create') }); }
 });
 
 // PUT /api/assets/:id
@@ -207,7 +215,7 @@ router.put('/:id', auth, hasPermission('assets', 'manage'), async (req, res) => 
       });
     }
     res.json(data);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) { res.status(500).json({ error: safeAssetError(err, 'update') }); }
 });
 
 // DELETE /api/assets/:id

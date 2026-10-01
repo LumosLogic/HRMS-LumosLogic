@@ -178,6 +178,7 @@ router.put('/org/settings', auth, async (req, res) => {
         .update({ annual_quota: update.total_annual_leaves })
         .eq('organization_id', targetOrgId)
         .eq('leave_type', 'annual')
+        .is('branch_id', null)   // org-wide row only — never overwrite a branch override
         .eq('active', true);
     }
 

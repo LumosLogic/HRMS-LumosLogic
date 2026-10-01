@@ -39,7 +39,7 @@ router.get('/', auth, adminOnly, withBranchContext, async (req, res) => {
     let empsCountQ = db.from('users').select('*', { count: 'exact', head: true }).eq('role', 'employee').eq('organization_id', orgId(req));
     let allEmpsQ  = db.from('users').select('department, role, employment_type, position').eq('organization_id', orgId(req)).eq('role', 'employee').not('employee_status', 'in', '("inactive","resigned","terminated")');
     let last30AttQ = db.from('attendance').select('date, status').eq('organization_id', orgId(req)).gte('date', from30).lte('date', today7);
-    const leavePoliciesQ = db.from('leave_policies').select('leave_type, annual_quota, label').eq('organization_id', orgId(req)).eq('active', true);
+    const leavePoliciesQ = db.from('leave_policies').select('leave_type, annual_quota, label, branch_id').eq('organization_id', orgId(req)).eq('active', true);
 
     if (empIds !== null) {
       leavesQ    = leavesQ.in('user_id', empIds);
@@ -143,7 +143,11 @@ router.get('/', auth, adminOnly, withBranchContext, async (req, res) => {
     const approvedByType = {};
     (allLeaves || []).filter(l => l.status === 'approved' && l.leave_time !== 'wfh' && l.leave_type !== 'wfh').forEach(l => { approvedByType[l.leave_type] = (approvedByType[l.leave_type] || 0) + 1; });
     const policyMap = {};
-    (leavePolicies || []).filter(p => p.leave_type !== 'wfh').forEach(p => { policyMap[p.leave_type] = { label: p.label, quota: p.annual_quota }; });
+    // Branch overrides first, org-wide rows last, so the org-wide policy wins deterministically
+    // when both exist for a type (they can since BUG-131's per-branch unique index).
+    (leavePolicies || []).filter(p => p.leave_type !== 'wfh')
+      .sort((a, b) => (b.branch_id != null) - (a.branch_id != null))
+      .forEach(p => { policyMap[p.leave_type] = { label: p.label, quota: p.annual_quota }; });
     const leaveBalanceByType = Object.entries({ ...LEAVE_DEFAULTS, ...policyMap }).slice(0, 5).map(([type, info]) => ({
       type, label: info.label, used: approvedByType[type] || 0, total: info.quota || 20, color: LEAVE_COLORS[type] || '#94a3b8',
     }));
