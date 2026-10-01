@@ -3,8 +3,10 @@
 --
 -- Purpose:
 --   Relitrade (org_id = 1) — request from client (Pranav Sir, 2026-10-01):
+--   ONLY employees whose export BranchName = 'Ahmedabad' are imported into HO.
+--   (Bhuj, Gift City Gandhinagar and Mumbai rows were removed from this file.)
 --     1. Rename branch "Main Area" (code MAIN, branch id 1) to "HO".
---     2. Insert the 53 employees from the client's employee master
+--     2. Insert the Ahmedabad employees from the client's employee master
 --        export into the HO branch.
 --     3. Register biometric PINs so back-dated September 2026 punches
 --        from the Main Area device can be fetched/mapped for HO staff.
@@ -63,7 +65,6 @@ INSERT INTO _ho_stage VALUES
 ('405','Mr','Pankaj Bhupendrabhai Khatri','KYC','Head','2015-06-10','B','9265942509','Male','1979-06-03','A+','khatripankaj454@gmail.com','Single','PANDIT DINDAYAL FLAT1, N 406 4TH FLOOR, OPP. SEEMA COLONY, VIVEKA NAND NAGAR, HATHIJAN, GERATPUR ROAD','AHMEDABAD','GUJARAT','382445','AQOPK1781E','357468376495',NULL,'Kotak Bank',NULL,'9447699846','KKBK0000958','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,NULL,'618','401'),
 ('407','Ms','Nitika Sunil Patel','Backoffice','Executive','2016-04-01','A','9824455011','Female','1980-10-28',NULL,'nitikamayo@yahoo.co.in','Single','Surajbhavan Shreeji, Saurastra Patel society, Uttam Dairy Road, Rakhiyal','AHMEDABAD','GUJARAT','380023','BLUPP5308Q','361965637404',NULL,'Bank of Baroda',NULL,'84620100010440','BARB0DBBAPU','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,NULL,'401','401'),
 ('408','Mr','Ranbir Jagdishbhai Chaudhary','RMS','Head','2017-05-02','A','9586817907','Male','1988-02-15','O-','ranbir1502@gmail.com','Married','A/26, GANDHI PARK SOCIETY, NR VIRATNAGAR, AHMEDABAD','AHMEDABAD','GUJARAT','382352','AKVPC9333K','617329241049',NULL,'Kotak Bank',NULL,'9346996435','KKBK0000958','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,NULL,'401','401'),
-('417','Mr','Dhaval Dineshbhai Thacker','Back Office and Operations','Executive','2011-12-25','A','9909893776','Male','1989-04-07',NULL,'dhavalthacker7210@gmail.com','Single','21, Ganesh chowk, Jeshtha Nagar, Bhuj City','BHUJ','GUJARAT','370001','BGGPT2728D','269780813199',NULL,'IDBI Bank',NULL,'411104000160841','IBKL0000411','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,NULL,'438','401'),
 ('419','Ms','Avani Amitbhai Koradia','Backoffice','Executive','2011-12-25','A','9924455011','Female','1984-11-25',NULL,'arihant12000@hotmail.com','Married','A-302, Navrang Flat, Nr. Galaxy Cinema, Naroda, Ahmedabad','AHMEDABAD','GUJARAT','382330','AAWPP0138L','863852374082',NULL,'HDFC',NULL,'00061000226661','HDFC0000006','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,NULL,'401','401'),
 ('420','Mr','Amrut Desai','Admin','Executive','2015-05-10','B','9714974064','Male','1986-10-24','A+','amartdesadi385@gmail.com','Married','463, rabari vas, new sharda mandir road sukhipura Ahmedabad City','AHMEDABAD','GUJARAT','380051','AOBPR9435D','220319342147',NULL,'ICICI BANK',NULL,'429601503750','ICIC0004296','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,NULL,'401','605'),
 ('423','Mr','Pratap Ishwarlal Thakkar','Backoffice','Executive','2011-12-25','A','9925731000','Male','1961-07-14',NULL,'pankajruparel397@yahoo.com',NULL,'A-601, Retreat Tower, Opp Shyamal Row House-1, Nr Shyamal Char Rasta, 132 Ft Ring Road','AHMEDABAD','GUJARAT','380015','ABIPT1436C','649471310453',NULL,'HDFC',NULL,'251101001003000','HDFC0CGMCBL','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,NULL,'401','401'),
@@ -72,12 +73,10 @@ INSERT INTO _ho_stage VALUES
 ('432','Mr','Suresh Kanjibhai Kumhar','Admin','Executive','2015-01-15','A','9998569960','Male','1983-04-03',NULL,NULL,'Married','221, Chamunda Nagar, Butbhavani Road, Vejalpur, Ahmedabad','AHMEDABAD','GUJARAT','380051',NULL,NULL,NULL,'Kotak Bank',NULL,'9346996442','KKBK0000958','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,NULL,'401','605'),
 ('433','Mr','Keyur AnilKumar Kamdar','Trading','Dealer','2019-07-08','B','9408837146','Male','1981-07-02','AB+','keyur5309@gmail.com','Married','B101, PUSHPAK APARTMENT PRERNA TIRTH DERASAR ROAD SATELLITE','AHMEDABAD','GUJARAT','380015','AWMPK7085K','800023625790',NULL,'ICICI','Sindhubhavan','429601503736','ICIC0004296','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,NULL,'401','408'),
 ('434','Mr','Nilesh Rameshbhai Parmar','Trading','Dealer','2019-07-01','B','8530567994','Male','1983-02-07','A+','nilesh.parmar1346@gmail.com','Married','B-703, Anand Elegence, V.I.P road, Opp Bharat Petrol Pump, Shela, South Bopal, Ahmedabad','AHMEDABAD','GUJARAT','380058','AQRPP7577J','631902691809',NULL,'Kotak Bank',NULL,'9148006714','KKBK0000958','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,NULL,'401','408'),
-('438','Mr','Ashok Sanghvi','Management','Founder','2014-12-25','A','9979755555','Male','1970-06-01',NULL,'ashok@relitrade.in',NULL,'Deep Bunglow, Ranchhod Wadi, Station Road, Bhuj','BHUJ','GUJARAT','370001','AGYPS1467M','732906043097',NULL,'ICICI BANK',NULL,'429605000441','ICIC0004296','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,NULL,NULL,NULL),
 ('440','Mr','Kirti Keshavlal Sanghvi','Management','Chief operations officer','2014-12-25','A','9913136000','Male','1962-03-14',NULL,'kirti@relitrade.in',NULL,'NA NA NA','AHMEDABAD','GUJARAT',NULL,'AGGPS5574S',NULL,NULL,'ICICI BANK',NULL,'429605000438','ICIC0004296','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,NULL,'401','401'),
 ('441','Mr','Sunny Natvarlal Prajapati','RMS','Executive','2019-08-01','B','9979531293','Male','1986-12-08','AB-','sunnyprajapati1986@gmail.com','Single','C/38, ANSUYAPARK, PART-1, NARAYANNAGAR, NEAR KHODIYARNAGAR, BAPUNAGAR, AHMEDABAD','AHMEDABAD','GUJARAT','380024','BVBPP3723N','609685759909',NULL,'ICICI','Sindhubhavan','429601503745','ICIC0004296','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,NULL,'401','408'),
 ('442','Mr','Dipen Maheshbhai Patel','Trading','Dealer','2019-08-01','B','9426422819','Male','1991-02-17','B+','dipenpatel549@yahoo.com','Single','Kakarkhad, Nr. Chora, Nadiad','NADIAD','GUJARAT','387002','BFRPP8057F','728547130658',NULL,'Kotak Bank',NULL,'3547873113','KKBK0000958','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,NULL,'401','408'),
 ('448','Mr','Pranavkumar Rambhai Patel','IT','Head','2019-12-02','B','9537354565','Male','1989-09-03','O+','pranavbcpl@gmail.com','Married','C-501 Shanti Residency, Near Royal Circle Sargasan, Gandhinagar','GANDHINAGAR','GUJARAT','382421',NULL,'276787178834',NULL,'ICICI','Sindhubhavan','429601504031','ICIC0004296','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,NULL,'401','401'),
-('489','Mr','Jainam Hitenbhai Zota','Backoffice','Dealer','2022-04-01','B','8128600205','Male','2000-11-04',NULL,'jainamzota2000@gmail.com','Single','Omkar, Opp Vayda Dela, Talav Street, Dr.Mehta Marg, Bhuj-Kutch','BHUJ','GUJARAT','370001','ACPPZ3253R','247887514180',NULL,'SBI',NULL,'39504266529','SBIN0013011','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,NULL,'438','401'),
 ('605','Ms','Isha Rajan Somani','Admin','Receptionist','2022-12-19','B','9106161446','Female','1995-06-23','B+','isha.shah2306@gmail.com','Married','B-34, Subhdarshan Apartment, Jodhpur Village, Prernatirth Derasar Road, Ahmedabad','AHMEDABAD','GUJARAT','380015','FOFPS7052G','859396754893',NULL,'Kotak Bank',NULL,'9346996459','KKBK0000958','savings',TRUE,'GUJARAT',FALSE,FALSE,'2023-04-03',NULL,'401','401'),
 ('611','Ms','Payal Dineshbhai Dabhi','Compliance','Executive','2023-04-15','B','9157547038','Female','1995-06-08','AB+','payal24165@gmail.com','Single','460/50 GAJANAND SOC GIRDHARNAGAR SHAHIBAUG AHMEDABAD','AHMEDABAD','GUJARAT','380004','CNKPD6614E','714034530236',NULL,'HDFC BANK','NAVRANGPURA','50100585348765','HDFC0000006','savings',TRUE,'GUJARAT',FALSE,FALSE,'2023-07-18',NULL,'618','401'),
 ('613','Ms','Madhuri Babulal Kariya','Accounts','Sr. Executive','2023-04-10','B','7575078549','Female','1991-12-10','B+','madhurikariya940@gmail.com','Single','202, KARMJYOT-3 NRAR VANDAN PARTY PLOT SATELLITE AHMEDABAD','AHMEDABAD','GUJARAT','380015','ECMPK7872Q','235302835913',NULL,'Kotak Bank','satellite ahmedabad','1347040490','KKBK0000810','savings',TRUE,'GUJARAT',FALSE,FALSE,'2023-07-18',NULL,'618','401'),
@@ -85,32 +84,16 @@ INSERT INTO _ho_stage VALUES
 ('618','Mr','Krunal Ashwinkumar Soni','Compliance','Head','2023-08-14','B','9998039285','Male','1986-04-17','A+','kunalsoni17@gmail.com','Married','D-501 Dharti Saket ICON, Behind Vardan Tower, Pragati Nagar Road, Naranpura, Ahmedabad-380013','AHMEDABAD','GUJARAT','380013','AYRPS9009E','847921143053',NULL,'Indian Bank','NARANPURA','776460704','IDIB000N013','savings',TRUE,'GUJARAT',FALSE,FALSE,'2023-10-31',NULL,'401','401'),
 ('628','Ms','Roshni Pareshbhai Rajput','DP','Sr. Executive','2023-10-10','B','9712804709','Female','1997-05-19',NULL,'roshnipr1997@gmail.com','Married','B 104 AASHRAY PLATINA NEAR SWAMINARAYN MANDIR NEW RANIP','AHMEDABAD','GUJARAT','382480',NULL,'884229652628',NULL,'HDFC BANK','AHMEDABAD VEJALPUR','50100405499297','HDFC0000048','savings',TRUE,'GUJARAT',FALSE,FALSE,'2024-01-15',NULL,'618','401'),
 ('635','Mr','Ajay Pravinji Devda','Admin','Office Boy','2023-12-05','B','9328348204','Male','1994-07-15','B+','ajaysinhdevda364@gmail.com','Married','M - 308 Dindayal pandit Vibhag -1, Hathijan, Ahmedabad','AHMEDABAD','GUJARAT','382445','EODPD1939A','863259053477',NULL,'Union Bank of India',NULL,'312802010051139','UBIN0531286','savings',TRUE,'GUJARAT',FALSE,FALSE,'2024-03-15',NULL,'401','605'),
-('638','Ms','Zarna Mukeshbhai Suthar','Trading','Executive','2023-12-13','B','8160241565','Female','1991-06-07','B+','zarna7297@gmail.com','Married','B-405, Ganesh Icon & Heights, Dahegam Circle, S.P.Ring Road, New Naroda Ahmedabad','AHMEDABAD','GUJARAT','382330',NULL,'683716642221',NULL,'State Bank of India',NULL,'20343155808','SBIN0000498','savings',TRUE,'GUJARAT',TRUE,FALSE,'2024-03-15',NULL,'674','692'),
 ('653','Mr','Nitesh Jayendrabhai Patadiya','DP','Head','2024-06-03','B','9998336860','Male','1971-08-31','B+','niteshpatadiya@gmail.com','Married','C5 Navdeep flat, Bhimji Pura, Nava vadaj, Ahmedabad','AHMEDABAD','GUJARAT','380013',NULL,'833799623786',NULL,'ICICI BANK LTD','ASHRAM ROAD','018901549875','ICIC0000189','savings',TRUE,'GUJARAT',FALSE,FALSE,'2024-09-05',NULL,'618','401'),
 ('670','Ms','Anjali Sanjaykumar Parekh','Backoffice','Relationship Manager','2024-10-16','B','9173120109','Female','1999-06-09',NULL,'anjaliparekh05@gmail.com',NULL,'302, Ilax appartment, Near new Muktajivan English medium school Daxini, maninagar','AHMEDABAD','GUJARAT','380008',NULL,'293097979715',NULL,'Indian Bank','DAXINI SOCIETY, AHMEDABAD','6150895450','IDBIB000D042','savings',TRUE,'GUJARAT',FALSE,FALSE,'2025-01-23',NULL,'618','401'),
 ('673','Ms','Ishita Jamanbhai Dhokiya','Mutual Fund','Executive','2025-02-01','B','7487089481','Female','2003-05-28','B-','dhokiyaishita@gmail.com','Single','B-202, PELICAN HEIGHTS, B/H ANMOL ARISE, HATHIJAN CIRCLE, S P RING ROAD, Vinzol, Ahmedabad','AHMEDABAD','GUJARAT','382445','HDOPD0952C','649713487572',NULL,'BANK OF BARODA',NULL,'03700100048056','BARB0MITHAP','savings',TRUE,'GUJARAT',FALSE,FALSE,'2025-05-06',NULL,'401','501'),
-('674','Mr','Jignesh Indulal Pandya','Research','Head of Research & Investments','2025-02-03','B','9870255051','Male','1982-12-17','B+','jignesh.pandya@relitrade.in','Married','Kudasan Gandhinagar','GANDHINAGAR','GUJARAT',NULL,'ATEPP0786D','850898830827',NULL,'HDFC',NULL,'02271140013786','HDFC0000227','savings',TRUE,'GUJARAT',FALSE,FALSE,'2025-05-06',NULL,'401','401'),
-('677','Ms','Ishanee Piyushkumar Bhatt','Research','Executive','2025-05-15','B','8511569197','Female','2003-03-09','O+','ishaneebhatt9@gmail.com','Single','Plot No: 324/1, Sector: 4/B','GANDHINAGAR','GUJARAT','382006',NULL,'358204904285',NULL,'Axis Bank',NULL,'922010025297483','UTIB0001873','savings',TRUE,'GUJARAT',FALSE,FALSE,'2025-09-08',NULL,'401','674'),
 ('683','Ms','Kalpana Meena','Admin','Housekeeper','2025-07-01','B','9737673259','Female','2003-07-05',NULL,NULL,'Single','Lady Talav, Thaltej, Ahmedabad, Gujarat. Mukam Post, Pachlasa Chhota, PO: Pachlasa Chhota, Dungarpur','DUNGARPUR','RAJASTHAN','314038',NULL,'718717765098',NULL,NULL,NULL,NULL,NULL,NULL,FALSE,NULL,FALSE,FALSE,'2025-10-15',NULL,'401','605'),
-('685','Mr','Lakhamir Vankabhai Rabari','Admin','Executive','2025-08-01','B',NULL,'Male','1987-06-01',NULL,NULL,NULL,'NR TO HANUMAN MANDIR NR BARANKRUPA STORE, SANOSARA, KUTCH','BHUJ','GUJARAT','370105','BPXPR1701N',NULL,NULL,'ICICI BANK',NULL,'008601551443','ICIC0000086','savings',TRUE,'GUJARAT',FALSE,FALSE,'2025-11-13',NULL,'438','401'),
 ('687','Ms','Bhumi Ashutosh Thakkar','Backoffice','Executive','2025-04-01','B','9978916200','Female','1993-11-17',NULL,NULL,NULL,'A/402, SHREEKUNJ APPT, B/H KANAK KALA, NR. SEEMA HALL, ANAND NAGAR RD, SATELITE','AHMEDABAD','GUJARAT','380015',NULL,'971640883005',NULL,'ICICI',NULL,'429601000680','ICIC0004296','savings',TRUE,'GUJARAT',FALSE,FALSE,'2025-11-13',NULL,'401','401'),
-('692','Mr','Chirag Vishnubhai Patel','Delta','Business development manager','2025-12-15','B','9662429555','Male','1986-06-29','O+','chiragv29@gmail.com','Married','B-404 RHYTHM height nanachiloda Nr Megha height, new shahibagh ahmedabad','AHMEDABAD','GUJARAT','382330','AUMPP4325K','905089856711',NULL,'HDFC BANK',NULL,'12851050033427','HDFC0001285','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,NULL,'401','674'),
-('693','Mr','Dixit Rameshbhai Gondaliya','Data','Analyst','2026-01-01','B',NULL,'Male','2002-07-30','B+',NULL,'Single',NULL,NULL,'GUJARAT',NULL,'CZQPG6045L','545260287515',NULL,'BANK OF BARODA','RING ROAD, GUJARAT','38760100014762','BARB0RINRAJ','savings',TRUE,'GUJARAT',FALSE,FALSE,'2026-04-24',NULL,'401','674'),
-('694','Mr','Jaydip Kanubhai Patel','Trading','Dealer','2026-01-01','B','7575823272','Male','2001-04-16','O+','jaydippatel1642001@gmail.com','Married','H-503, Vishwash City 10, Gota Ahmedabad','AHMEDABAD','GUJARAT','382481','FQJPP6283G','831264941907','104006005527825','Union Bank of India','MADHI','292322010000108','UBIN0929239','savings',TRUE,'GUJARAT',FALSE,FALSE,'2026-05-13',NULL,'674','692'),
 ('698','Mr','Nikhil Yogesh Purohit','CS','Intern','2026-02-16','B','7297988727','Male','2003-05-17','O+','nikhilpurohit169@gmail.com','Single','Brahman Basti, Bajoli Dist- Nagaur','NAGAUR','RAJASTHAN','341503','GJWPP2238E','242321882285',NULL,'SBI','bajoli','40412777719','SBIN0031664','savings',FALSE,NULL,FALSE,FALSE,NULL,10,'401','425'),
 ('699','Mr','Jatin Deepakbhai Didwaniya','Accounts','Head','2026-03-02','B','9879327268','Male','2003-03-01','O+','didwaniyajatin007@gmail.com','Single','110/D, Lakhudi Co-op. Society, Sardar Patel Stadium road, Navrangpura, Ahmedabad','AHMEDABAD','GUJARAT','380009','HMPPD1126N','646742840979',NULL,'Bank of India','Vadaj Road','202810110014126','BKID0002028','savings',TRUE,'GUJARAT',FALSE,FALSE,'2026-06-23',NULL,'618','401'),
-('802','Ms','Bhavna Shaileshbhai Parekh','Back Office','Backoffice and Operations','2026-04-16','B','7624033268','Female','1996-01-19',NULL,NULL,'Single','Siddharth Xclusive, Sargasan, Gandhinagar','GANDHINAGAR','GUJARAT',NULL,'FPFPP0410C','556563511300',NULL,'SBI',NULL,'32825623125','SBIN0060020','savings',FALSE,NULL,FALSE,FALSE,NULL,NULL,'401','674'),
 ('803','Ms','Riya Kishorbhai Dhacha','Accounts','Account executive','2026-06-08','B','9824275791','Female','2002-12-29',NULL,NULL,'Single','Plot No 799/1, Jagruti Park Society, Sector 30, Gandhinagar, Gujarat, 382030','GANDHINAGAR','GUJARAT','382030','HKXPD8627N','546452969956',NULL,'SBI','Sector 21, Gandhinagar','40055230679','SBIN0016685','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,3,'618','401'),
-('804','Mr','Shyamal Mahendrabhai Bhatt','IT','Executive','2026-06-16','A','9624014981','Male','1981-09-14','A+',NULL,'Married','K 304 Sayona Green, Behind Vodafone, Gota, Daskroi, Ahmedabad, Gujarat, 382481','AHMEDABAD','GUJARAT','382481','ANOPB5210G','648617253636',NULL,'IDFC First Bank','ahmedabad gota','10152464964','IDFB0040337','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,3,'401','448'),
 ('805','Ms','Priyanshi Riteshbhai Sheth','Tele Sales','Relationship Manager','2026-06-15','B','9409032001','Female','2004-01-14',NULL,NULL,'Single','Navkar Elite 12, Motikunj Society, Opp audit Bhavan, Navrangpura, Ahmedabad','AHMEDABAD','GUJARAT','380009','QLWPS2013E','395172796235',NULL,'BANK OF BARODA','Vijaynagar, Bhuj','78160100039173','BARBOVJBHUJ','savings',FALSE,NULL,FALSE,FALSE,NULL,3,'401','401'),
-('806','Mr','Bhavyakumar Sanjaykumar Bhavsar','Dealer','Dealer','2026-07-01','B','8487930325','Male','2003-02-27',NULL,NULL,'Single','Vihar, Gandhinagar, Gujarat, 382810','GANDHINAGAR','GUJARAT','382810','SLPPS7679M','215382823534',NULL,'BANK OF BARODA','KUKARWADA, MEHSANA, GUJARAT','01730100017270','BARB0KUKARW','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,3,'674','692'),
-('807','Ms','Geetanjali Mehul Kothari','Compliance','Compliance Executive','2026-07-16','B','9967668455','Female','1997-03-06',NULL,NULL,'Single','03/H sattadhar co. op. society, nr hirabag part -1, ghatlodia, ahmedabad','AHMEDABAD','GUJARAT','380061','BCUPJ5072N','315335061762',NULL,'Axis Bank','Mira Road, Mumbai','915010045196986','UTIB0000573','current',TRUE,'GUJARAT',FALSE,FALSE,NULL,3,'618','401'),
-('808','Ms','Riddhi Mukeshbhai Parmar','Dealer','Dealer','2026-08-03','B','8000927542','Female','2000-04-23',NULL,'riddhiparmar8000@gmail.com','Married','B/1003, PRAMUKH ARISTA NR. PRAMUKH GLORY SARGASAN GANDHINAGAR','GANDHINAGAR','GUJARAT','382421','FPSPP4348E','326166268582',NULL,'Axis Bank','Amreli','975827314','UTIB0000058','savings',TRUE,'GUJARAT',FALSE,FALSE,NULL,3,'674','692'),
-('809','Mr','Vishal Atmarambhai Solanki','Admin','Office clerk','2026-08-01','B',NULL,'Male','1999-01-27',NULL,NULL,'Single',NULL,NULL,'GUJARAT',NULL,'IMYPS6008A','311865626157',NULL,'SBI','Dabhoda, Gandhinagar','32526631715','SBIN0002640','savings',TRUE,'GUJARAT',TRUE,TRUE,NULL,3,'401','605'),
-('912','Mr','Birendra Kumal','Admin','Office Boy','2026-02-22','B','8451049300','Male','2007-05-03',NULL,'veerukumal909@gmail.com','Single','Lallubhai compound A - 56, Shri Ganesh Krupa Chawl, Annabhau sathe Nagar, Mankhurd West','MUMBAI','MAHARASHTRA',NULL,NULL,'930941634803',NULL,'Kotak Bank','Sion, Mumbai','2052405857','KKBK0000635','savings',FALSE,NULL,FALSE,FALSE,NULL,NULL,'401','401'),
-('1909','Ms','Pallavi Kashiram Khanolkar','Dealing','Dealer','2022-05-10','B','9867297222','Female','1977-02-01','O+','pallavi_khanolkar@yahoo.com','Single','A/24, 3RD FLR, KRISHNAI NIWAS BLDG, KOPAR RD, DOMBIVLI(W), NEAR SANTOSHI MATA MANDIR','THANE','MAHARASHTRA','421202','ARXPK5434G','939810596687',NULL,'Kotak Bank','DOMBIVALI','3247673082','KKBK0000628','savings',TRUE,'MAHARASHTRA',FALSE,FALSE,NULL,NULL,'401','401'),
-('1910','Mr','Ritesh Dhirajlal Gogri','Dealing','Dealer','2022-05-23','B','9004846434','Male','1983-10-07','O+','riteshgogri83@gmail.com','Single','H/304, BRIZA, ANCHOR PARK, EVERSHINE CITY LAST STOP, NEAR WATER TANK, VASAI EAST','VIRAR','MAHARASHTRA','401208','AJNPG8845K','790565608535',NULL,'Kotak Bank','VASAI MANIKPUR','3247673068','KKBK0000659','savings',TRUE,'MAHARASHTRA',FALSE,FALSE,NULL,NULL,'401','401'),
-('1911','Ms','Jyotsna Ramesh Sane','Back Office','Executive','2022-06-01','B','8422089817','Female','2002-10-14','AB+','jyotsnasane71@gmail.com','Single','Mahatma Gandhi Nagar Rahivashi sangh M.G. Road Tata Power Lain Khali Opp Municipal School Dharavi Mumbai','MUMBAI','MAHARASHTRA','400017','NMPPS6177E','301807667379',NULL,'Kotak Bank','mumbai','3247673044','KKBK0000958','savings',TRUE,'MAHARASHTRA',FALSE,FALSE,NULL,NULL,'401','401');
+('807','Ms','Geetanjali Mehul Kothari','Compliance','Compliance Executive','2026-07-16','B','9967668455','Female','1997-03-06',NULL,NULL,'Single','03/H sattadhar co. op. society, nr hirabag part -1, ghatlodia, ahmedabad','AHMEDABAD','GUJARAT','380061','BCUPJ5072N','315335061762',NULL,'Axis Bank','Mira Road, Mumbai','915010045196986','UTIB0000573','current',TRUE,'GUJARAT',FALSE,FALSE,NULL,3,'618','401');
 
 CREATE TEMP TABLE _ho_new (user_id BIGINT, emp_id TEXT) ON COMMIT DROP;
 
@@ -332,26 +315,12 @@ INSERT INTO _ho_x VALUES
 ('618',NULL,NULL,NULL,NULL,NULL,'9998896389',NULL,NULL),
 ('628',NULL,'5.3','50',NULL,NULL,'9904818838',NULL,NULL),
 ('673','Hindu','5.1','55',NULL,NULL,'7874435530',NULL,NULL),
-('674','Hindu','5.1','75',NULL,NULL,NULL,NULL,NULL),
-('677','Hindu','152','40',NULL,NULL,NULL,NULL,NULL),
-('692','Hindu','5.4','75.5',NULL,NULL,'9375132186',NULL,NULL),
-('693','Hindu','5.67','75',NULL,NULL,NULL,NULL,NULL),
-('694','Hindu',NULL,'70','GJ0220210021766','2041-04-15','9712053014','Jignesh Kanubhai Patel','Brother'),
 ('698','Hindu','6.3','70',NULL,NULL,'9413507523','Raminaw Pareek','Grand Father'),
 ('699','Hindu','5.7','58','GJ01 20210045648','2043-02-28','9824227268','Deepakbhai Didwaniya','Father'),
-('638',NULL,'5.04','73',NULL,NULL,NULL,NULL,NULL),
 ('683','Hindu',NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-('802','Hindu',NULL,NULL,NULL,NULL,NULL,NULL,NULL),
 ('803','Hindu',NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-('804','Hindu','5','65',NULL,NULL,NULL,NULL,NULL),
 ('805','Hindu',NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-('806','Hindu',NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-('807','Hindu',NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-('808','Hindu',NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-('809','Hindu',NULL,NULL,NULL,NULL,NULL,NULL,NULL),
-('1909','Hindu','5.5','63',NULL,NULL,'8879816553',NULL,NULL),
-('1910','Jain','5.4','100','MH02 20140038059','2033-10-06','9987789807',NULL,NULL),
-('1911','Hindu','5.5','45',NULL,NULL,'9702871788',NULL,NULL);
+('807','Hindu',NULL,NULL,NULL,NULL,NULL,NULL,NULL);
 
 -- family: emp_id, relationship, name, dob, occupation, dependent
 CREATE TEMP TABLE _ho_fam (
@@ -370,7 +339,6 @@ INSERT INTO _ho_fam VALUES
 ('408','spouse','Renu Chaudhary',NULL,NULL,FALSE),
 ('408','child','Divyaan',NULL,NULL,TRUE),
 ('408','child','Kriva',NULL,NULL,TRUE),
-('417','father','Dineshbhai Thacker',NULL,NULL,FALSE),
 ('419','spouse','Amit Koradia',NULL,NULL,FALSE),
 ('420','father','Sayji Bhai Desai',NULL,NULL,FALSE),
 ('420','mother','Samuben Desai',NULL,NULL,FALSE),
@@ -399,7 +367,6 @@ INSERT INTO _ho_fam VALUES
 ('448','spouse','Harshida Patel','1986-11-21',NULL,FALSE),
 ('448','child','Divya Patel','2015-02-21',NULL,TRUE),
 ('448','child','Shlok Patel','2017-05-20',NULL,TRUE),
-('489','father','Hitenbhai Zota',NULL,NULL,FALSE),
 ('605','father','Pradip Shah','1961-05-25','Business',FALSE),
 ('605','mother','Varsha Shah','1971-10-07','House wife',FALSE),
 ('605','spouse','Rajan Somani','1995-11-21',NULL,FALSE),
@@ -413,46 +380,15 @@ INSERT INTO _ho_fam VALUES
 ('635','father','Pravinji Devda',NULL,NULL,FALSE),
 ('635','mother','Maheta Ben Devda',NULL,NULL,FALSE),
 ('635','spouse','Aartiba Devda',NULL,NULL,FALSE),
-('638','father','Dilipbhai',NULL,NULL,FALSE),
-('638','mother','Meenaben',NULL,NULL,FALSE),
-('638','spouse','Mukesh Suthar','1988-09-22',NULL,FALSE),
-('638','child','Viya','2017-07-19',NULL,TRUE),
-('638','child','Hayan','2022-09-22',NULL,TRUE),
-('674','father','Indulal Pandya',NULL,NULL,FALSE),
-('674','mother','Meena Pandya',NULL,NULL,FALSE),
-('674','spouse','Pooja Pandya',NULL,NULL,FALSE),
-('677','father','Piyushkumar Bhatt','1965-09-26','Government job',FALSE),
-('677','mother','Parulben Bhatt','1970-01-27','House wife',FALSE),
 ('683','father','Keshavlal Meena',NULL,NULL,FALSE),
 ('683','mother','Kesardevi Meena',NULL,NULL,FALSE),
-('692','father','Vishnubhai','1959-05-10',NULL,FALSE),
-('692','mother','Bharatiben','1966-06-01',NULL,FALSE),
-('692','spouse','Anita','1989-12-15',NULL,FALSE),
-('694','father','Patel Kanubhai Revabhai','1971-11-16','Farmer & Businessmen',FALSE),
-('694','mother','Patel Surekhaben Kanubhai','1975-06-01','Home Maker',FALSE),
-('694','spouse','Patel Nikitaben Jaydip','2001-11-17',NULL,FALSE),
 ('698','father','Yogesh',NULL,NULL,FALSE),
 ('698','mother','Sushila','1983-09-01',NULL,FALSE),
 ('699','father','Deepakbhai Didwaniya','1974-05-20','Business',FALSE),
 ('699','mother','Ashaben Didwaniya','1980-06-12','House Wife',FALSE),
-('802','father','Shaileshbhai',NULL,NULL,FALSE),
 ('803','father','Kishorbhai Dhacha',NULL,NULL,FALSE),
-('804','father','Mahendrabhai Bhatt',NULL,NULL,FALSE),
-('804','mother','Jyoti Mahendra Bhatt','1947-02-28','Ret. Teacher',FALSE),
-('804','spouse','Arti Shyamal Bhatt','1985-02-25',NULL,FALSE),
-('804','child','Atharv Shyamal Bhatt','2018-12-20',NULL,TRUE),
 ('805','father','Riteshbhai Sheth',NULL,NULL,FALSE),
-('806','father','Sanjaykumar Bhavsar',NULL,NULL,FALSE),
-('807','father','Paras Jain',NULL,NULL,FALSE),
-('808','father','Mukeshbhai Parmar',NULL,NULL,FALSE),
-('808','spouse','Raj Kakrecha',NULL,NULL,FALSE),
-('809','father','Atmarambhai Solanki',NULL,NULL,FALSE),
-('1909','father','Kashiram',NULL,NULL,FALSE),
-('1909','mother','Vidya',NULL,'Housewife',FALSE),
-('1910','father','Dhirajlal Gogri','1948-06-20','Business',FALSE),
-('1910','mother','Manjula Gogri','1954-07-18','House Wife',FALSE),
-('1911','father','Ramesh Baliram Sane',NULL,'Paper printing',FALSE),
-('1911','mother','Roshani Ramesh Sane',NULL,'House wife',FALSE);
+('807','father','Paras Jain',NULL,NULL,FALSE);
 
 -- nominees: emp_id, name, relationship
 CREATE TEMP TABLE _ho_nom (emp_id TEXT, name TEXT, rel TEXT) ON COMMIT DROP;
@@ -464,14 +400,7 @@ INSERT INTO _ho_nom VALUES
 ('611','Veenaben Dabhi','Mother'),
 ('615','Nareshbhai Parmar','Father'),
 ('653','Sunita Patadiya','Spouse'),
-('674','Pooja Pandya','Wife'),
-('677','Tvisha Bhatt','Sister'),
-('692','Anita Patel','Wife'),
-('694','Patel Jigneshkumar','Brother'),
-('699','Deepakbhai Didwaniya','Father'),
-('804','Arti Shyamal Bhatt','Wife'),
-('1909','Sudhir Desai','Brother'),
-('1911','Roshani Sane','Mother');
+('699','Deepakbhai Didwaniya','Father');
 
 DO $$
 DECLARE
