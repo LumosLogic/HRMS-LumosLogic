@@ -7,8 +7,9 @@ import {
   Crown, Zap, Megaphone, DollarSign, Receipt, Monitor, BarChart3,
   Target, FolderOpen, UserCheck, LogOut, Shield, Timer, Bell,
   Layers, Activity, UserPlus, UserMinus, Fingerprint, GitBranch, ScrollText,
-  Pencil, X, Save,
+  Pencil, X, Save, Smartphone,
 } from 'lucide-react';
+import MobileAppTab from './MobileAppTab';
 import { paGet, paPut, paPatch } from '@/lib/platformApi';
 
 // ── Shared helpers ─────────────────────────────────────────────────────────────
@@ -247,6 +248,7 @@ export default function PlatformOrgDetail() {
     { id: 'overview',  label: 'Overview',  Icon: Building2 },
     { id: 'members',   label: `Members (${members.length})`, Icon: Users },
     { id: 'features',  label: 'Features',  Icon: Zap },
+    { id: 'mobile',    label: 'Mobile App', Icon: Smartphone },
     { id: 'plan',      label: 'Plan',      Icon: Crown },
     { id: 'activity',  label: 'Activity',  Icon: Activity },
   ];
@@ -493,6 +495,9 @@ export default function PlatformOrgDetail() {
           )}
         </div>
       )}
+
+      {/* ── Mobile App tab (self-contained component) ── */}
+      {activeTab === 'mobile' && <MobileAppTab orgId={id} />}
 
       {/* ── Plan tab ── */}
       {activeTab === 'plan' && (

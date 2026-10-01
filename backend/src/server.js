@@ -8,6 +8,13 @@ const path     = require('path');
 const { seed }         = require('./config/db');
 const { ALLOWED_ORIGINS } = require('./middleware/auth');
 const { featureGate }  = require('./middleware/featureFlag');
+// ── Mobile app: isolated in modules/mobile + services/mobile* (no effect on web requests) ──
+const { mobileGate }   = require('./services/mobileAppService');
+const mobilePush       = require('./services/mobilePushService');
+const mobileRouter     = require('./modules/mobile/mobile.routes');
+const mobilePlatformRouter = require('./modules/mobile/mobile.platform.routes');
+const { mobileLoginGuard } = require('./modules/mobile/mobile.login');
+const { ensureMobileSchema } = require('./modules/mobile/mobile.schema');
 const { rateLimiter, LIMITS } = require('./middleware/rateLimiter');
 const { maintenanceMiddleware } = require('./middleware/maintenanceMode');
 const { biometricSnGuard, biometricAuditLog } = require('./middleware/biometricSecurity');
@@ -139,11 +146,15 @@ app.use('/api', rateLimiter(LIMITS.GENERAL_API));
 
 // ── Feature gate (runs before every /api route) ───────────────────────────────
 app.use('/api', featureGate);
+app.use('/api', mobileGate);                    // no-op unless X-Client-Platform: mobile
+app.use('/api/auth/login', mobileLoginGuard);   // no-op unless X-Client-Platform: mobile
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 app.use('/api/auth',           authRouter);
 app.use('/api',                orgRouter);         // register-org + org/settings live at /api/register-org and /api/org/settings
+app.use('/api/platform',       mobilePlatformRouter);
 app.use('/api/platform',       platformRouter);
+app.use('/api/mobile',         mobileRouter);
 app.use('/api/dashboard',      dashboardRouter);
 app.use('/api/employees',      employeesRouter);
 app.use('/api/attendance',     attendanceRouter);
@@ -320,6 +331,8 @@ async function start() {
   try {
     await seed();
     await runStartupMigrations();
+    await ensureMobileSchema();
+    mobilePush.start();
     app.listen(PORT, () => {
       console.log(`\n🚀 Lumos HRMS v${SERVER_VERSION} running at http://localhost:${PORT}\n`);
     });
