@@ -7,7 +7,7 @@ import {
   CheckCircle2, Clock, AlertCircle, UserCheck, Umbrella,
   Building2, ArrowUpDown, ChevronRight, Fingerprint, Pencil, Calendar,
 } from 'lucide-react';
-import { apiGet } from '@/lib/api';
+import { apiGet, apiDownload } from '@/lib/api';
 import { MONTHS } from '@/lib/utils';
 import { useBranch } from '@/context/BranchContext';
 import { useAuth } from '@/context/AuthContext';
@@ -715,10 +715,9 @@ export default function Reports() {
   }, [active, effectiveAttRows, effectiveLeaveRows, effectiveEmpRows, headcount, statusFilter, attStatusFilter]);
 
   // ── CSV download ──────────────────────────────────────────────────────────────
-  function getToken() { return localStorage.getItem('lt_token'); }
-
+  // BUG-127: use apiDownload so the X-Branch-Id header is sent and the export is
+  // scoped to the currently selected branch.
   async function handleDownload({ year: dlYear, month: dlMonth }) {
-    const token = getToken();
     let endpoint, params, filename;
     if (active === 'attendance') {
       endpoint = '/reports/attendance';
@@ -733,9 +732,7 @@ export default function Reports() {
       params   = {};
       filename = 'employee_list.csv';
     }
-    const q   = new URLSearchParams({ ...params, format: 'csv' }).toString();
-    const res = await fetch(`/api${endpoint}?${q}`, { headers: { Authorization: `Bearer ${token}` } });
-    const blob = await res.blob();
+    const blob = await apiDownload(endpoint, { ...params, format: 'csv' });
     const url  = URL.createObjectURL(blob);
     const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
     URL.revokeObjectURL(url);

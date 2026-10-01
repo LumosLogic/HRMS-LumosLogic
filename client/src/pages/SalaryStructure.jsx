@@ -569,6 +569,7 @@ function ManualModal({ employee, onClose, onSaved, modeToggle }) {
           <button
             onClick={() => {
               if (gross === 0) { toast('Enter at least one earning amount.', 'error'); return; }
+              if (empDed > gross) { toast(`Total deductions (${fmtD(empDed)}) cannot be greater than Gross Salary (${fmtD(gross)}).`, 'error'); return; }
               mut.mutate();
             }}
             disabled={mut.isPending || !form.basic || num('basic') === 0}

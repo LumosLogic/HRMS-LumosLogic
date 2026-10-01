@@ -334,7 +334,7 @@ export function RootLayout() {
   useTour(rootAdminTourSteps, (user?.id && !user?.force_password_change) ? `lt_tour_root_${user.id}` : null);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f9f9ff]">
+    <div className="flex app-height overflow-hidden bg-[#f9f9ff]">
       {/* Mobile overlay */}
       {sidebarOpen && (
         <div

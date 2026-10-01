@@ -95,14 +95,23 @@ router.post('/', auth, hasPermission('settings', 'manage'), withBranchContext, a
     const inserted = [];
     const auditRows = [];
     for (const p of policies) {
-      const { leave_type, label, annual_quota, carry_forward, max_carry_forward, paid, active } = p;
+      const {
+        leave_type, label, annual_quota, carry_forward, max_carry_forward, paid, active,
+        half_day_allowed, requires_approval, require_document, min_notice_days,
+        max_consecutive_days, description,
+      } = p;
       const result = await client.query(
         `INSERT INTO leave_policies
-           (organization_id, branch_id, leave_type, label, annual_quota, carry_forward, max_carry_forward, paid, active)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           (organization_id, branch_id, leave_type, label, annual_quota, carry_forward, max_carry_forward,
+            paid, active, half_day_allowed, requires_approval, require_document, min_notice_days,
+            max_consecutive_days, description)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
          RETURNING *`,
         [oId, branchId, leave_type, label || leave_type, Number(annual_quota) || 0,
-         !!carry_forward, Number(max_carry_forward) || 0, paid !== false, active !== false]
+         !!carry_forward, Number(max_carry_forward) || 0, paid !== false, active !== false,
+         half_day_allowed !== false, requires_approval !== false, !!require_document,
+         Number(min_notice_days) || 0, Number(max_consecutive_days) || 0,
+         description || '']
       );
       inserted.push(result.rows[0]);
 

@@ -47,6 +47,16 @@
   .scrollbar-hide::-webkit-scrollbar {
     display: none;
   }
+
+  /* App shell height that tracks the real mobile/tablet viewport (dvh).
+     Fixes bottom cut-off / "not vertically scrollable" on devices where 100vh
+     exceeds the visible area (browser toolbars, iOS Safari, Android Chrome). */
+  .app-height {
+    height: 100vh;
+  }
+  @supports (height: 100dvh) {
+    .app-height { height: 100dvh; }
+  }
 }
 
 @layer components {

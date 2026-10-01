@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Save, RefreshCw, Info, Copy, History } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
+import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost } from '@/lib/api';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { Modal } from '@/components/ui/Modal';
@@ -60,6 +61,7 @@ function PolicyHistoryModal({ leaveType, label, onClose }) {
 export default function LeavePolicies() {
   const toast = useToast();
   const qc    = useQueryClient();
+  const { selectedBranchId, selectedBranch } = useBranch();
   const [policies, setPolicies] = useState(DEFAULT_POLICIES);
   const [dirty,    setDirty]    = useState(false);
   // EHN_LP_003: confirm when disabling requires_approval
@@ -70,7 +72,7 @@ export default function LeavePolicies() {
   // EHN_LP_001: History modal
   const [historyModal,  setHistoryModal] = useState(null); // {leave_type, label}
 
-  const { data: _lpData, isLoading } = useQuery({ queryKey: ['leave-policies'], queryFn: () => apiGet('/leave-policies') });
+  const { data: _lpData, isLoading } = useQuery({ queryKey: ['leave-policies', selectedBranchId], queryFn: () => apiGet('/leave-policies') });
   const data = Array.isArray(_lpData) ? _lpData : [];
 
   useEffect(() => {
@@ -176,7 +178,12 @@ export default function LeavePolicies() {
 
       <div className="card px-4 py-3 mb-4 flex items-center gap-2.5 text-xs text-[#464555] bg-[#f0f3ff] border-[#c7c4d8]">
         <Info size={14} className="text-[#3525cd] flex-shrink-0" />
-        <p>Changes apply to new leave requests. Existing approved leaves are not affected.</p>
+        <p>
+          {selectedBranchId && selectedBranch
+            ? <>Editing leave policies for <strong>{selectedBranch.name}</strong>. Changes apply only to this branch.</>
+            : <>Editing the organisation-wide leave policies (applies to all branches without their own override).</>}{' '}
+          Changes apply to new leave requests. Existing approved leaves are not affected.
+        </p>
       </div>
 
       {/* EHN_LP_002: Bulk action bar */}

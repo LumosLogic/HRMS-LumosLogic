@@ -6,7 +6,7 @@ const { hasPermission } = require('../../middleware/permissions');
 const cloudinary = require('cloudinary').v2;
 const multer     = require('multer');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee, getFilterState } = require('../../utils/branchFilter');
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -115,17 +115,37 @@ router.get('/', auth, withBranchContext, async (req, res) => {
         // BUG_210: also include org-wide shared docs (visibility='all') so they
         // appear in the employee's profile Compliance tab alongside their own uploads.
         query = query.or(`user_id.eq.${Number(userId)},visibility.eq.all`);
+        const { data, error } = await query;
+        if (error) throw error;
+        const docs = await attachShares(data || [], oId);
+        return res.json(await attachUserInfo(docs, oId));
       } else {
-        // Admin browsing all documents — apply branch filter
+        // Admin browsing all documents — apply branch filter.
+        // BUG-122/123: shared docs (visibility != 'self') must be scoped to their
+        // branch. An employee's own docs are scoped via the employee's branch.
+        const state  = getFilterState(req.branchContext);
         const empIds = await resolveEmployeeIds(req.branchContext, oId);
-        if (empIds !== null && empIds.length === 0) return res.json([]);
-        if (empIds !== null) query = query.in('user_id', empIds);
-      }
+        if (state.type === 'none') return res.json([]);
 
-      const { data, error } = await query;
-      if (error) throw error;
-      const docs = await attachShares(data || [], oId);
-      return res.json(await attachUserInfo(docs, oId));
+        // Fetch a broad set (org docs) then post-filter in JS to avoid the
+        // pg-adapter OR-parser splitting on comma-separated id lists.
+        const { data, error } = await query;
+        if (error) throw error;
+
+        const isSelfOrAssigned = d => empIds !== null && empIds.includes(Number(d.user_id));
+        const sharedInBranch = (d) => {
+          if (d.visibility === 'self') return false; // self docs handled by user branch
+          if (state.type === 'all') return true;
+          if (d.branch_id == null) return true; // org-wide shared doc
+          const bid = Number(d.branch_id);
+          if (state.type === 'specific') return bid === Number(state.branchId);
+          if (state.type === 'multi')    return state.branchIds.map(Number).includes(bid);
+          return false;
+        };
+
+        const docs = (data || []).filter(d => isSelfOrAssigned(d) || sharedInBranch(d));
+        return res.json(await attachUserInfo(await attachShares(docs, oId), oId));
+      }
     }
 
     // Employee: own docs + specifically shared docs + org/branch-wide docs

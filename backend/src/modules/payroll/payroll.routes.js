@@ -672,6 +672,12 @@ router.put('/salary-structures/:id', auth, hasPermission('payroll', 'manage_stru
       Number(special_allowance) + Number(other_allowance)
     ).toFixed(2));
 
+    // BUG-102: reject deductions greater than gross salary (mirrors POST path)
+    const totalDeductions = Number(employee_pf) + Number(employee_esi) + Number(professional_tax) + Number(tds) + Number(other_deductions) + Number(retention);
+    if (totalDeductions > gross_salary && gross_salary > 0) {
+      return res.status(400).json({ error: `Total deductions (₹${totalDeductions.toLocaleString('en-IN')}) cannot be greater than Gross Salary (₹${gross_salary.toLocaleString('en-IN')}). Please review and reduce the deduction amounts.` });
+    }
+
     const ctc = parseFloat((gross_salary + Number(employer_pf) + Number(employer_esi)).toFixed(2));
 
     // $19 = effective_from (COALESCE: keep existing when not supplied)

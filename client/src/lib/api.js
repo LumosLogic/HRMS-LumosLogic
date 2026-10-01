@@ -50,10 +50,14 @@ export const apiDelete = (ep, body) => apiFetch('DELETE', ep, body);
 
 // Multipart file upload — does not set Content-Type (browser sets boundary automatically)
 export async function apiUpload(ep, formData) {
-  const token = getToken();
+  const token    = getToken();
+  const branchId = getBranchId();
   const res  = await fetch('/api' + ep, {
     method:  'POST',
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: {
+      ...(token    ? { Authorization: `Bearer ${token}` } : {}),
+      ...(branchId ? { 'X-Branch-Id': branchId }         : {}),
+    },
     body:    formData,
   });
   const data = await res.json().catch(() => ({}));

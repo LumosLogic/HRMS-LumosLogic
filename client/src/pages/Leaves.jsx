@@ -1324,11 +1324,11 @@ function LeaveSummaryTable({ employees, leaves, policies, filterStart, filterEnd
   return (
     <div>
       {/* Leave cycle period banner */}
-      <div className="flex items-center justify-between mb-3 px-1">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-2 mb-3 px-1">
+        <div className="flex items-center gap-2 flex-wrap">
           <input
             type="text"
-            className="form-control w-52 py-1.5 px-3 text-xs"
+            className="form-control w-full sm:w-52 py-1.5 px-3 text-xs"
             placeholder="Search employee…"
             value={search}
             onChange={e => setSearch(e.target.value)}
@@ -1340,7 +1340,7 @@ function LeaveSummaryTable({ employees, leaves, policies, filterStart, filterEnd
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           {/* ENH_LEAVES_005: Export leave summary to CSV */}
           <button className="btn btn-outline btn-sm" onClick={() => {
             const headers = ['Employee', 'Department', ...activePolicies.map(p => p.label), 'WFH', 'Total', 'Pending'];

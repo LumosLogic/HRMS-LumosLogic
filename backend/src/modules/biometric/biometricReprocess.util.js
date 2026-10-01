@@ -251,7 +251,18 @@ async function reprocessPin(orgId, employeePin) {
     return { processed, total: processed, noMapping: false };
   }
 
-  // ── Standard mode (original logic — untouched) ─────────────────────────────
+  // ── Standard mode (original logic — with end-of-day status classification) ──
+  // BUG-129/130: classify early_leave / half_day once the day is over, so a
+  // 6.5h biometric day is not left as 'present'. Today's rows are left 'present'
+  // until the day is definitively over (a mid-day OUT punch is just a break).
+  const wsRes2 = await pool.query(
+    `SELECT half_day_hours, full_day_hours FROM work_schedule WHERE organization_id = $1 LIMIT 1`,
+    [orgId]
+  );
+  const halfDayHours2 = parseFloat(wsRes2.rows[0]?.half_day_hours ?? 4.5);
+  const fullDayHours2 = parseFloat(wsRes2.rows[0]?.full_day_hours ?? 8);
+  const todayStr2 = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
   const logsRes = await pool.query(
     `SELECT * FROM biometric_raw_logs
      WHERE org_id = $1 AND employee_pin = $2 AND processed = false
@@ -293,11 +304,17 @@ async function reprocessPin(orgId, employeePin) {
         const grossHours = parseFloat(((checkOutMs - checkInMs) / 3600000).toFixed(2));
         const breakMins  = att.total_break_minutes || 0;
         const workHours  = parseFloat(Math.max(0, grossHours - breakMins / 60).toFixed(2));
+        const dayOver    = punchDate < todayStr2;
+        const status     = dayOver
+          ? (workHours >= fullDayHours2 ? 'present'
+            : workHours >= halfDayHours2 ? 'early_leave'
+            : 'half_day')
+          : 'present';
         await pool.query(
           `UPDATE attendance
-           SET check_out = $1, gross_hours = $2, work_hours = $3, source = 'biometric'
+           SET check_out = $1, gross_hours = $2, work_hours = $3, source = 'biometric', status = $5
            WHERE id = $4`,
-          [punchTimeStr, grossHours, workHours, att.id]
+          [punchTimeStr, grossHours, workHours, att.id, status]
         );
       } else if (!att) {
         await pool.query(
@@ -444,6 +461,15 @@ async function reprocessPinForDates(orgId, employeePin, fromDate, toDate, jobId 
 
   const logsRes = await pool.query(stdQuery, stdParams);
 
+  // BUG-129/130: classify early_leave / half_day once the day is over.
+  const wsRes2 = await pool.query(
+    `SELECT half_day_hours, full_day_hours FROM work_schedule WHERE organization_id = $1 LIMIT 1`,
+    [orgId]
+  );
+  const halfDayHours2 = parseFloat(wsRes2.rows[0]?.half_day_hours ?? 4.5);
+  const fullDayHours2 = parseFloat(wsRes2.rows[0]?.full_day_hours ?? 8);
+  const todayStr2 = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+
   let processed = 0;
   for (const log of logsRes.rows) {
     const punchDate    = new Date(log.punch_time).toISOString().slice(0, 10);
@@ -479,11 +505,17 @@ async function reprocessPinForDates(orgId, employeePin, fromDate, toDate, jobId 
         const grossHours = parseFloat(((checkOutMs - checkInMs) / 3600000).toFixed(2));
         const breakMins  = att.total_break_minutes || 0;
         const workHours  = parseFloat(Math.max(0, grossHours - breakMins / 60).toFixed(2));
+        const dayOver    = punchDate < todayStr2;
+        const status     = dayOver
+          ? (workHours >= fullDayHours2 ? 'present'
+            : workHours >= halfDayHours2 ? 'early_leave'
+            : 'half_day')
+          : 'present';
         await pool.query(
           `UPDATE attendance
-           SET check_out = $1, gross_hours = $2, work_hours = $3, source = 'biometric'
+           SET check_out = $1, gross_hours = $2, work_hours = $3, source = 'biometric', status = $5
            WHERE id = $4`,
-          [punchTimeStr, grossHours, workHours, att.id]
+          [punchTimeStr, grossHours, workHours, att.id, status]
         );
         attendanceUpdated++;
       } else if (!att) {

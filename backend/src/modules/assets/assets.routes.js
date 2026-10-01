@@ -61,6 +61,35 @@ router.get('/', auth, withBranchContext, async (req, res) => {
 
 const VALID_STATUSES = ['available', 'assigned', 'in_repair', 'retired', 'maintenance'];
 
+// Generate a sequential, branch-scoped asset tag like `{branchCode}_asset_001`.
+// Falls back to `asset_001` when the asset has no branch. Sequence is derived
+// from the highest existing numeric suffix for the same prefix (+1), so tags are
+// stable and human-friendly without relying on DB sequences.
+async function generateAssetTag(oId, branchId) {
+  let prefix = 'asset_';
+  if (branchId) {
+    try {
+      const { data: branch } = await db.from('branches')
+        .select('code, name').eq('id', branchId).eq('org_id', oId).maybeSingle();
+      const raw = (branch?.code || branch?.name || '').trim().toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/(^_|_$)/g, '');
+      if (raw) prefix = `${raw}_asset_`;
+    } catch { /* branch lookup failed — fall back to generic prefix */ }
+  }
+
+  const { data: existing } = await db.from('assets')
+    .select('asset_tag')
+    .eq('organization_id', oId)
+    .like('asset_tag', `${prefix}%`);
+
+  let maxSeq = 0;
+  (existing || []).forEach(a => {
+    const m = String(a.asset_tag || '').match(new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(\\d+)$`));
+    if (m) maxSeq = Math.max(maxSeq, parseInt(m[1], 10));
+  });
+
+  return `${prefix}${String(maxSeq + 1).padStart(3, '0')}`;
+}
+
 // Sanitise an asset body coming from the client before INSERT/UPDATE.
 // Strips joined fields (assigned_user), normalises types, and validates status.
 function sanitiseAssetBody(body) {
@@ -106,8 +135,12 @@ router.post('/', auth, hasPermission('assets', 'create'), withBranchContext, asy
     }
 
     // ── Uniqueness: asset_tag must be unique within the org ───────────────────
-    const tag = (body.asset_tag || '').trim();
-    if (!tag) return res.status(400).json({ error: 'Asset tag is required.' });
+    // BUG-114/120: auto-generate a branch-scoped tag when none is supplied so
+    // admins can add assets quickly without tripping duplicate-validation errors.
+    let tag = (body.asset_tag || '').trim();
+    if (!tag) {
+      tag = await generateAssetTag(oId, req.branchContext?.selectedBranchId || null);
+    }
     const { data: dupTag } = await db.from('assets')
       .select('id').eq('organization_id', oId).eq('asset_tag', tag).maybeSingle();
     if (dupTag) return res.status(400).json({ error: `Asset tag '${tag}' is already in use. Asset tags must be unique within the organisation.` });

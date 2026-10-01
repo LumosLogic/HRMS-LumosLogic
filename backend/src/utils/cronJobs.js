@@ -390,6 +390,65 @@ async function runScheduledAnnouncementPublisher() {
   }
 }
 
+// BUG_092: Auto-checkout employees at their approved early-leave exit time.
+// Runs frequently (every minute) and is idempotent: once check_out is stamped,
+// subsequent ticks skip the record (a.check_out guard).
+async function runEarlyLeaveAutoCheckout() {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(now);
+  const nowHM = `${parts.find(p => p.type === 'hour').value.padStart(2, '0')}:${parts.find(p => p.type === 'minute').value.padStart(2, '0')}`;
+  const nowMins = (() => { const [h, m] = nowHM.split(':').map(Number); return h * 60 + m; })();
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(now);
+
+  const { rows: reqs } = await pool.query(
+    `SELECT id, user_id, date, requested_early_exit_time, organization_id
+       FROM attendance_regularization
+      WHERE type = 'early_leave' AND status = 'approved' AND date = $1`,
+    [today]
+  );
+
+  for (const r of reqs) {
+    if (!r.requested_early_exit_time) continue;
+    const [eh, em] = String(r.requested_early_exit_time).split(':').map(Number);
+    if (isNaN(eh) || isNaN(em)) continue;
+    const exitMins = eh * 60 + em;
+    if (nowMins < exitMins) continue; // not yet reached the approved exit time
+
+    try {
+      const attRes = await pool.query(
+        `SELECT id, check_in, check_out, total_break_minutes
+           FROM attendance
+          WHERE user_id = $1 AND date = $2 AND organization_id = $3`,
+        [r.user_id, r.date, r.organization_id]
+      );
+      const a = attRes.rows[0] || null;
+      if (!a || !a.check_in || a.check_out) continue; // already handled or not checked in
+
+      const [h1, m1] = a.check_in.split(':').map(Number);
+      const totalMins = exitMins - (h1 * 60 + m1);
+      if (totalMins <= 0) continue;
+
+      const breakMins = a.total_break_minutes || 0;
+      const effectiveMins = Math.max(0, totalMins - breakMins);
+      const grossHours = Math.round((totalMins / 60) * 100) / 100;
+      const workHours  = Math.round((effectiveMins / 60) * 100) / 100;
+
+      await pool.query(
+        `UPDATE attendance
+            SET check_out = $1, gross_hours = $2, work_hours = $3,
+                status = 'early_leave', is_early_exit = TRUE
+          WHERE id = $4`,
+        [r.requested_early_exit_time, grossHours, workHours, a.id]
+      );
+      console.log(`[EarlyLeaveAutoCheckout] User ${r.user_id} checked out at ${r.requested_early_exit_time} for ${r.date}`);
+    } catch (err) {
+      console.error('[EarlyLeaveAutoCheckout] error:', err.message);
+    }
+  }
+}
+
 function scheduleEveryMinutes(min, fn) {
   async function tick() {
     try { await fn(); } catch (e) { console.error(e.message); }
@@ -405,4 +464,5 @@ module.exports = {
   runProbationExpiryCheck,
   runResignationExpiry,
   runScheduledAnnouncementPublisher,
+  runEarlyLeaveAutoCheckout,
 };

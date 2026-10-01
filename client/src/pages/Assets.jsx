@@ -66,9 +66,7 @@ function AssetModal({ open, onClose, asset, employees, allAssets = [] }) {
     const tag = form.asset_tag.trim();
     const sn  = (form.serial_number || '').trim();
 
-    if (!tag) {
-      errs.asset_tag = 'Asset tag is required.';
-    } else {
+    if (tag) {
       const dup = allAssets.find(a => a.asset_tag === tag && (!asset || String(a.id) !== String(asset.id)));
       if (dup) errs.asset_tag = `Asset tag '${tag}' is already in use.`;
     }
@@ -101,8 +99,11 @@ function AssetModal({ open, onClose, asset, employees, allAssets = [] }) {
       <div className="space-y-4">
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="form-label">Asset Tag *</label>
-            <input className={`form-control ${errors.asset_tag ? 'border-rose-400' : ''}`} placeholder="ASSET-001"
+            <label className="form-label">
+              Asset Tag
+              <span className="ml-1 font-normal text-[#777587] normal-case tracking-normal">(auto-generated if left blank)</span>
+            </label>
+            <input className={`form-control ${errors.asset_tag ? 'border-rose-400' : ''}`} placeholder="e.g. ASSET-001 (optional)"
               value={form.asset_tag} onChange={e => set('asset_tag', e.target.value)} />
             {errors.asset_tag && <p className="text-xs text-rose-500 mt-1">{errors.asset_tag}</p>}
           </div>

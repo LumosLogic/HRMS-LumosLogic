@@ -568,9 +568,9 @@ function EmployeeProfile({ emp, onBack, onEdit }) {
                   { label: 'Phone',           value: emp.phone || '—' },
                   { label: 'Company Email',   value: emp.email },
                 ].map(row => (
-                  <div key={row.label} className="border-b border-[#f5f5f9] pb-3">
+                  <div key={row.label} className="border-b border-[#f5f5f9] pb-3 min-w-0">
                     <p className="text-[0.68rem] text-[#a09ead] font-semibold mb-0.5">{row.label}</p>
-                    <p className="text-sm font-semibold text-[#151c27]">{row.value}</p>
+                    <p className="text-sm font-semibold text-[#151c27] break-words">{row.value}</p>
                   </div>
                 ))}
               </div>
@@ -598,9 +598,9 @@ function EmployeeProfile({ emp, onBack, onEdit }) {
                     </span>
                   )},
                 ].map(row => (
-                  <div key={row.label} className="border-b border-[#f5f5f9] pb-3">
+                  <div key={row.label} className="border-b border-[#f5f5f9] pb-3 min-w-0">
                     <p className="text-[0.68rem] text-[#a09ead] font-semibold mb-0.5">{row.label}</p>
-                    <p className="text-sm font-semibold text-[#151c27]">{row.value}</p>
+                    <p className="text-sm font-semibold text-[#151c27] break-words">{row.value}</p>
                   </div>
                 ))}
               </div>

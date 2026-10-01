@@ -192,7 +192,7 @@ export function EmployeeLayout() {
   useTour(employeeTourSteps, (user?.id && !user?.force_password_change) ? `lt_tour_emp_${user.id}` : null);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f9f9ff]">
+    <div className="flex app-height overflow-hidden bg-[#f9f9ff]">
       {/* Mobile overlay */}
       {sidebarOpen && (
         <div className="fixed inset-0 bg-[#151c27]/40 z-[499] md:hidden"

@@ -15,7 +15,7 @@ export function AppLayout() {
   useTour(hrAdminTourSteps, (user?.id && !user?.force_password_change) ? `lt_tour_hr_${user.id}` : null);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-[#f9f9ff]">
+    <div className="flex app-height overflow-hidden bg-[#f9f9ff]">
 
       {/* Mobile overlay */}
       {sidebarOpen && (

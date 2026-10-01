@@ -1327,8 +1327,8 @@ function BranchSchedulePanel({ schedule }) {
   }
 
   return (
-    <PanelWrap title="Branch Work Schedules" icon={<GitBranch size={15} className="text-[#3525cd]" />}
-      desc="Override the organisation-wide work schedule for specific branches. Employees without a branch, or in branches without an override, use the organisation schedule.">
+    <PanelWrap group="Attendance & Work Rules" label="Branch Work Schedules" icon={GitBranch} accentColor="#10b981">
+      <p className="text-sm text-[#777587] mb-5 max-w-xl">Override the organisation-wide work schedule for specific branches. Employees without a branch, or in branches without an override, use the organisation schedule.</p>
       {isLoading ? (
         <div className="loading"><div className="spinner" /> Loading…</div>
       ) : activeBranches.length === 0 ? (

@@ -1017,32 +1017,35 @@ export default function MyLeaves() {
                 // BUG_14: Support both { balances: [...] } and direct array API shapes
                 const rawBalances = leaveBalance?.balances ?? (Array.isArray(leaveBalance) ? leaveBalance : []);
                 const balanceItems = rawBalances.length > 0
-                  ? rawBalances.map(b => ({
-                      leave_type: b.leave_type,
-                      label: b.label || b.leave_type,
-                      total: b.allocated ?? b.total ?? 0,
-                      used: b.used ?? 0,
-                      pending: b.pending ?? leaves
-                        .filter(l => l.leave_type === b.leave_type && ['pending','pending_dept','pending_root','pending_approval'].includes(l.status) && !isWFHRecord(l))
-                        .reduce((sum, l) => sum + (l.leave_time === 'half' ? 0.5 : countWorkingDaysInRange(l.start_date, l.end_date)), 0),
-                      carry_forward: b.carry_forward,
-                    }))
-                  : activePolicies.map(p => {
-                      const used = leaves
-                        .filter(l => l.leave_type === p.leave_type && l.status === 'approved' && !isWFHRecord(l))
-                        .reduce((sum, l) => sum + (l.leave_time === 'half' ? 0.5 : countWorkingDaysInRange(l.start_date, l.end_date)), 0);
-                      const pending = leaves
-                        .filter(l => l.leave_type === p.leave_type && ['pending','pending_dept','pending_root','pending_approval'].includes(l.status) && !isWFHRecord(l))
-                        .reduce((sum, l) => sum + (l.leave_time === 'half' ? 0.5 : countWorkingDaysInRange(l.start_date, l.end_date)), 0);
-                      return { leave_type: p.leave_type, label: p.label, total: p.annual_quota, used, pending, carry_forward: p.carry_forward };
-                    });
+                    ? rawBalances.map(b => ({
+                        leave_type: b.leave_type,
+                        label: b.label || b.leave_type,
+                        total: b.allocated ?? b.total ?? 0,
+                        used: b.used ?? 0,
+                        // Bug-128: remaining comes straight from the backend (allocated + adj - approved)
+                        // and must NOT subtract pending — balance is only consumed once approved.
+                        remaining: b.remaining ?? Math.max(0, (b.allocated ?? 0) - (b.used ?? 0)),
+                        pending: b.pending ?? leaves
+                          .filter(l => l.leave_type === b.leave_type && ['pending','pending_dept','pending_root','pending_approval'].includes(l.status) && !isWFHRecord(l))
+                          .reduce((sum, l) => sum + (l.leave_time === 'half' ? 0.5 : countWorkingDaysInRange(l.start_date, l.end_date)), 0),
+                        carry_forward: b.carry_forward,
+                      }))
+                    : activePolicies.map(p => {
+                        const used = leaves
+                          .filter(l => l.leave_type === p.leave_type && l.status === 'approved' && !isWFHRecord(l))
+                          .reduce((sum, l) => sum + (l.leave_time === 'half' ? 0.5 : countWorkingDaysInRange(l.start_date, l.end_date)), 0);
+                        const pending = leaves
+                          .filter(l => l.leave_type === p.leave_type && ['pending','pending_dept','pending_root','pending_approval'].includes(l.status) && !isWFHRecord(l))
+                          .reduce((sum, l) => sum + (l.leave_time === 'half' ? 0.5 : countWorkingDaysInRange(l.start_date, l.end_date)), 0);
+                        return { leave_type: p.leave_type, label: p.label, total: p.annual_quota, used, pending, remaining: Math.max(0, p.annual_quota - used), carry_forward: p.carry_forward };
+                      });
 
                 if (balanceItems.length === 0) {
                   return <p className="text-xs text-[#777587] text-center py-4">No leave policies configured for your account</p>;
                 }
 
                 return balanceItems.map(item => {
-                  const remaining = Math.max(0, item.total - item.used - (item.pending || 0));
+                  const remaining = item.remaining ?? Math.max(0, item.total - item.used);
                   const pct = item.total > 0 ? Math.min(100, Math.round((item.used / item.total) * 100)) : 0;
                   return (
                     <div key={item.leave_type} className="py-3 border-b border-[#f0f3ff] last:border-0">

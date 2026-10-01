@@ -401,6 +401,9 @@ function UploadSharedDocPanel({ allEmployees, colleagues, isEmployee, onCancel, 
     setUploading(true);
     try {
       const token = localStorage.getItem('lt_token');
+      // BUG-122/123: include the selected branch so the backend scopes this
+      // shared document to the branch it was uploaded from.
+      const branchId = localStorage.getItem('lt_selected_branch');
       const fd = new FormData();
       fd.append('file', pendingFile);
       fd.append('name', form.name.trim());
@@ -410,7 +413,11 @@ function UploadSharedDocPanel({ allEmployees, colleagues, isEmployee, onCancel, 
       if (form.targetUserId) fd.append('userId', form.targetUserId);
       if (form.visibility === 'specific' && form.shareWith.length > 0)
         fd.append('shared_with', JSON.stringify(form.shareWith));
-      const res = await fetch('/api/documents/upload', { method: 'POST', headers: { Authorization: `Bearer ${token}` }, body: fd });
+      const res = await fetch('/api/documents/upload', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, ...(branchId ? { 'X-Branch-Id': branchId } : {}) },
+        body: fd,
+      });
       const data = await res.json().catch(() => ({ error: 'Unexpected server error. Please try again.' }));
       if (!res.ok) throw new Error(data.error || 'Upload failed');
       toast('Document uploaded!', 'success');
@@ -1712,7 +1719,8 @@ function VerificationQueueTab() {
   const [reviewSub,    setReviewSub]    = useState(null);
   const [statusFilter, setStatusFilter] = useState('all');
   const [search,       setSearch]       = useState('');
-  const [sortDir,      setSortDir]      = useState('desc'); // Bug-089: sort by Uploaded On
+  const [sortCol,      setSortCol]      = useState('uploaded_at'); // Bug-089: sortable columns
+  const [sortDir,      setSortDir]      = useState('desc');
 
   const { data: allSubs = [], isLoading } = useQuery({
     queryKey: ['verification-queue'],
@@ -1737,14 +1745,29 @@ function VerificationQueueTab() {
         s.requirement?.name?.toLowerCase().includes(q)
       );
     }
-    // Bug-089: sort by uploaded_at / created_at
+    // Bug-089: sort by the selected column
     list = [...list].sort((a, b) => {
-      const ta = new Date(a.uploaded_at || a.created_at || 0).getTime();
-      const tb = new Date(b.uploaded_at || b.created_at || 0).getTime();
-      return sortDir === 'desc' ? tb - ta : ta - tb;
+      let va, vb;
+      if (sortCol === 'employee')   { va = (a.employee?.name   || '').toLowerCase(); vb = (b.employee?.name   || '').toLowerCase(); }
+      else if (sortCol === 'document') { va = (a.requirement?.name || '').toLowerCase(); vb = (b.requirement?.name || '').toLowerCase(); }
+      else if (sortCol === 'status')  { va = a.status || ''; vb = b.status || ''; }
+      else if (sortCol === 'reviewer') { va = (a.reviewer?.name || '').toLowerCase(); vb = (b.reviewer?.name || '').toLowerCase(); }
+      else {
+        const ta = new Date(a.uploaded_at || a.created_at || 0).getTime();
+        const tb = new Date(b.uploaded_at || b.created_at || 0).getTime();
+        return sortDir === 'desc' ? tb - ta : ta - tb;
+      }
+      if (va < vb) return sortDir === 'asc' ? -1 : 1;
+      if (va > vb) return sortDir === 'asc' ? 1 : -1;
+      return 0;
     });
     return list;
-  }, [allSubs, statusFilter, search, sortDir]);
+  }, [allSubs, statusFilter, search, sortCol, sortDir]);
+
+  const toggleSort = (col) => {
+    if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('asc'); }
+  };
 
   // Reviewable = employee has submitted and it needs an admin decision.
   // re_upload_requested means we are WAITING for the employee to re-upload — not yet reviewable.
@@ -1803,19 +1826,22 @@ function VerificationQueueTab() {
             <table className="w-full text-left text-xs min-w-[560px]">
               <thead className="bg-[#f9f9ff] border-b border-[#c7c4d8]">
                 <tr>
-                  {['EMPLOYEE', 'DOCUMENT'].map(h => (
-                    <th key={h} className="px-4 py-3 font-black text-[#464555] text-[0.65rem] tracking-wide whitespace-nowrap">{h}</th>
+                  {[
+                    { col: 'employee',  label: 'EMPLOYEE' },
+                    { col: 'document',  label: 'DOCUMENT' },
+                    { col: 'uploaded_at', label: 'UPLOADED ON' },
+                    { col: 'status',    label: 'STATUS' },
+                    { col: 'reviewer',  label: 'REVIEWED BY' },
+                  ].map(({ col, label }) => (
+                    <th key={col} className="px-4 py-3 font-black text-[#464555] text-[0.65rem] tracking-wide whitespace-nowrap">
+                      <button className="flex items-center gap-1 hover:text-[#3525cd] transition-colors"
+                        onClick={() => toggleSort(col)}>
+                        {label}
+                        <span className="text-[0.6rem]">{sortCol === col ? (sortDir === 'desc' ? '↓' : '↑') : '↕'}</span>
+                      </button>
+                    </th>
                   ))}
-                  <th className="px-4 py-3 font-black text-[#464555] text-[0.65rem] tracking-wide whitespace-nowrap">
-                    <button className="flex items-center gap-1 hover:text-[#3525cd] transition-colors"
-                      onClick={() => setSortDir(d => d === 'desc' ? 'asc' : 'desc')}>
-                      UPLOADED ON
-                      <span className="text-[0.6rem]">{sortDir === 'desc' ? '↓' : '↑'}</span>
-                    </button>
-                  </th>
-                  {['STATUS', 'REVIEWED BY', 'ACTIONS'].map(h => (
-                    <th key={h} className="px-4 py-3 font-black text-[#464555] text-[0.65rem] tracking-wide whitespace-nowrap">{h}</th>
-                  ))}
+                  <th className="px-4 py-3 font-black text-[#464555] text-[0.65rem] tracking-wide whitespace-nowrap">ACTIONS</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#f0f3ff]">

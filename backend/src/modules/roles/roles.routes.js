@@ -72,7 +72,7 @@ router.get('/', auth, hasPermission('roles', 'view'), withBranchContext, async (
 
     const { data: roles, error } = await db
       .from('roles')
-      .select('id, name, slug, description, is_system_role, created_at')
+      .select('id, name, slug, description, is_system_role, branch_id, created_at')
       .eq('org_id', oId)
       .order('is_system_role', { ascending: false })
       .order('name');
@@ -80,7 +80,19 @@ router.get('/', auth, hasPermission('roles', 'view'), withBranchContext, async (
 
     if (!roles?.length) return res.json([]);
 
-    const roleIds = roles.map(r => r.id);
+    // BUG-117: branch isolation for custom roles. System roles are always visible;
+    // custom roles are visible only in the branch they were created for (legacy
+    // custom roles with no branch_id remain org-wide so existing permissions stay intact).
+    const branchState = getFilterState(req.branchContext);
+    let visibleRoles = roles;
+    if (branchState.type === 'specific') {
+      visibleRoles = roles.filter(r =>
+        r.is_system_role || r.branch_id == null || Number(r.branch_id) === Number(branchState.branchId)
+      );
+      if (!visibleRoles.length) return res.json([]);
+    }
+
+    const roleIds = visibleRoles.map(r => r.id);
 
     // Permission counts per role (single batched query, no N+1) — always org-wide
     const pcRes = await pool.query(
@@ -94,7 +106,6 @@ router.get('/', auth, hasPermission('roles', 'view'), withBranchContext, async (
     pcRes.rows.forEach(r => { permCounts[r.role_id] = parseInt(r.count, 10); });
 
     // Member counts per role — branch-aware when a specific branch is selected
-    const branchState = getFilterState(req.branchContext);
     let mcRes;
     if (branchState.type === 'specific') {
       // Count only members whose users.branch_id matches the selected branch
@@ -132,7 +143,7 @@ router.get('/', auth, hasPermission('roles', 'view'), withBranchContext, async (
     const memberCounts = {};
     mcRes.rows.forEach(r => { memberCounts[r.role_id] = parseInt(r.count, 10); });
 
-    res.json(roles.map(r => ({
+    res.json(visibleRoles.map(r => ({
       ...r,
       permission_count: permCounts[r.id] || 0,
       member_count:     memberCounts[r.id] || 0,
@@ -291,7 +302,7 @@ router.put('/user/:userId', auth, hasPermission('roles', 'manage'), async (req, 
 });
 
 // ─── 4. POST /api/roles — create a custom role ────────────────────────────────
-router.post('/', auth, hasPermission('roles', 'manage'), async (req, res) => {
+router.post('/', auth, hasPermission('roles', 'manage'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const { name, description } = req.body;
@@ -315,6 +326,8 @@ router.post('/', auth, hasPermission('roles', 'manage'), async (req, res) => {
         description:    (description || '').slice(0, 500),
         is_system_role: false,
         created_by:     req.user.id,
+        // BUG-117: scope custom roles to the currently selected branch
+        branch_id:      req.branchContext?.selectedBranchId || null,
       })
       .select()
       .single();

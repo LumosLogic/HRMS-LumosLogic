@@ -11,7 +11,7 @@ const { featureGate }  = require('./middleware/featureFlag');
 const { rateLimiter, LIMITS } = require('./middleware/rateLimiter');
 const { maintenanceMiddleware } = require('./middleware/maintenanceMode');
 const { biometricSnGuard, biometricAuditLog } = require('./middleware/biometricSecurity');
-const { scheduleDailyAt, scheduleEveryMinutes, runDailyNotifications, runAutoMarkAbsent, runProbationExpiryCheck, runResignationExpiry, runScheduledAnnouncementPublisher } = require('./utils/cronJobs');
+const { scheduleDailyAt, scheduleEveryMinutes, runDailyNotifications, runAutoMarkAbsent, runProbationExpiryCheck, runResignationExpiry, runScheduledAnnouncementPublisher, runEarlyLeaveAutoCheckout } = require('./utils/cronJobs');
 const payrollScheduler          = require('./services/payrollScheduler');
 const attendanceEmailScheduler  = require('./services/attendanceEmailScheduler');
 
@@ -245,6 +245,8 @@ async function runStartupMigrations() {
     `ALTER TABLE employee_salary_structures ADD COLUMN IF NOT EXISTS retention NUMERIC DEFAULT 0`,
     `ALTER TABLE attendance ADD COLUMN IF NOT EXISTS check_in TEXT`,
     `ALTER TABLE attendance ADD COLUMN IF NOT EXISTS check_out TEXT`,
+    // Bug-117: branch scope for custom roles (system roles stay org-wide)
+    `ALTER TABLE roles ADD COLUMN IF NOT EXISTS branch_id BIGINT`,
     // Auto-sync config table (2026-08-27) — org_id BIGINT to match organizations.id
     `CREATE TABLE IF NOT EXISTS biometric_auto_sync_config (
       id BIGSERIAL PRIMARY KEY,
@@ -330,6 +332,8 @@ async function start() {
     scheduleDailyAt(0, 10, runResignationExpiry);
     // BUG_242: publish scheduled announcements whose time has arrived (every 5 min)
     scheduleEveryMinutes(5, runScheduledAnnouncementPublisher);
+    // BUG_092: auto-checkout employees at their approved early-leave exit time (every 1 min)
+    scheduleEveryMinutes(1, runEarlyLeaveAutoCheckout);
     payrollScheduler.start();
     // Automatic EasyWDMS → HRMS biometric sync (per-org configurable schedule)
     biometricAutoScheduler.start().catch(err =>
