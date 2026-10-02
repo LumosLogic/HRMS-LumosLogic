@@ -49,22 +49,38 @@ const CACHE_TTL_MS = 10_000;
 const cache = new Map(); // orgId → { at, enabled, features }
 
 function invalidateOrg(orgId) { cache.delete(Number(orgId)); }
+function invalidateAll() { cache.clear(); globalCache = null; }
+
+// Platform-wide switches — apply to every organization on top of its own settings.
+let globalCache = null; // { at, app, features }
+async function getGlobalMobileConfig() {
+  if (globalCache && Date.now() - globalCache.at < CACHE_TTL_MS) return globalCache;
+  const { rows } = await pool.query('SELECT feature_key, enabled FROM mobile_global_features').catch(() => ({ rows: [] }));
+  const features = {}; let app = true;
+  rows.forEach(r => { if (r.feature_key === '__app') app = r.enabled; else features[r.feature_key] = r.enabled; });
+  globalCache = { at: Date.now(), app, features };
+  return globalCache;
+}
 
 async function getOrgMobileConfig(orgId) {
   orgId = Number(orgId);
   const hit = cache.get(orgId);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit;
 
-  const [{ rows: orgRows }, { rows: featRows }] = await Promise.all([
+  const [{ rows: orgRows }, { rows: featRows }, glob] = await Promise.all([
     pool.query('SELECT enabled FROM mobile_org_settings WHERE organization_id = $1', [orgId]),
     pool.query('SELECT feature_key, enabled FROM mobile_org_features WHERE organization_id = $1', [orgId]),
+    getGlobalMobileConfig(),
   ]);
   const overrides = {};
   featRows.forEach(r => { overrides[r.feature_key] = r.enabled; });
   const features = {};
-  MOBILE_FEATURES.forEach(f => { features[f.key] = f.key in overrides ? overrides[f.key] : true; });
+  MOBILE_FEATURES.forEach(f => {
+    const orgOn = f.key in overrides ? overrides[f.key] : true;
+    features[f.key] = orgOn && glob.features[f.key] !== false; // platform-wide switch wins
+  });
 
-  const entry = { at: Date.now(), enabled: !!orgRows[0]?.enabled, features };
+  const entry = { at: Date.now(), enabled: !!orgRows[0]?.enabled && glob.app, features };
   cache.set(orgId, entry);
   return entry;
 }
@@ -103,4 +119,4 @@ async function mobileGate(req, res, next) {
   next();
 }
 
-module.exports = { MOBILE_FEATURES, DISABLED_APP_MESSAGE, getOrgMobileConfig, invalidateOrg, isMobileRequest, mobileGate };
+module.exports = { MOBILE_FEATURES, DISABLED_APP_MESSAGE, getOrgMobileConfig, getGlobalMobileConfig, invalidateOrg, invalidateAll, isMobileRequest, mobileGate };

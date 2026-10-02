@@ -80,6 +80,12 @@ export default function MobileAppTab({ orgId }) {
         <Toggle enabled={enabled} onChange={toggleApp} disabled={saving === '__app'} />
       </div>
 
+      {data?.globalApp === false && (
+        <p className="text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+          The mobile app is switched off platform-wide (Mobile App Management). Nothing below takes effect until it is turned back on.
+        </p>
+      )}
+
       {error && <p className="text-xs text-rose-600 font-semibold">{error}</p>}
 
       <div className={enabled ? '' : 'opacity-50 pointer-events-none'}>
@@ -96,9 +102,12 @@ export default function MobileAppTab({ orgId }) {
             <div className="grid sm:grid-cols-2 gap-3">
               {catalog.filter(f => f.group === g).map(f => {
                 const on = features[f.key] !== false;
+                const locked = data?.globalFeatures?.[f.key] === false;
                 return (
                   <div key={f.key} className={`bg-white rounded-xl border p-4 flex items-center gap-3 ${on ? 'border-[#c7c4d8]' : 'border-dashed border-[#c7c4d8] opacity-70'}`}>
-                    <p className="flex-1 text-sm font-bold text-[#151c27]">{f.label}</p>
+                    <p className="flex-1 text-sm font-bold text-[#151c27]">{f.label}
+                      {locked && <span className="ml-2 text-[0.6rem] font-black px-1.5 py-0.5 rounded-full border bg-amber-50 text-amber-700 border-amber-200 uppercase">Off platform-wide</span>}
+                    </p>
                     <Toggle enabled={on} onChange={v => toggleFeature(f.key, v)} disabled={saving === f.key || saving === '__bulk'} />
                   </div>
                 );

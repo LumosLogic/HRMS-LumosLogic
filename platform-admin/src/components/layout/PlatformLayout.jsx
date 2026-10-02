@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, ClipboardList, Building2, Activity, LogOut, Menu, X, ChevronDown, Globe, Layers } from 'lucide-react';
+import { LayoutDashboard, ClipboardList, Building2, Activity, LogOut, Menu, X, ChevronDown, Globe, Layers, Smartphone } from 'lucide-react';
 import { usePlatformAuth } from '@/context/PlatformAuthContext';
 
 const NAV_ITEMS = [
   { to: '/dashboard', label: 'Dashboard',    Icon: LayoutDashboard },
   { to: '/requests',  label: 'Org Requests', Icon: ClipboardList },
   { to: '/orgs',      label: 'Organizations',Icon: Building2 },
+  { to: '/mobile',    label: 'Mobile App',   Icon: Smartphone },
   {
     label: 'Activity Log', Icon: Activity,
     children: [

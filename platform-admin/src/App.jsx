@@ -11,6 +11,7 @@ import PlatformActivity        from '@/pages/PlatformActivity';
 import PlatformActivityPlatform from '@/pages/PlatformActivityPlatform';
 import PlatformActivityOrg      from '@/pages/PlatformActivityOrg';
 import PlatformFeatures  from '@/pages/PlatformFeatures';
+import PlatformMobile    from '@/pages/PlatformMobile';
 
 function PlatformRoute({ children }) {
   const { token } = usePlatformAuth();
@@ -32,6 +33,7 @@ function AppRoutes() {
         <Route path="/activity/platform" element={<PlatformActivityPlatform />} />
         <Route path="/activity/org"      element={<PlatformActivityOrg />} />
         <Route path="/features"   element={<PlatformFeatures />} />
+        <Route path="/mobile"     element={<PlatformMobile />} />
       </Route>
 
       <Route path="*" element={<Navigate to={token ? '/dashboard' : '/login'} replace />} />

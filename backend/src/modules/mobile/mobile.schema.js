@@ -25,6 +25,12 @@ async function ensureMobileSchema() {
        updated_at      TIMESTAMPTZ DEFAULT NOW(),
        PRIMARY KEY (organization_id, feature_key)
      )`,
+    // Platform-wide switches (feature_key '__app' = whole mobile app). Missing row = ON.
+    `CREATE TABLE IF NOT EXISTS mobile_global_features (
+       feature_key TEXT PRIMARY KEY,
+       enabled     BOOLEAN NOT NULL DEFAULT true,
+       updated_at  TIMESTAMPTZ DEFAULT NOW()
+     )`,
   ];
   for (const sql of stmts) {
     await pool.query(sql).catch(e => console.warn('[mobile-schema] skipped:', e.message));

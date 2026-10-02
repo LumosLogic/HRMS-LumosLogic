@@ -146,6 +146,7 @@ export default function PlatformOrgDetail() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const [activeTab,   setActiveTab]   = useState('overview');
+  const [featureView, setFeatureView] = useState('web'); // 'web' | 'mobile' (sub-view of the Features tab)
   const [localFlags,  setLocalFlags]  = useState({});
   const [savingKey,   setSavingKey]   = useState(null);
   const [planSaving,  setPlanSaving]  = useState(false);
@@ -248,7 +249,6 @@ export default function PlatformOrgDetail() {
     { id: 'overview',  label: 'Overview',  Icon: Building2 },
     { id: 'members',   label: `Members (${members.length})`, Icon: Users },
     { id: 'features',  label: 'Features',  Icon: Zap },
-    { id: 'mobile',    label: 'Mobile App', Icon: Smartphone },
     { id: 'plan',      label: 'Plan',      Icon: Crown },
     { id: 'activity',  label: 'Activity',  Icon: Activity },
   ];
@@ -446,6 +446,16 @@ export default function PlatformOrgDetail() {
       {/* ── Features tab ── */}
       {activeTab === 'features' && (
         <div className="space-y-4">
+          {/* Sub-view switch: web modules vs mobile app access */}
+          <div className="inline-flex p-1 rounded-xl bg-[#e7eefe] border border-[#c7c4d8]">
+            {[{ k: 'web', label: 'Web Modules', Icon: Zap }, { k: 'mobile', label: 'Mobile App', Icon: Smartphone }].map(v => (
+              <button key={v.k} onClick={() => setFeatureView(v.k)}
+                className={`flex items-center gap-2 px-4 py-1.5 rounded-lg text-xs font-bold transition-all ${featureView === v.k ? 'bg-white text-[#3525cd] shadow-sm' : 'text-[#777587] hover:text-[#151c27]'}`}>
+                <v.Icon size={13} /> {v.label}
+              </button>
+            ))}
+          </div>
+          {featureView === 'mobile' ? <MobileAppTab orgId={id} /> : (<>
           {/* Header controls */}
           <div className="flex items-center justify-between flex-wrap gap-3">
             <div>
@@ -493,11 +503,9 @@ export default function PlatformOrgDetail() {
               })}
             </div>
           )}
+          </>)}
         </div>
       )}
-
-      {/* ── Mobile App tab (self-contained component) ── */}
-      {activeTab === 'mobile' && <MobileAppTab orgId={id} />}
 
       {/* ── Plan tab ── */}
       {activeTab === 'plan' && (
