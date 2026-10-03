@@ -180,11 +180,11 @@
   .page-subtitle { @apply text-sm text-[#464555] mt-0.5; }
 
   /* ── Empty state ── */
-  .empty-state { @apply text-center py-14 text-[#777587]; }
+  .empty-state { @apply text-center py-14 text-[#777587]; min-height: 14rem; }   /* same minimum height as .loading → no jump when one replaces the other */
   .empty-icon  { @apply text-5xl mb-3 opacity-60 block; }
 
   /* ── Loading ── */
-  .loading { @apply flex items-center justify-center p-20 text-[#464555] gap-3 text-sm font-semibold; }
+  .loading { @apply flex items-center justify-center p-20 text-[#464555] gap-3 text-sm font-semibold; min-height: 14rem; }
 }
 
 /* ── Driver.js Tour Theme ── */

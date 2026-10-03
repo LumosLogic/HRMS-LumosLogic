@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { Link } from 'react-router-dom';
 import {
   Shield, AlertTriangle, CheckCircle2, Clock, Download,
@@ -93,6 +94,7 @@ export default function ComplianceDashboard() {
   const _bk1 = useBranch().selectedBranchId;
   const { data, isLoading, isError, error } = useQuery({
     queryKey: ['compliance-summary', month, year, _bk1],
+    meta: BRANCH_KEYED,
     queryFn:  () => apiGet('/statutory/compliance-summary', { month, year }),
     retry: false,
   });

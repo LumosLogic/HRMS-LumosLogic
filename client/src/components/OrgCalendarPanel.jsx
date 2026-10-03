@@ -26,11 +26,15 @@ import {
   Timer, ChevronDown, Download, Search,
 } from 'lucide-react';
 import { useQuery } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { useAuth }   from '@/context/AuthContext';
 import { useToast }  from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost }    from '@/lib/api';
+import { STALE } from '@/lib/queryTiers';
+import { useHolidays, useSettings } from '@/hooks/useReferenceData';
 import { useEmployees } from '@/hooks/useEmployees';
+import { useLeavesList } from '@/hooks/useListQueries';
 import { Avatar }    from '@/components/ui/Avatar';
 import { StatusBadge, LeaveTypeBadge } from '@/components/ui/Badge';
 import { Modal }     from '@/components/ui/Modal';
@@ -80,14 +84,12 @@ export function OrgCalendarPanel({ initialDate, initialDayModal = null, initialD
 
   const { data: attendance = [], isFetching, refetch } = useQuery({
     queryKey: ['calendar', year, month, selectedBranchId],
+    meta: BRANCH_KEYED,
+    staleTime: STALE.frequent,   // frequent
     queryFn: () => apiGet('/attendance', { year, month }),
   });
 
-  const { data: orgSettings } = useQuery({
-    queryKey: ['org-settings'],
-    queryFn:  () => apiGet('/settings'),
-    staleTime: 5 * 60 * 1000,
-  });
+  const { data: orgSettings } = useSettings({ staleTime: 5 * 60 * 1000 });
 
   const workingDayNumbers = React.useMemo(() => {
     const raw = orgSettings?.schedule?.work_days;
@@ -95,17 +97,11 @@ export function OrgCalendarPanel({ initialDate, initialDayModal = null, initialD
     return new Set(raw.split(',').map(Number));
   }, [orgSettings]);
 
-  const { data: leaves = [] } = useQuery({
-    queryKey: ['calendar-leaves', year, month, selectedBranchId],
-    queryFn:  () => apiGet('/leaves', { year, month }),
-  });
+  const { data: leaves = [] } = useLeavesList({ year, month });
 
   const { data: employees = [] } = useEmployees({ lite: true, onlyEmployees: true });
 
-  const { data: holidays = [] } = useQuery({
-    queryKey: ['holidays', year, selectedBranchId],
-    queryFn:  () => apiGet('/holidays', { year }),
-  });
+  const { data: holidays = [] } = useHolidays(year);
 
   const holidayMap = holidays.reduce((acc, h) => { acc[h.date] = h; return acc; }, {});
 

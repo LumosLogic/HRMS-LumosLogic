@@ -1,5 +1,6 @@
 import React, { useRef, useState } from 'react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { useSearchParams } from 'react-router-dom';
 import { ScrollText, ChevronLeft, ChevronRight, Filter, Upload, X, CheckCircle, AlertCircle, Eye, Database, ArrowRight } from 'lucide-react';
 import { apiGet, apiUpload } from '@/lib/api';
@@ -146,17 +147,20 @@ export default function BiometricLogs() {
 
   const { data: _res, isLoading } = useQuery({
     queryKey: ['biometric-logs', params, selectedBranchId],
+    meta: BRANCH_KEYED,
     queryFn:  () => apiGet('/biometric/logs', params),
     keepPreviousData: true,
   });
 
   const { data: _devices } = useQuery({
     queryKey: ['biometric-devices', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/biometric/devices'),
   });
 
   const { data: _empList = [] } = useQuery({
     queryKey: ['employees-for-bio-logs', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/reports/employees'),
     staleTime: 300000,
   });

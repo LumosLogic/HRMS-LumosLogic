@@ -12,6 +12,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPost, apiPut, apiDelete, apiPatch } from '@/lib/api';
+import { useBranchesList, useOrgSettings, useShiftsList } from '@/hooks/useReferenceData';
 import { ConfigGroupsManager } from '@/components/ConfigGroupsManager';
 import { useFeature } from '@/context/FeatureFlagContext';
 import { Avatar } from '@/components/ui/Avatar';
@@ -161,11 +162,7 @@ function WorkSchedulePanel({ schedule, isAdmin, onSaved }) {
   const [errs,            setErrs]             = useState({});
 
   // Fetch all shifts for the selector
-  const { data: shiftsData } = useQuery({
-    queryKey: ['shifts-list'],
-    queryFn:  () => apiGet('/shifts'),
-    staleTime: 60 * 1000,
-  });
+  const { data: shiftsData } = useShiftsList({ staleTime: 60 * 1000 });
   const shifts = shiftsData?.shifts || (Array.isArray(shiftsData) ? shiftsData : []);
 
   // When shift selector changes, load that shift's config
@@ -233,8 +230,10 @@ function WorkSchedulePanel({ schedule, isAdmin, onSaved }) {
     },
     onSuccess: () => {
       toast(selectedShiftId == null ? 'Work schedule saved!' : `Work schedule saved for ${shiftConfig?.shift_name || 'shift'}!`, 'success');
+      qc.invalidateQueries({ queryKey: ['settings'] });
+      qc.invalidateQueries({ queryKey: ['work-schedule'] });
       if (selectedShiftId == null) onSaved?.();
-      else qc.invalidateQueries({ queryKey: ['shifts-list'] });
+      else qc.invalidateQueries({ queryKey: ['shifts'] });
     },
     onError: err => toast(err.message, 'error'),
   });
@@ -329,11 +328,7 @@ function AttendanceRulesPanel({ schedule, isAdmin, onSaved }) {
   const [shiftLoading,    setShiftLoading]      = useState(false);
   const [errs,            setErrs]             = useState({});
 
-  const { data: shiftsData } = useQuery({
-    queryKey: ['shifts-list'],
-    queryFn:  () => apiGet('/shifts'),
-    staleTime: 60 * 1000,
-  });
+  const { data: shiftsData } = useShiftsList({ staleTime: 60 * 1000 });
   const shifts = shiftsData?.shifts || (Array.isArray(shiftsData) ? shiftsData : []);
 
   useEffect(() => {
@@ -428,8 +423,10 @@ function AttendanceRulesPanel({ schedule, isAdmin, onSaved }) {
     },
     onSuccess: () => {
       toast(selectedShiftId == null ? 'Attendance rules saved!' : `Attendance rules saved for ${shiftConfig?.shift_name || 'shift'}!`, 'success');
+      qc.invalidateQueries({ queryKey: ['settings'] });
+      qc.invalidateQueries({ queryKey: ['work-schedule'] });
       if (selectedShiftId == null) onSaved?.();
-      else qc.invalidateQueries({ queryKey: ['shifts-list'] });
+      else qc.invalidateQueries({ queryKey: ['shifts'] });
     },
     onError: err => toast(err.message, 'error'),
   });
@@ -1021,10 +1018,7 @@ function OrgSettingsPanel() {
   const [logoUploading, setLogoUploading] = React.useState(false);
   const [logoPreview,   setLogoPreview]   = React.useState(null);
 
-  const { data: org, isLoading } = useQuery({
-    queryKey: ['org-settings'],
-    queryFn:  () => apiGet('/org/settings'),
-  });
+  const { data: org, isLoading } = useOrgSettings({ staleTime: 0 });
 
   const [form,      setForm]      = useState({});
   const [savedForm, setSavedForm] = useState({});
@@ -1264,7 +1258,7 @@ function BranchSchedulePanel({ schedule }) {
   const toast = useToast();
   const qc    = useQueryClient();
 
-  const { data: branches = [] } = useQuery({ queryKey: ['branches'], queryFn: () => apiGet('/branches') });
+  const { data: branches = [] } = useBranchesList();
   const { data: overrides = [], isLoading } = useQuery({
     queryKey: ['branch-schedule-overrides'],
     queryFn:  () => apiGet('/settings/branch-overrides').catch(() => []),
@@ -1328,6 +1322,7 @@ function BranchSchedulePanel({ schedule }) {
       await apiPut(`/settings/branch/${branchId}`, payload);
       toast('Branch schedule saved!', 'success');
       qc.invalidateQueries({ queryKey: ['branch-schedule-overrides'] });
+      qc.invalidateQueries({ queryKey: ['work-schedule'] });
       setEditing(null);
     } catch (e) { toast(e.message, 'error'); }
     finally { setSaving(false); }

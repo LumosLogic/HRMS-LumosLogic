@@ -15,12 +15,16 @@ import {
   Cake, Building2, Mail, AlertCircle, Gift, ShieldCheck,
   Coffee, Play, FolderOpen,
 } from 'lucide-react';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { STALE } from '@/lib/queryTiers';
+import { useAnnouncements } from '@/hooks/useReferenceData';
 import { Avatar } from '@/components/ui/Avatar';
+import { invalidateMyAttendance } from '@/hooks/useAttendanceDay';
 import { StatusBadge, LeaveTypeBadge } from '@/components/ui/Badge';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { fmtDate, fmtDateRange, fmtTime, fmtHours, todayStr, getGreeting } from '@/lib/utils';
@@ -72,6 +76,7 @@ const hoverCursor = (event, elements) => {
 // ── Check-in Widget ────────────────────────────────────────────────────────────
 function CheckinWidget({ onRefresh }) {
   const toast = useToast();
+  const qc = useQueryClient();
   const [record, setRecord] = useState(null);
   const [elapsed, setElapsed] = useState('');
   const [busy, setBusy] = useState(false);
@@ -105,22 +110,22 @@ function CheckinWidget({ onRefresh }) {
 
   async function checkIn() {
     setBusy(true);
-    try { const { record: r, message } = await apiPost('/attendance/checkin', {}); setRecord(r); toast(message || 'Checked in!', 'success'); onRefresh?.(); }
+    try { const { record: r, message } = await apiPost('/attendance/checkin', {}); setRecord(r); invalidateMyAttendance(qc); toast(message || 'Checked in!', 'success'); onRefresh?.(); }
     catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
   }
   async function checkOut() {
     setBusy(true);
-    try { const { record: r, message } = await apiPost('/attendance/checkout', {}); setRecord(r); toast(message || 'Checked out!', (r.status === 'half_day' || r.status === 'early_leave') ? 'warning' : 'success'); onRefresh?.(); }
+    try { const { record: r, message } = await apiPost('/attendance/checkout', {}); setRecord(r); invalidateMyAttendance(qc); toast(message || 'Checked out!', (r.status === 'half_day' || r.status === 'early_leave') ? 'warning' : 'success'); onRefresh?.(); }
     catch (err) { toast(err.message, 'error'); } finally { setBusy(false); }
   }
   async function breakIn() {
     setBreakBusy(true);
-    try { const { record: r, message } = await apiPost('/attendance/break-in', {}); setRecord(r); toast(message || 'Break started', 'info'); }
+    try { const { record: r, message } = await apiPost('/attendance/break-in', {}); setRecord(r); invalidateMyAttendance(qc); toast(message || 'Break started', 'info'); }
     catch (err) { toast(err.message, 'error'); } finally { setBreakBusy(false); }
   }
   async function breakOut() {
     setBreakBusy(true);
-    try { const { record: r, message } = await apiPost('/attendance/break-out', {}); setRecord(r); toast(message || 'Break ended', 'success'); }
+    try { const { record: r, message } = await apiPost('/attendance/break-out', {}); setRecord(r); invalidateMyAttendance(qc); toast(message || 'Break ended', 'success'); }
     catch (err) { toast(err.message, 'error'); } finally { setBreakBusy(false); }
   }
 
@@ -352,6 +357,7 @@ function ManageBirthdaysBtn({ onRefresh }) {
 // ── Manage Holidays Modal ─────────────────────────────────────────────────────
 function ManageHolidaysBtn({ onRefresh }) {
   const toast = useToast();
+  const qc = useQueryClient();
   const [open, setOpen] = useState(false);
   const [holidays, setHolidays] = useState([]);
   const [form, setForm] = useState({ name: '', date: '', type: 'public', description: '' });
@@ -364,12 +370,13 @@ function ManageHolidaysBtn({ onRefresh }) {
     try {
       await apiPost('/holidays', form);
       toast('Holiday added!', 'success');
+      qc.invalidateQueries({ queryKey: ['holidays'] });
       const h = await apiGet('/holidays'); setHolidays(h);
       setForm({ name: '', date: '', type: 'public', description: '' }); onRefresh?.();
     } catch (err) { toast(err.message, 'error'); }
   }
   async function del(id) {
-    try { await apiDelete(`/holidays/${id}`); setHolidays(h => h.filter(x => x.id !== id)); toast('Deleted', 'info'); onRefresh?.(); }
+    try { await apiDelete(`/holidays/${id}`); setHolidays(h => h.filter(x => x.id !== id)); toast('Deleted', 'info'); qc.invalidateQueries({ queryKey: ['holidays'] }); onRefresh?.(); }
     catch (err) { toast(err.message, 'error'); }
   }
 
@@ -751,8 +758,13 @@ export default function Dashboard() {
   const [attModal, setAttModal] = useState(null);
 
   const qs = dashDate ? { date: dashDate } : {};
-  const { data, isLoading, isError, error, refetch, dataUpdatedAt } = useQuery({
+  // keepPreviousData: changing the branch / date keeps the current dashboard on screen (dimmed, not clickable, with an
+  // "Updating…" chip — see dashStale below) instead of dropping back to the skeleton. Each branch/date is still its own cache entry.
+  const { data, isLoading, isError, error, refetch, dataUpdatedAt, isPlaceholderData: dashStale } = useQuery({
     queryKey: ['dashboard', dashDate, selectedBranchId],
+    meta: BRANCH_KEYED,
+    staleTime: STALE.frequent,   // frequent
+    placeholderData: keepPreviousData,
     queryFn: async () => {
       const [d, culture] = await Promise.all([
         apiGet('/dashboard', qs),
@@ -772,26 +784,28 @@ export default function Dashboard() {
 
   const { data: analytics } = useQuery({
     queryKey: ['analytics', selectedBranchId],
+    meta: BRANCH_KEYED,
+    placeholderData: keepPreviousData,
     queryFn: () => apiGet('/analytics').catch(() => null),
     enabled: isAdmin,
     staleTime: 5 * 60 * 1000,
   });
 
-  const { data: announcements } = useQuery({
-    queryKey: ['announcements-dash', selectedBranchId],
-    queryFn: () => apiGet('/announcements').catch(() => []),
-    staleTime: 5 * 60 * 1000,
-  });
+  const { data: announcements } = useAnnouncements({ staleTime: 5 * 60 * 1000 });
 
   // HR Work Items — onboarding in-progress + exit clearances pending
   const { data: onboardingOverview = [] } = useQuery({
     queryKey: ['onboarding-overview-dash', selectedBranchId],
+    meta: BRANCH_KEYED,
+    placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/onboarding/overview').catch(() => []),
     enabled:  isAdmin,
     staleTime: 3 * 60 * 1000,
   });
   const { data: exitRequestsDash = [] } = useQuery({
     queryKey: ['exit-requests-dash', selectedBranchId],
+    meta: BRANCH_KEYED,
+    placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/exit').catch(() => []),
     enabled:  isAdmin,
     staleTime: 3 * 60 * 1000,
@@ -894,7 +908,7 @@ export default function Dashboard() {
   ];
 
   return (
-    <div className="space-y-5">
+    <div className={`space-y-5 transition-opacity ${dashStale ? 'opacity-60 pointer-events-none' : ''}`} aria-busy={dashStale || undefined}>
 
       {/* ─── HERO ──────────────────────────────────────────────────────── */}
       <div className="rounded-2xl relative overflow-hidden shadow-md"
@@ -907,7 +921,7 @@ export default function Dashboard() {
               <h1 className="text-xl font-black text-white tracking-tight">
                 {getGreeting()}, {user?.name?.split(' ')[0]}!
               </h1>
-              <p className="text-white/65 text-sm mt-1">Here's what's happening in your organization today.{lastUpdatedLabel && <span className="ml-2 text-white/40 text-xs">· Updated {lastUpdatedLabel}</span>}</p>
+              <p className="text-white/65 text-sm mt-1">Here's what's happening in your organization today.{dashStale ? <span className="ml-2 text-white/80 text-xs font-semibold" role="status">· Updating…</span> : (lastUpdatedLabel && <span className="ml-2 text-white/40 text-xs">· Updated {lastUpdatedLabel}</span>)}</p>
             </div>
             {dashDate && (
               <button className="flex items-center gap-1.5 text-white text-xs font-bold px-3 py-1.5 rounded-xl shrink-0"

@@ -88,7 +88,27 @@ export default function NotificationCenter() {
   function invalidateNotifs() {
     qc.invalidateQueries({ queryKey: ['notifications'] });
     qc.invalidateQueries({ queryKey: ['notif-count'] });
+    qc.invalidateQueries({ queryKey: ['notif-count-root'] });
   }
+
+  // Optimistic read-state: a notification's read flag and the unread badge are non-sensitive and trivially reversible,
+  // so the UI updates immediately; if the server rejects the change the snapshot is restored (and the error is shown),
+  // and onSettled always re-syncs with the server. (Deletes / archive stay server-confirmed.)
+  const COUNT_KEYS = [['notif-count'], ['notif-count-root']];
+  async function optimisticRead(markOne /* id | null = all */) {
+    await qc.cancelQueries({ queryKey: ['notifications'] });
+    const snapshot = [
+      ...qc.getQueriesData({ queryKey: ['notifications'] }),
+      ...COUNT_KEYS.flatMap(k => qc.getQueriesData({ queryKey: k })),
+    ];
+    const wasUnread = markOne == null ? null : notifications.find(n => n.id === markOne)?.is_read === false;
+    qc.setQueriesData({ queryKey: ['notifications'] }, d => Array.isArray(d)
+      ? d.map(n => (markOne == null || n.id === markOne) ? { ...n, is_read: true } : n) : d);
+    for (const k of COUNT_KEYS) qc.setQueriesData({ queryKey: k }, d => (d && typeof d.count === 'number')
+      ? { ...d, count: markOne == null ? 0 : Math.max(0, d.count - (wasUnread ? 1 : 0)) } : d);
+    return { snapshot };
+  }
+  const restore = (ctx) => ctx?.snapshot?.forEach(([key, data]) => qc.setQueryData(key, data));
 
   // EHN_NOT_003: Undo delete - schedule actual deletion with undo window
   const scheduleDelete = useCallback((id) => {
@@ -108,12 +128,17 @@ export default function NotificationCenter() {
 
   const readMut = useMutation({
     mutationFn: id => apiPut(`/notifications/${id}/read`),
-    onSuccess: invalidateNotifs,
+    onMutate: (id) => optimisticRead(id),
+    onError: (e, _id, ctx) => { restore(ctx); toast(e.message || 'Could not mark as read', 'error'); },
+    onSettled: invalidateNotifs,
   });
 
   const readAllMut = useMutation({
     mutationFn: () => apiPut('/notifications/mark-all-read'),
-    onSuccess: () => { toast('All marked as read', 'success'); invalidateNotifs(); },
+    onMutate: () => optimisticRead(null),
+    onSuccess: () => { toast('All marked as read', 'success'); },
+    onError: (e, _v, ctx) => { restore(ctx); toast(e.message || 'Could not mark all as read', 'error'); },
+    onSettled: invalidateNotifs,
   });
 
   const delMut = useMutation({

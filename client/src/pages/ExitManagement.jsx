@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import {
   LogOut, CheckSquare, Square, AlertTriangle, ChevronDown, ChevronUp,
   ClipboardList, Clock, CheckCircle2, XCircle, TrendingUp, Shield,
@@ -550,7 +551,7 @@ export default function ExitManagement() {
   const wrap = '';
   const [resignOpen, setResignOpen] = useState(false);
 
-  const { data: _exitData, isLoading } = useQuery({ queryKey: ['exit-requests', selectedBranchId], queryFn: () => apiGet('/exit') });
+  const { data: _exitData, isLoading } = useQuery({ queryKey: ['exit-requests', selectedBranchId], meta: BRANCH_KEYED, placeholderData: keepPreviousData, queryFn: () => apiGet('/exit') });
   const requests = Array.isArray(_exitData) ? _exitData : [];
 
   const activeCount      = requests.filter(r => ['pending','approved'].includes(r.status)).length;

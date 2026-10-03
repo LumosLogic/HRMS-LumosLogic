@@ -10,9 +10,13 @@ import {
   Target, User, Zap, ArrowRight,
 } from 'lucide-react';
 import { apiGet, apiPost } from '@/lib/api';
+import { STALE } from '@/lib/queryTiers';
+import { useAnnouncements } from '@/hooks/useReferenceData';
+import { useLeavesList, useRegularizations, useExpenses, useLeavePolicies } from '@/hooks/useListQueries';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { Avatar } from '@/components/ui/Avatar';
+import { invalidateMyAttendance } from '@/hooks/useAttendanceDay';
 import { todayStr, fmtDate, fmtTime, fmtHours, countWorkingDaysInRange, toISODate } from '@/lib/utils';
 import { ApplyLeaveModal } from './Leaves';
 
@@ -328,6 +332,7 @@ export default function EmployeeHome() {
     try {
       const { record: r, message } = await apiPost('/attendance/checkin', {});
       setAttRecord(r);
+      invalidateMyAttendance(qc);
       toast(message || 'Checked in!', 'success');
     } catch (err) { toast(err.message, 'error'); }
     finally { setCheckBusy(false); }
@@ -337,6 +342,7 @@ export default function EmployeeHome() {
     try {
       const { record: r, message } = await apiPost('/attendance/checkout', {});
       setAttRecord(r);
+      invalidateMyAttendance(qc);
       toast(message || 'Checked out!', r.status === 'half_day' ? 'warning' : 'success');
     } catch (err) { toast(err.message, 'error'); }
     finally { setCheckBusy(false); }
@@ -346,6 +352,7 @@ export default function EmployeeHome() {
     try {
       const { record: r, message } = await apiPost('/attendance/break-in', {});
       setAttRecord(r);
+      invalidateMyAttendance(qc);
       toast(message || 'Break started', 'info');
     } catch (err) { toast(err.message, 'error'); }
     finally { setBreakBusy(false); }
@@ -355,6 +362,7 @@ export default function EmployeeHome() {
     try {
       const { record: r, message } = await apiPost('/attendance/break-out', {});
       setAttRecord(r);
+      invalidateMyAttendance(qc);
       toast(message || 'Break ended', 'success');
     } catch (err) { toast(err.message, 'error'); }
     finally { setBreakBusy(false); }
@@ -363,7 +371,7 @@ export default function EmployeeHome() {
   /* ── queries ── */
   const { data: settingsData } = useQuery({ queryKey: ['settings'], queryFn: () => apiGet('/settings'), staleTime: 10 * 60 * 1000 });
   const { data: myStats } = useQuery({ queryKey: ['my-stats'], queryFn: () => apiGet('/my-stats') });
-  const { data: myLeaves = [] } = useQuery({ queryKey: ['my-leaves-recent'], queryFn: () => apiGet('/leaves') });
+  const { data: myLeaves = [] } = useLeavesList();   // own leaves — one cache entry shared with My Leaves / profile
   const { data: culture } = useQuery({
     queryKey: ['culture'], queryFn: () => apiGet('/culture'), staleTime: 5 * 60 * 1000, retry: 2,
   });
@@ -374,25 +382,19 @@ export default function EmployeeHome() {
   const { data: newJoiners = [] } = useQuery({
     queryKey: ['new-joiners'], queryFn: () => apiGet('/new-joiners'), staleTime: 5 * 60 * 1000,
   });
-  const { data: announcements = [] } = useQuery({
-    queryKey: ['announcements'], queryFn: () => apiGet('/announcements'),
-    staleTime: 5 * 60 * 1000, retry: 1,
-  });
-  const { data: regularizations = [] } = useQuery({
-    queryKey: ['my-regularization'], queryFn: () => apiGet('/regularization'), staleTime: 2 * 60 * 1000, retry: 1,
-  });
+  const { data: announcements = [] } = useAnnouncements({ staleTime: 5 * 60 * 1000 });
+  const { data: regularizations = [] } = useRegularizations({}, { staleTime: 2 * 60 * 1000 });
   const thirtyDaysAgo = new Date(nowDate);
   thirtyDaysAgo.setDate(nowDate.getDate() - 30);
   const nextWeek = new Date(nowDate);
   nextWeek.setDate(nowDate.getDate() + 7);
   const { data: recentAttendance = [] } = useQuery({
     queryKey: ['my-att-recent', toISODate(thirtyDaysAgo), toISODate(nextWeek)],
+    staleTime: STALE.frequent,   // frequent
     queryFn: () => apiGet('/attendance', { startDate: toISODate(thirtyDaysAgo), endDate: toISODate(nextWeek) }),
     staleTime: 2 * 60 * 1000,
   });
-  const { data: leavePolicies = [] } = useQuery({
-    queryKey: ['leave-policies'], queryFn: () => apiGet('/leave-policies'), staleTime: 5 * 60 * 1000,
-  });
+  const { data: leavePolicies = [] } = useLeavePolicies({ staleTime: 5 * 60 * 1000 });
   const { data: leaveBalance } = useQuery({
     queryKey: ['my-leave-balance', new Date().getFullYear()],
     queryFn:  () => apiGet('/leaves/balance'),
@@ -518,11 +520,7 @@ export default function EmployeeHome() {
     .sort((a, b) => (b.date || '').localeCompare(a.date || ''))
     .slice(0, 5);
 
-  const { data: myExpenses = [] } = useQuery({
-    queryKey: ['my-expenses-recent'],
-    queryFn:  () => apiGet('/expenses').catch(() => []),
-    staleTime: 2 * 60 * 1000,
-  });
+  const { data: myExpenses = [] } = useExpenses({}, { staleTime: 2 * 60 * 1000 });
 
   /* ── pending actions count ── */
   const pendingExpenses = myExpenses.filter(e => e.status === 'pending' || e.status === 'manager_approved').length;
@@ -1195,7 +1193,7 @@ export default function EmployeeHome() {
           allLeaves={[]}
           policies={[]}
           onClose={() => setApplyLeaveOpen(false)}
-          onSuccess={() => qc.invalidateQueries({ queryKey: ['my-leaves-recent'] })}
+          onSuccess={() => qc.invalidateQueries({ queryKey: ['leaves'] })}
         />
       )}
     </div>

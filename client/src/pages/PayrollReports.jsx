@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import {
   BarChart3, Download, FileText, Building2, AlertTriangle,
   PlusCircle, RefreshCw, GitBranch,
@@ -100,6 +101,7 @@ export default function PayrollReports() {
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['payroll-report', type, month, year, selectedBranchId],
+    meta: BRANCH_KEYED,
     queryFn:  () => apiGet(activeReport.endpoint, {
       month: month || undefined,
       year:  year  || undefined,

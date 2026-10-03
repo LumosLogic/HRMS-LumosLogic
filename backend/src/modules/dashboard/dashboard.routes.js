@@ -23,7 +23,7 @@ router.get('/', auth, withBranchContext, async (req, res) => {
     // Bug-001: allEmpCount includes ALL statuses for the Total Employees KPI.
     // empQuery (below) keeps the active-only filter for attendance/activity use.
     let allEmpCountQuery = db.from('users')
-      .select('id').eq('role', 'employee').eq('organization_id', orgId(req));
+      .select('id', { count: 'exact', head: true }).eq('role', 'employee').eq('organization_id', orgId(req));
 
     let empQuery = db.from('users')
       .select('id, name, avatar_color, department, created_at')
@@ -51,37 +51,60 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       // 'all': no additional filter
     }
 
-    const { data: allEmployees } = await empQuery;
-    const { data: allEmpData }   = await allEmpCountQuery;
-    const totalEmployees = (allEmpData || []).length;   // Bug-001: counts ALL statuses
+    const [{ data: allEmployees }, { count: allEmpCount }] = await Promise.all([empQuery, allEmpCountQuery]);
+    const totalEmployees = allEmpCount || 0;   // Bug-001: counts ALL statuses
     const empIds         = (allEmployees || []).map(e => e.id);
 
-    // ── 2. Selected date attendance — employees only ─────────────────────────
-    _step = 'attendance';
-    let todayRecords = [];
-    if (empIds.length > 0) {
-      const { data: todayRaw } = await db.from('attendance')
-        .select('*, users(name, avatar_color, department)')
-        .eq('date', today).eq('organization_id', orgId(req))
-        .in('user_id', empIds);
-      todayRecords = flat(todayRaw);
-    }
+    // ── 2. Everything below depends only on empIds / the caller, not on each other → one parallel round ────────────
+    // Branch isolation: inside a branch-restricted context an EMPTY employee list means "nobody", never "everybody"
+    // (previously the user filter was simply skipped, which returned org-wide pending counts / names for a branch
+    // without active employees).
+    _step = 'parallel-queries';
+    const orgIdVal = orgId(req);
+    const isAdminCaller = isAdminRole(req.user.role);
+    const noScope = empIds.length === 0 && branchState.type !== 'all';
+    const byUsers = (q) => (empIds.length > 0 ? q.in('user_id', empIds) : q);
+    // BUG_054/056/070: Count ALL pending statuses including pending_approval
+    const ALL_PENDING = ['pending', 'pending_root', 'pending_dept', 'pending_approval'];
+
+    const [attRes, talRes, pendLeaveRes, regRes, expRes, plRes, myTodayRes] = await Promise.all([
+      // selected-date attendance — employees only
+      empIds.length > 0
+        ? db.from('attendance').select('*, users(name, avatar_color, department)')
+            .eq('date', today).eq('organization_id', orgIdVal).in('user_id', empIds)
+        : null,
+      // approved leaves covering the date (fills in employees without an attendance record yet)
+      empIds.length > 0
+        ? db.from('leaves').select('user_id, leave_type, leave_time')
+            .eq('organization_id', orgIdVal).eq('status', 'approved')
+            .lte('start_date', today).gte('end_date', today).in('user_id', empIds)
+        : null,
+      noScope ? null : byUsers(db.from('leaves').select('*', { count: 'exact', head: true })
+        .in('status', ALL_PENDING).eq('organization_id', orgIdVal)),
+      // Bug_023: dashboard "Pending Approvals" must match what the PendingApprovals page shows
+      // (it also lists regularizations and expenses with status='pending').
+      (isAdminCaller && !noScope) ? byUsers(db.from('attendance_regularization').select('*', { count: 'exact', head: true })
+        .eq('status', 'pending').eq('organization_id', orgIdVal)) : null,
+      (isAdminCaller && !noScope) ? byUsers(db.from('expenses').select('*', { count: 'exact', head: true })
+        .eq('status', 'pending').eq('organization_id', orgIdVal)) : null,
+      isAdminCaller
+        // BUG_070: include all pending statuses so the widget shows actual pending requests
+        ? (noScope ? null : byUsers(db.from('leaves')
+            .select('*, users!leaves_user_id_fkey(name, email, department, avatar_color)')
+            .in('status', ALL_PENDING).eq('organization_id', orgIdVal)
+            .order('created_at', { ascending: false }).limit(5)))
+        : db.from('leaves').select('*, users!leaves_user_id_fkey(name)')
+            .eq('user_id', req.user.id).eq('organization_id', orgIdVal)
+            .order('created_at', { ascending: false }).limit(5),
+      db.from('attendance').select('*').eq('user_id', req.user.id).eq('date', today).maybeSingle(),
+    ]);
+    const todayRecords = attRes ? flat(attRes.data) : [];
 
     // ── 3. Calculate stats ────────────────────────────────────────────────────
     const onLeaveIds = new Set(todayRecords.filter(r => r.status === 'on_leave').map(r => r.user_id));
 
-    // Fetch today's approved leaves to fill in missing attendance records
-    let todayApprovedLeaves = [];
-    if (empIds.length > 0) {
-      const { data: tal } = await db.from('leaves')
-        .select('user_id, leave_type, leave_time')
-        .eq('organization_id', orgId(req))
-        .eq('status', 'approved')
-        .lte('start_date', today)
-        .gte('end_date', today)
-        .in('user_id', empIds);
-      todayApprovedLeaves = tal || [];
-    }
+    // Today's approved leaves (fetched in the parallel round above) fill in missing attendance records
+    const todayApprovedLeaves = talRes?.data || [];
 
     // Build wfhIds from attendance records + approved WFH leaves
     const wfhIds = new Set(todayRecords.filter(r => r.status === 'wfh').map(r => r.user_id));
@@ -121,59 +144,12 @@ router.get('/', auth, withBranchContext, async (req, res) => {
     const recentActivity = [...activityMap.values()].slice(0, 15);
 
     // ── 5. Pending leaves (branch-scoped when in a specific branch context) ───
-    _step = 'leaves';
-    // BUG_054/056/070: Count ALL pending statuses including pending_approval
-    const ALL_PENDING = ['pending', 'pending_root', 'pending_dept', 'pending_approval'];
-
-    let pendingLeavesQuery = db.from('leaves')
-      .select('*', { count: 'exact', head: true })
-      .in('status', ALL_PENDING)
-      .eq('organization_id', orgId(req));
-    if (empIds.length > 0) pendingLeavesQuery = pendingLeavesQuery.in('user_id', empIds);
-
-    const { count: pendingLeaveCount } = await pendingLeavesQuery;
-
-    // Bug_023: dashboard "Pending Approvals" must match what PendingApprovals page shows.
-    // That page includes regularizations (status='pending') and expenses (status='pending').
-    let pendingRegCount = 0;
-    let pendingExpCount = 0;
-    if (isAdminRole(req.user.role)) {
-      let regQuery = db.from('attendance_regularization')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'pending').eq('organization_id', orgId(req));
-      if (empIds.length > 0) regQuery = regQuery.in('user_id', empIds);
-      const { count: rc } = await regQuery;
-      pendingRegCount = rc || 0;
-
-      let expQuery = db.from('expenses')
-        .select('*', { count: 'exact', head: true })
-        .eq('status', 'pending').eq('organization_id', orgId(req));
-      if (empIds.length > 0) expQuery = expQuery.in('user_id', empIds);
-      const { count: ec } = await expQuery;
-      pendingExpCount = ec || 0;
-    }
-    const pendingLeaves = (pendingLeaveCount || 0) + pendingRegCount + pendingExpCount;
-
-    let pendingLeaveList;
-    if (isAdminRole(req.user.role)) {
-      // BUG_070: Include all pending statuses so widget shows actual pending requests
-      let plQuery = db.from('leaves')
-        .select('*, users!leaves_user_id_fkey(name, email, department, avatar_color)')
-        .in('status', ALL_PENDING).eq('organization_id', orgId(req))
-        .order('created_at', { ascending: false }).limit(5);
-      if (empIds.length > 0) plQuery = plQuery.in('user_id', empIds);
-      const { data: plRaw } = await plQuery;
-      pendingLeaveList = flat(plRaw);
-    } else {
-      const { data: plRaw } = await db.from('leaves')
-        .select('*, users!leaves_user_id_fkey(name)').eq('user_id', req.user.id).eq('organization_id', orgId(req))
-        .order('created_at', { ascending: false }).limit(5);
-      pendingLeaveList = flat(plRaw);
-    }
-
-    _step = 'myToday';
-    const { data: myToday } = await db.from('attendance')
-      .select('*').eq('user_id', req.user.id).eq('date', today).maybeSingle();
+    const pendingLeaveCount = pendLeaveRes?.count || 0;
+    const pendingRegCount   = regRes?.count || 0;
+    const pendingExpCount   = expRes?.count || 0;
+    const pendingLeaves = pendingLeaveCount + pendingRegCount + pendingExpCount;
+    const pendingLeaveList = plRes ? flat(plRes.data) : [];
+    const myToday = myTodayRes?.data ?? null;
 
     res.json({ totalEmployees, presentToday, onLeaveToday, lateToday, earlyExitToday, halfDayToday, wfhToday, checkedInToday, newThisMonth, pendingLeaves, recentActivity, pendingLeaveList, myToday, today, isToday, newJoiners });
   } catch (err) {

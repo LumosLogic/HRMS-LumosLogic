@@ -3,6 +3,7 @@ import { Outlet } from 'react-router-dom';
 import { Menu } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
+import { BranchSwitchGuard } from './BranchSwitchGuard';
 import { GlobalSearchModal } from '@/components/ui/GlobalSearchModal';
 import { useAuth } from '@/context/AuthContext';
 import { useTour } from '@/hooks/useTour';
@@ -58,7 +59,7 @@ export function AppLayout() {
         {/* Headless Header — registers Ctrl+K shortcut only */}
         <Header />
         <main id="tour-main-content" className="flex-1 overflow-y-auto p-4 md:p-7">
-          <Outlet />
+          <BranchSwitchGuard><Outlet /></BranchSwitchGuard>
         </main>
       </div>
 

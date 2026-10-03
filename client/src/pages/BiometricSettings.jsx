@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import {
   Server, Copy, Info, RefreshCw, CheckCircle2,
   XCircle, Clock, Play, Calendar, Save, ChevronDown, AlertTriangle, Building2,
@@ -93,6 +94,7 @@ export default function BiometricSettings() {
   // ── Sync history ──────────────────────────────────────────────────────────────
   const { data: history = [], isLoading: histLoading, refetch: refetchHistory } = useQuery({
     queryKey: ['biometric-auto-sync-history', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/biometric/auto-sync/history', { limit: 100 }),
     refetchInterval: syncCfg?.last_sync_status === 'running' ? 4000 : false,
   });

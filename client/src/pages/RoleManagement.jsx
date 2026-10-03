@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import {
   Shield, Plus, Trash2, ChevronRight, Users, Lock,
   Settings, AlertCircle, CheckCircle2, X, Pencil,
@@ -418,6 +419,7 @@ export default function RoleManagement() {
   // Include selectedBranchId in queryKey so member counts refresh when branch changes
   const { data: roles = [], isLoading } = useQuery({
     queryKey: ['roles', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn: () => apiGet('/roles'),
   });
 

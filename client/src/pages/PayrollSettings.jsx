@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPut, apiPost } from '@/lib/api';
+import { usePayrollSettings } from '@/hooks/useReferenceData';
 import { cn } from '@/lib/utils';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { DEFAULT_SALARY_RULES, mergeWithDefaults, STATUTORY_COMPONENT_KEYS } from '@/lib/salaryCalculator';
@@ -533,10 +534,7 @@ export default function PayrollSettings() {
   const [dirty, setDirty] = useState(false);
   const [salaryRules, setSalaryRules] = useState(mergeWithDefaults(null));
 
-  const { data: settings, isLoading } = useQuery({
-    queryKey: ['payroll-settings'],
-    queryFn:  () => apiGet('/payroll/settings'),
-  });
+  const { data: settings, isLoading } = usePayrollSettings({ staleTime: 0 });
 
   useEffect(() => {
     if (settings) {

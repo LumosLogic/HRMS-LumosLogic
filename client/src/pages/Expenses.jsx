@@ -9,6 +9,8 @@ import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { DateInput } from '@/components/ui/DateInput';
+import { useExpenses, HISTORY_DAYS, historyFrom } from '@/hooks/useListQueries';
+import { HistoryWindowNote, RefreshingOverlay } from '@/components/ui/HistoryWindowNote';
 import { Avatar } from '@/components/ui/Avatar';
 import { fmtDate } from '@/lib/utils';
 
@@ -475,8 +477,15 @@ export default function ExpensesPage() {
     if (s && ['pending', 'manager_approved', 'approved', 'rejected'].includes(s)) setFilter(s);
   }, []);
 
-  const { data: _expData, isLoading } = useQuery({ queryKey: ['expenses', filter, selectedBranchId], queryFn: () => apiGet('/expenses', filter !== 'all' ? { status: filter } : {}) });
-  const expenses = Array.isArray(_expData) ? _expData : [];
+  // ONE list request (it used to be two: the filtered list AND the unfiltered list for the stat cards). The status tab is
+  // applied locally. Admins get recent history by default (server-side window) with a "Show full history" switch; a
+  // client date filter or a highlighted claim loads the full history. Employees keep their own full list (small).
+  const [allHistory, setAllHistory] = useState(() => !!highlightExpId);
+  const hasExpDateFilter = !!(expDateFrom || expDateTo);
+  const expParams = !isAdmin ? {} : { from: (allHistory || hasExpDateFilter) ? undefined : historyFrom(HISTORY_DAYS.expenses) };
+  const { data: _allExpData, isLoading, isPlaceholderData: expStale, isFetching: expFetching } = useExpenses(expParams);
+  const allExpenses = Array.isArray(_allExpData) ? _allExpData : [];
+  const expenses = filter === 'all' ? allExpenses : allExpenses.filter(e => e.status === filter);
 
   // BUG_094: scroll to highlighted expense and fade out ring after 3 seconds
   useEffect(() => {
@@ -489,9 +498,7 @@ export default function ExpensesPage() {
     const t = setTimeout(() => setHighlightActive(false), 3000);
     return () => clearTimeout(t);
   }, [highlightExpId]);
-  // Fetch all claims (unfiltered) to differentiate "no records for filter" vs "no claims at all"
-  const { data: _allExpData } = useQuery({ queryKey: ['expenses', 'all', selectedBranchId], queryFn: () => apiGet('/expenses') });
-  const allExpenses = Array.isArray(_allExpData) ? _allExpData : [];
+  // "no records for this filter" vs "no claims at all" (allExpenses is the unfiltered list)
   const hasAnyClaims = allExpenses.length > 0;
 
   const delMut = useMutation({
@@ -581,6 +588,12 @@ export default function ExpensesPage() {
         );
       })()}
 
+      {isAdmin && !hasExpDateFilter && (
+        <HistoryWindowNote since={historyFrom(HISTORY_DAYS.expenses)} showingAll={allHistory} noun="claims"
+          loading={expFetching} onToggle={() => setAllHistory(v => !v)} />
+      )}
+
+      <RefreshingOverlay active={expStale}>
       {isLoading ? (
         <div className="loading"><div className="spinner" />Loading…</div>
       ) : expenses.length === 0 ? (
@@ -682,6 +695,7 @@ export default function ExpensesPage() {
           })}
         </div>
       )}
+      </RefreshingOverlay>
 
       {addOpen           && <ExpenseModal       open onClose={() => setAddOpen(false)} allExpenses={allExpenses} />}
       {editExp           && <ExpenseModal       open onClose={() => setEditExp(null)} expense={editExp} allExpenses={allExpenses} />}

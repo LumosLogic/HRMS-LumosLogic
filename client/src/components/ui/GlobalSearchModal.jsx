@@ -1,8 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Search, Users, Umbrella, FileText, Megaphone, ArrowRight, X } from 'lucide-react';
-import { apiGet } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
+import { useEmployees } from '@/hooks/useEmployees';
+import { useLeavesList, HISTORY_DAYS, historyFrom } from '@/hooks/useListQueries';
+import { useAnnouncements, useDocumentsList } from '@/hooks/useReferenceData';
 
 const SYSTEM_MODULES = [
   { name: 'My Leaves', description: 'View leave history, leave balances, and request status', path: '/portal/leaves', forEmployee: true },
@@ -30,11 +32,20 @@ const SYSTEM_MODULES = [
   { name: 'Branch Management', description: 'Add or edit branch details and assign HR administrators', path: '/branches', forAdmin: true },
 ];
 
+// Search is a pure client-side filter over data sets that are loaded ONCE (through the shared React Query hooks, so the
+// employee / leave / document / announcement lists are the same cache entries the pages use) and only after the user
+// has typed MIN_CHARS characters. Typing therefore never triggers a request per keystroke — a new search is a re-filter —
+// and there is no async search result to arrive late: results are derived synchronously from (data, current query), so an
+// older response can never overwrite a newer one. Permissions are unchanged: every list comes from the same
+// RBAC- and branch-scoped endpoints as before, and each hook keys its data by the selected branch.
+const MIN_CHARS = 2;
+const DEBOUNCE_MS = 300;
+const EMPTY_RESULTS = { modules: [], employees: [], leaves: [], documents: [], announcements: [] };
+
 export function GlobalSearchModal({ open, onClose }) {
   const { isEmployee, isRootAdmin } = useAuth();
-  const [query,   setQuery]   = useState('');
-  const [results, setResults] = useState({ modules: [], employees: [], leaves: [], documents: [], announcements: [] });
-  const [loading, setLoading] = useState(false);
+  const [query,     setQuery]     = useState('');
+  const [debounced, setDebounced] = useState('');
   const navigate = useNavigate();
 
   // ESC to close
@@ -45,88 +56,65 @@ export function GlobalSearchModal({ open, onClose }) {
   }, [open, onClose]);
 
   // Clear query every time modal closes
-  useEffect(() => { if (!open) setQuery(''); }, [open]);
+  useEffect(() => { if (!open) { setQuery(''); setDebounced(''); } }, [open]);
 
-  // Clear results when modal closes or query is empty
+  // Debounce: the filter (and the first data load) follows the input after a short pause, not every keystroke
   useEffect(() => {
-    if (!query.trim() || !open) {
-      setResults({ modules: [], employees: [], leaves: [], documents: [], announcements: [] });
-      return;
+    const t = setTimeout(() => setDebounced(query), DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  const q = debounced.toLowerCase().trim();
+  const typing = query.trim() !== debounced.trim();
+  const searchable = open && q.length >= MIN_CHARS;
+
+  // Data: fetched only once the query is long enough, then served from the shared cache
+  const empsQ = useEmployees({ lite: true, enabled: searchable && !isEmployee });
+  const lvsQ  = useLeavesList(isEmployee ? {} : { from: historyFrom(HISTORY_DAYS.leaves) }, { enabled: searchable });
+  const docsQ = useDocumentsList({ enabled: searchable });
+  const annsQ = useAnnouncements({ enabled: searchable });
+  const loading = searchable && (empsQ.isLoading || lvsQ.isLoading || docsQ.isLoading || annsQ.isLoading);
+
+  const results = useMemo(() => {
+    if (!q || !open) return EMPTY_RESULTS;
+    const modules = SYSTEM_MODULES.filter(m => {
+      const roleOk = isEmployee ? m.forEmployee : m.forAdmin;
+      return roleOk && (m.name.toLowerCase().includes(q) || m.description.toLowerCase().includes(q));
+    }).slice(0, 4);
+    if (!searchable) return { ...EMPTY_RESULTS, modules };
+
+    const arr = (v) => (Array.isArray(v) ? v : []);
+    const lvs = arr(lvsQ.data), docs = arr(docsQ.data), anns = arr(annsQ.data);
+    const documents = docs.filter(d =>
+      d.name?.toLowerCase().includes(q) || d.title?.toLowerCase().includes(q) || d.category?.toLowerCase().includes(q)
+    ).slice(0, 4);
+    const announcements = anns.filter(a =>
+      a.title?.toLowerCase().includes(q) || a.content?.toLowerCase().includes(q)
+    ).slice(0, 4);
+
+    if (isEmployee) {
+      // Employee: search only own data
+      return {
+        modules, employees: [],
+        leaves: lvs.filter(l =>
+          l.leave_type?.toLowerCase().includes(q) || l.reason?.toLowerCase().includes(q) || l.status?.toLowerCase().includes(q)
+        ).slice(0, 4),
+        documents, announcements,
+      };
     }
-
-    const timer = setTimeout(async () => {
-      setLoading(true);
-      try {
-        const q = query.toLowerCase().trim();
-
-        const matchingModules = SYSTEM_MODULES.filter(m => {
-          const roleOk = isEmployee ? m.forEmployee : m.forAdmin;
-          return roleOk && (m.name.toLowerCase().includes(q) || m.description.toLowerCase().includes(q));
-        }).slice(0, 4);
-
-        if (isEmployee) {
-          // Employee: search only own data
-          const [lvs, docs, anns] = await Promise.all([
-            apiGet('/leaves').catch(() => []),
-            apiGet('/documents').catch(() => []),
-            apiGet('/announcements').catch(() => []),
-          ]);
-          setResults({
-            modules: matchingModules,
-            employees: [],
-            leaves: (lvs || []).filter(l =>
-              l.leave_type?.toLowerCase().includes(q) ||
-              l.reason?.toLowerCase().includes(q) ||
-              l.status?.toLowerCase().includes(q)
-            ).slice(0, 4),
-            documents: (docs || []).filter(d =>
-              d.name?.toLowerCase().includes(q) ||
-              d.category?.toLowerCase().includes(q)
-            ).slice(0, 4),
-            announcements: (anns || []).filter(a =>
-              a.title?.toLowerCase().includes(q) ||
-              a.content?.toLowerCase().includes(q)
-            ).slice(0, 4),
-          });
-        } else {
-          // HR Admin / Root Admin: search all org data
-          const [emps, lvs, docs, anns] = await Promise.all([
-            apiGet('/employees').catch(() => []),
-            apiGet('/leaves').catch(() => []),
-            apiGet('/documents').catch(() => []),
-            apiGet('/announcements').catch(() => []),
-          ]);
-          setResults({
-            modules: matchingModules,
-            employees: (emps || []).filter(e =>
-              e.name?.toLowerCase().includes(q) ||
-              e.email?.toLowerCase().includes(q) ||
-              e.department?.toLowerCase().includes(q)
-            ).slice(0, 4),
-            leaves: (lvs || []).filter(l =>
-              l.employee_name?.toLowerCase().includes(q) ||
-              l.name?.toLowerCase().includes(q) ||
-              l.leave_type?.toLowerCase().includes(q) ||
-              l.reason?.toLowerCase().includes(q)
-            ).slice(0, 4),
-            documents: (docs || []).filter(d =>
-              d.name?.toLowerCase().includes(q) ||
-              d.title?.toLowerCase().includes(q) ||
-              d.category?.toLowerCase().includes(q)
-            ).slice(0, 4),
-            announcements: (anns || []).filter(a =>
-              a.title?.toLowerCase().includes(q) ||
-              a.content?.toLowerCase().includes(q)
-            ).slice(0, 4),
-          });
-        }
-      } finally {
-        setLoading(false);
-      }
-    }, 250);
-
-    return () => clearTimeout(timer);
-  }, [query, open, isEmployee]);
+    // HR Admin / Root Admin: search all organization data
+    return {
+      modules,
+      employees: arr(empsQ.data).filter(e =>
+        e.name?.toLowerCase().includes(q) || e.email?.toLowerCase().includes(q) || e.department?.toLowerCase().includes(q)
+      ).slice(0, 4),
+      leaves: lvs.filter(l =>
+        l.employee_name?.toLowerCase().includes(q) || l.name?.toLowerCase().includes(q) ||
+        l.leave_type?.toLowerCase().includes(q) || l.reason?.toLowerCase().includes(q)
+      ).slice(0, 4),
+      documents, announcements,
+    };
+  }, [q, open, searchable, isEmployee, empsQ.data, lvsQ.data, docsQ.data, annsQ.data]);
 
   if (!open) return null;
 
@@ -168,7 +156,7 @@ export function GlobalSearchModal({ open, onClose }) {
             value={query}
             onChange={e => setQuery(e.target.value)}
           />
-          {loading && <span className="spinner w-4 h-4 shrink-0" />}
+          {(loading || typing) && <span className="spinner w-4 h-4 shrink-0" aria-label="Searching" />}
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-[#f0f3ff] text-[#777587] hover:text-[#151c27]">
             <X size={18} />
           </button>
@@ -195,10 +183,18 @@ export function GlobalSearchModal({ open, onClose }) {
             </div>
           )}
 
-          {query.trim() && !loading && !hasResults && (
+          {query.trim().length > 0 && query.trim().length < MIN_CHARS && (
+            <div className="py-3 text-center text-[0.7rem] text-[#777587]">Type at least {MIN_CHARS} characters to search records.</div>
+          )}
+
+          {q && !typing && !loading && !hasResults && (
             <div className="py-8 text-center text-xs text-[#777587]">
               No matching records found for <strong>"{query}"</strong>.
             </div>
+          )}
+
+          {!isEmployee && searchable && (
+            <div className="pb-2 text-[0.6rem] text-[#9ca3af]">Leave results cover the last 13 months — open Leave Management for older history.</div>
           )}
 
           {/* Navigation / Modules */}

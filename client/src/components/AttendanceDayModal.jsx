@@ -1,11 +1,15 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { UserCheck, XCircle, Home, Timer, Coffee, LogIn, LogOut, AlertTriangle, Fingerprint } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut } from '@/lib/api';
+import { STALE } from '@/lib/queryTiers';
 import { useEmployees } from '@/hooks/useEmployees';
+import { useLeavesList } from '@/hooks/useListQueries';
+import { usePunchesForDate, useOverridePreview, invalidateAttendanceDay } from '@/hooks/useAttendanceDay';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -44,22 +48,11 @@ export function AttCorrectionModal({ emp, dateStr, existingRecord, isSynthetic, 
   // For synthetic overrides, fetch the exact day count from the backend using
   // the same buildWorkingDates + fetchHolidaySet logic as the actual override.
   // This avoids any discrepancy due to public holidays or org-configured work days.
-  const [overrideLeaveInfo, setOverrideLeaveInfo] = useState(null); // { isMultiDay, days, startDate, endDate } | null
-  const [overridePreviewLoading, setOverridePreviewLoading] = useState(false);
-
-  useEffect(() => {
-    if (!isSynthetic) return;
-    setOverridePreviewLoading(true);
-    apiGet('/leaves/override-preview', { userId: emp.id, date: dateStr })
-      .then(d => setOverrideLeaveInfo({
-        isMultiDay: d.is_multi_day,
-        days:       d.days_to_restore,
-        startDate:  d.start_date,
-        endDate:    d.end_date,
-      }))
-      .catch(() => setOverrideLeaveInfo(null)) // graceful fallback — confirm still works
-      .finally(() => setOverridePreviewLoading(false));
-  }, [isSynthetic, emp.id, dateStr]);
+  const qc = useQueryClient();
+  const { data: previewData, isLoading: overridePreviewLoading } = useOverridePreview(emp.id, dateStr, !!isSynthetic);
+  const overrideLeaveInfo = (isSynthetic && previewData)   // { isMultiDay, days, startDate, endDate } | null — null on error: confirm still works
+    ? { isMultiDay: previewData.is_multi_day, days: previewData.days_to_restore, startDate: previewData.start_date, endDate: previewData.end_date }
+    : null;
 
   const [form, setForm] = useState({
     check_in:      existingRecord?.check_in      || '',
@@ -69,20 +62,13 @@ export function AttCorrectionModal({ emp, dateStr, existingRecord, isSynthetic, 
     is_early_exit: existingRecord?.is_early_exit || false,
     notes:         '',
   });
-  const [punches,      setPunches]      = useState([]);
-  const [punchLoading, setPunchLoading] = useState(false);
   const [saving,       setSaving]       = useState(false);
   // Leave-override confirmation step
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
 
-  // Fetch biometric punches as read-only reference (returns [] for non-biometric employees)
-  useEffect(() => {
-    setPunchLoading(true);
-    apiGet('/biometric/punches-for-date', { userId: emp.id, date: dateStr })
-      .then(d => setPunches(Array.isArray(d) ? d : []))
-      .catch(() => setPunches([]))
-      .finally(() => setPunchLoading(false));
-  }, [emp.id, dateStr]);
+  // Biometric punches as read-only reference (returns [] for non-biometric employees). Cached per employee + day.
+  const { data: punchData, isLoading: punchLoading } = usePunchesForDate(emp.id, dateStr);
+  const punches = Array.isArray(punchData) ? punchData : [];
 
   // Live gross-hours preview + Bug_011/012: auto-compute status from hours
   const grossHoursLabel = useMemo(() => {
@@ -147,6 +133,7 @@ export function AttCorrectionModal({ emp, dateStr, existingRecord, isSynthetic, 
         });
       }
       toast(`Attendance ${isCreate ? 'created' : 'updated'} for ${emp.name}`, 'success');
+      invalidateAttendanceDay(qc);   // the day's record / punches just changed — never reuse the cached copy
       onRefresh();
       onClose();
     } catch (err) { toast(err.message, 'error'); }
@@ -172,6 +159,7 @@ export function AttCorrectionModal({ emp, dateStr, existingRecord, isSynthetic, 
         `Leave cancelled · ${restored} day${restored !== 1 ? 's' : ''} restored · Attendance marked as ${form.status}`,
         'success'
       );
+      invalidateAttendanceDay(qc);   // the day's record / punches just changed — never reuse the cached copy
       onRefresh();
       onClose();
     } catch (err) { toast(err.message, 'error'); }
@@ -363,17 +351,15 @@ export function AttendanceDayModal({ dateStr, initialTab = 'all', onClose, onRef
 
   const { data: attendance = [], refetch: refetchAtt } = useQuery({
     queryKey: ['att-day-modal', year, month, selectedBranchId],
+    meta: BRANCH_KEYED,
+    staleTime: STALE.frequent,   // frequent
     queryFn:  () => apiGet('/attendance', { year, month }),
     staleTime: 30000,
   });
 
   const { data: employees = [] } = useEmployees({ lite: true, onlyEmployees: true });
 
-  const { data: leaves = [] } = useQuery({
-    queryKey: ['leaves-month', year, month, selectedBranchId],
-    queryFn:  () => apiGet('/leaves', { year, month }),
-    staleTime: 60000,
-  });
+  const { data: leaves = [] } = useLeavesList({ year, month }, { staleTime: 60000 });   // same key as the org calendar → one request
 
   // Build per-user attendance map for this date with leave overlay
   const grouped = {};

@@ -8,6 +8,7 @@ import {
 import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPut } from '@/lib/api';
 import { useBranch } from '@/context/BranchContext';
+import { usePendingApprovals } from '@/hooks/usePendingApprovals';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
 import { fmtDate } from '@/lib/utils';
@@ -182,54 +183,24 @@ export default function PendingApprovals() {
   // ── Queries ─────────────────────────────────────────────────────────────────
   // Fetch ALL leaves in any pending state so root/HR admin see the full picture.
   // Includes both old-flow ('pending','pending_root') and new-flow ('pending_approval','pending_dept').
-  const { data: _allLeaves = [], isLoading: loadLeaves } = useQuery({
-    queryKey: ['pending-approvals-leaves', selectedBranchId],
-    queryFn:  () => apiGet('/leaves').catch(() => []),
-    select:   d  => (Array.isArray(d) ? d : []).filter(l =>
-      ['pending', 'pending_approval', 'pending_dept', 'pending_root'].includes(l.status)
-    ),
-    refetchInterval: 30000,
-  });
-
-  const { data: _rootLeaves = [], isLoading: loadRootLeaves } = useQuery({
-    queryKey: ['pending-root-leaves', selectedBranchId],
-    queryFn:  () => apiGet('/leaves/pending-root').catch(() => []),
-    select:   d  => (Array.isArray(d) ? d : []).filter(l => l._flow === 'legacy' || l.status === 'pending_root'),
-    refetchInterval: 30000,
-  });
-
-  // my-approvals returns leaves where THIS user must act (enriched with current_level_* fields).
-  // We show ALL of them regardless of which role type is required — root admin has full visibility.
-  const { data: _myApprovals = [], isLoading: loadMyApprovals } = useQuery({
-    queryKey: ['my-workflow-approvals', selectedBranchId],
-    queryFn:  () => apiGet('/leaves/my-approvals').catch(() => []),
-    refetchInterval: 30000,
-  });
-
-  const { data: _regs = [], isLoading: loadRegs } = useQuery({
-    queryKey: ['pending-approvals-regs', selectedBranchId],
-    queryFn:  () => apiGet('/regularization').catch(() => []),
-    select:   d  => (Array.isArray(d) ? d : []).filter(r => r.status === 'pending'),
-    refetchInterval: 30000,
-  });
-
-  // Pending expenses — 'pending' (no manager) and 'manager_approved' (ready for HR/admin)
-  const { data: _expenses = [], isLoading: loadExpenses } = useQuery({
-    queryKey: ['pending-approvals-expenses', selectedBranchId],
-    queryFn:  () => apiGet('/expenses').catch(() => []),
-    select:   d  => (Array.isArray(d) ? d : []).filter(e => ['pending', 'manager_approved'].includes(e.status)),
-    refetchInterval: 30000,
-  });
-
-  const isLoading = loadLeaves || loadRegs || loadRootLeaves || loadMyApprovals || loadExpenses;
+  // ONE request (GET /pending-approvals, polled every 30 s) instead of five overlapping ones. The server applies the
+  // status filters, so only pending rows are downloaded:
+  //   leaves      pending leaves (statuses pending | pending_approval | pending_dept | pending_root)
+  //   myApprovals workflow leaves where THIS user must act (enriched with current_level_* fields) — root admin sees all
+  //   regs        pending regularization requests
+  //   expenses    'pending' (no manager) and 'manager_approved' (ready for HR/admin)
+  // (/leaves/pending-root is no longer polled: every row the page used from it is a pending_root leave, already in `leaves`.)
+  const { data: pending, isLoading, isPlaceholderData: pendingStale } = usePendingApprovals();
+  const _allLeaves    = pending?.leaves     ?? [];
+  const _myApprovals  = pending?.myApprovals ?? [];
+  const _regs         = pending?.regs       ?? [];
+  const _expenses     = pending?.expenses   ?? [];
 
   function invalidate() {
-    qc.invalidateQueries({ queryKey: ['pending-approvals-leaves'] });
-    qc.invalidateQueries({ queryKey: ['pending-approvals-all-leaves'] });
-    qc.invalidateQueries({ queryKey: ['pending-root-leaves'] });
-    qc.invalidateQueries({ queryKey: ['my-workflow-approvals'] });
-    qc.invalidateQueries({ queryKey: ['pending-approvals-regs'] });
-    qc.invalidateQueries({ queryKey: ['pending-approvals-expenses'] });
+    qc.invalidateQueries({ queryKey: ['pending-approvals'] });
+    // other screens that list the same records
+    qc.invalidateQueries({ queryKey: ['leaves'] });
+    qc.invalidateQueries({ queryKey: ['regularization'] });
     qc.invalidateQueries({ queryKey: ['expenses'] });
     qc.invalidateQueries({ queryKey: ['root-dashboard'] });
     qc.invalidateQueries({ queryKey: ['dashboard'] });
@@ -265,8 +236,9 @@ export default function PendingApprovals() {
     staleTime: 60000,
   });
 
+  // While the previous branch's rows are still on screen (pendingStale) nothing is actionable.
   const isBusy = approveLeaveMut.isPending || rejectLeaveMut.isPending ||
-    approveRegMut.isPending || rejectRegMut.isPending;
+    approveRegMut.isPending || rejectRegMut.isPending || pendingStale;
 
   // EHN_PA_001: Bulk approve/reject
   async function handleBulkApprove() {
@@ -309,19 +281,14 @@ export default function PendingApprovals() {
         : 'old_pending',
     }));
 
-  // Legacy pending_root leaves from the dedicated endpoint (may have extra data)
-  const rootLeavesExtra = _rootLeaves
-    .filter(l => !myApprovalIds.has(l.id) && !otherLeaves.find(o => o.id === l.id))
-    .map(l => ({ ...l, _kind: isWfh(l) ? 'wfh' : 'leave', _name: l.name, _dept: l.department || '', _flow: 'old_root' }));
-
   const regs     = _regs.map(r => ({ ...r, _kind: 'reg',     _name: r.user_name,  _dept: r.user_department || '', _flow: 'reg' }));
   const expenses = _expenses.map(e => ({ ...e, _kind: 'expense', _name: e.user_name, _dept: '', _flow: 'expense' }));
 
-  const all = [...workflowLeaves, ...otherLeaves, ...rootLeavesExtra, ...regs, ...expenses]
+  const all = [...workflowLeaves, ...otherLeaves, ...regs, ...expenses]
     .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
   const newWorkflowCount = [...workflowLeaves, ...otherLeaves.filter(l => l._flow === 'new')].length;
-  const oldRootCount     = [...otherLeaves.filter(l => l._flow === 'old_root'), ...rootLeavesExtra].length;
+  const oldRootCount     = otherLeaves.filter(l => l._flow === 'old_root').length;
   const legacyLeaveCount = otherLeaves.filter(l => l._flow === 'old_pending' && l._kind === 'leave').length;
   const expenseCount     = expenses.length;
   const regCount         = regs.length;
@@ -481,6 +448,7 @@ export default function PendingApprovals() {
             <span className="text-[#777587]">Dashboard</span>
             <span className="mx-1.5 text-[#c7c4d8]">›</span>
             Pending Approvals
+            {pendingStale && <span className="ml-2 text-[0.65rem] font-semibold text-[#3525cd]" role="status">Updating…</span>}
             {totalCount > 0 && (
               <span className="ml-2 text-[0.7rem] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
                 {totalCount} pending

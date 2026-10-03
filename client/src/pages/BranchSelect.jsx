@@ -10,6 +10,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useFeature, FeatureFlagsLoadedContext } from '@/context/FeatureFlagContext';
 import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { useBranchesList } from '@/hooks/useReferenceData';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 
@@ -473,11 +474,7 @@ export default function BranchSelect() {
 
   // Branch metadata (hr_admin_count / hr_admin_names) — same source the
   // Settings → Branches page uses. BranchContext supplies the list itself.
-  const { data: branchMeta } = useQuery({
-    queryKey: ['branches'],
-    queryFn:  () => apiGet('/branches'),
-    enabled:  !!isRootAdmin,
-  });
+  const { data: branchMeta } = useBranchesList({ enabled: !!isRootAdmin });
 
   const metaById = useMemo(() => {
     const map = {};

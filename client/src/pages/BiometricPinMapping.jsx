@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { Plus, Trash2, Fingerprint, RefreshCw, AlertTriangle, Search } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
@@ -108,6 +109,7 @@ export default function BiometricPinMapping() {
 
   const { data: _map, isLoading } = useQuery({
     queryKey: ['biometric-map', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/biometric/employee-map'),
   });
   const { data: _emps } = useEmployees();

@@ -16,6 +16,7 @@ import { useToast } from '@/context/ToastContext';
 import { useFeature } from '@/context/FeatureFlagContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete } from '@/lib/api';
+import { useBranchesList, useDepartmentsList, useHolidays, useWorkSchedule } from '@/hooks/useReferenceData';
 import { useEmployees } from '@/hooks/useEmployees';
 import { Modal } from '@/components/ui/Modal';
 import { Avatar } from '@/components/ui/Avatar';
@@ -84,24 +85,9 @@ function AdminBtn({ onClick, label = 'Edit' }) {
   );
 }
 
-// ─── Address Data (country-state-city library) ────────────────────────────────
-import { Country, State, City } from 'country-state-city';
-
-const ALL_COUNTRIES = Country.getAllCountries(); // [{ isoCode, name, ... }]
-
-function getStates(countryName) {
-  const c = ALL_COUNTRIES.find(c => c.name === countryName);
-  if (!c) return [];
-  return State.getStatesOfCountry(c.isoCode);
-}
-
-function getCities(countryName, stateName) {
-  const c = ALL_COUNTRIES.find(c => c.name === countryName);
-  if (!c) return [];
-  const s = State.getStatesOfCountry(c.isoCode).find(s => s.name === stateName);
-  if (!s) return [];
-  return City.getCitiesOfState(c.isoCode, s.isoCode);
-}
+// ─── Address Data ─────────────────────────────────────────────────────────────
+// country-state-city (~8 MB) is loaded on demand by useLocationData — only when an address / education form opens.
+import { useLocationData } from '@/lib/locationData';
 
 const PROFICIENCY_COLORS = { beginner: 'bg-amber-100 text-amber-700', intermediate: 'bg-blue-100 text-blue-700', advanced: 'bg-emerald-100 text-emerald-700', expert: 'bg-purple-100 text-purple-700' };
 const DOC_VERIFY_COLORS  = { pending: 'bg-amber-100 text-amber-700', verified: 'bg-emerald-100 text-emerald-700', rejected: 'bg-rose-100 text-rose-700' };
@@ -128,6 +114,7 @@ function PersonalTab({ empId, isAdmin, onUnsavedChange }) {
   const toast = useToast();
   const qc = useQueryClient();
   const [editSection, setEditSection] = useState(null); // 'basic'|'address'|'health' — null = view mode
+  const { ready: locReady, countries: ALL_COUNTRIES, getStates, getCities } = useLocationData(editSection === 'address');
   const [form, setForm]               = useState({});
   const [ecModal, setEcModal]         = useState(null); // null | record (for edit)
   const [familyModal, setFamilyModal] = useState(null); // null | record (for edit)
@@ -316,6 +303,7 @@ function PersonalTab({ empId, isAdmin, onUnsavedChange }) {
               <div><label className="form-label">Country</label>
                 <select className="form-control" value={form.current_country||''} onChange={e=>{set('current_country',e.target.value); set('current_state',''); set('current_city','');}}>
                   <option value="">— Select Country —</option>
+                  {!locReady && form.current_country && <option value={form.current_country}>{form.current_country}</option>}
                   {ALL_COUNTRIES.map(c=><option key={c.isoCode} value={c.name}>{c.name}</option>)}
                 </select>
               </div>
@@ -323,6 +311,7 @@ function PersonalTab({ empId, isAdmin, onUnsavedChange }) {
                 {form.current_country ? (
                   <select className="form-control" value={form.current_state||''} onChange={e=>{set('current_state',e.target.value); set('current_city','');}}>
                     <option value="">— Select State —</option>
+                    {!locReady && form.current_state && <option value={form.current_state}>{form.current_state}</option>}
                     {getStates(form.current_country).map(s=><option key={s.isoCode} value={s.name}>{s.name}</option>)}
                   </select>
                 ) : <input className="form-control" placeholder="Select country first" disabled />}
@@ -331,6 +320,7 @@ function PersonalTab({ empId, isAdmin, onUnsavedChange }) {
                 {form.current_state ? (
                   <select className="form-control" value={form.current_city||''} onChange={e=>set('current_city',e.target.value)}>
                     <option value="">— Select City —</option>
+                    {!locReady && form.current_city && <option value={form.current_city}>{form.current_city}</option>}
                     {getCities(form.current_country, form.current_state).map(c=><option key={c.name} value={c.name}>{c.name}</option>)}
                     <option value="__other__">Other (type below)</option>
                   </select>
@@ -345,6 +335,7 @@ function PersonalTab({ empId, isAdmin, onUnsavedChange }) {
               <div><label className="form-label">Country</label>
                 <select className="form-control" value={form.permanent_country||''} onChange={e=>{set('permanent_country',e.target.value); set('permanent_state',''); set('permanent_city','');}}>
                   <option value="">— Select Country —</option>
+                  {!locReady && form.permanent_country && <option value={form.permanent_country}>{form.permanent_country}</option>}
                   {ALL_COUNTRIES.map(c=><option key={c.isoCode} value={c.name}>{c.name}</option>)}
                 </select>
               </div>
@@ -352,6 +343,7 @@ function PersonalTab({ empId, isAdmin, onUnsavedChange }) {
                 {form.permanent_country ? (
                   <select className="form-control" value={form.permanent_state||''} onChange={e=>{set('permanent_state',e.target.value); set('permanent_city','');}}>
                     <option value="">— Select State —</option>
+                    {!locReady && form.permanent_state && <option value={form.permanent_state}>{form.permanent_state}</option>}
                     {getStates(form.permanent_country).map(s=><option key={s.isoCode} value={s.name}>{s.name}</option>)}
                   </select>
                 ) : <input className="form-control" placeholder="Select country first" disabled />}
@@ -360,6 +352,7 @@ function PersonalTab({ empId, isAdmin, onUnsavedChange }) {
                 {form.permanent_state ? (
                   <select className="form-control" value={form.permanent_city||''} onChange={e=>set('permanent_city',e.target.value)}>
                     <option value="">— Select City —</option>
+                    {!locReady && form.permanent_city && <option value={form.permanent_city}>{form.permanent_city}</option>}
                     {getCities(form.permanent_country, form.permanent_state).map(c=><option key={c.name} value={c.name}>{c.name}</option>)}
                     <option value="__other__">Other (type below)</option>
                   </select>
@@ -634,17 +627,8 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp, onUnsavedChange }) {
   const [form, setForm]                         = useState({});
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
 
-  const { data: branches = [] } = useQuery({
-    queryKey: ['branches'],
-    queryFn: () => apiGet('/branches'),
-    staleTime: 5 * 60 * 1000,
-    enabled: branchingEnabled,
-  });
-  const { data: departments = [] } = useQuery({
-    queryKey: ['departments'],
-    queryFn: () => apiGet('/departments'),
-    staleTime: 5 * 60 * 1000,
-  });
+  const { data: branches = [] } = useBranchesList({ staleTime: 5 * 60 * 1000, enabled: branchingEnabled });
+  const { data: departments = [] } = useDepartmentsList({ staleTime: 5 * 60 * 1000 });
 
   const { data: allEmployees = [] } = useEmployees({ lite: true, enabled: isAdmin });
 
@@ -676,11 +660,7 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp, onUnsavedChange }) {
   });
 
   // Fetch org work schedule to derive weekly-off fallback (cached globally)
-  const { data: workSchedule } = useQuery({
-    queryKey: ['work-schedule'],
-    queryFn:  () => apiGet('/settings/schedule'),
-    staleTime: 5 * 60 * 1000,
-  });
+  const { data: workSchedule } = useWorkSchedule({ staleTime: 5 * 60 * 1000 });
   const { data: skills = [] } = useQuery({
     queryKey: ['epv2-skills', empId],
     queryFn: () => apiGet(`/profile/${empId}/skills`),
@@ -1070,6 +1050,7 @@ function EducationTab({ empId, isAdmin }) {
   const toast = useToast();
   const qc = useQueryClient();
   const [eduModal,  setEduModal]  = useState(null);
+  const { ready: locReady, countries: ALL_COUNTRIES } = useLocationData(eduModal !== null);
   const [trainModal,setTrainModal]= useState(null);
   const [certModal, setCertModal] = useState(null);
   const [form, setForm] = useState({});
@@ -1217,6 +1198,7 @@ function EducationTab({ empId, isAdmin }) {
           {/* Country */}
           <div><label className="form-label">Country</label>
             <select className="form-control" value={form.education_country||'India'} onChange={e=>set('education_country',e.target.value)}>
+              {!locReady && <option value={form.education_country||'India'}>{form.education_country||'India'}</option>}
               {ALL_COUNTRIES.map(c=><option key={c.isoCode} value={c.name}>{c.name}</option>)}
             </select>
           </div>
@@ -2676,17 +2658,9 @@ export default function EmployeeProfileV2({ emp, onBack, onEdit }) {
     staleTime: 60000,
   });
 
-  const { data: curHolidays = [] } = useQuery({
-    queryKey: ['holidays', curYear],
-    queryFn:  () => apiGet('/holidays', { year: curYear }),
-    staleTime: 60 * 60 * 1000,
-  });
+  const { data: curHolidays = [] } = useHolidays(curYear, { staleTime: 60 * 60 * 1000 });
 
-  const { data: workSchedule } = useQuery({
-    queryKey: ['work-schedule'],
-    queryFn:  () => apiGet('/settings/schedule'),
-    staleTime: 5 * 60 * 1000,
-  });
+  const { data: workSchedule } = useWorkSchedule({ staleTime: 5 * 60 * 1000 });
   // 0=Sun,1=Mon,...,6=Sat; default Mon-Fri
   const workDaySet = new Set(
     workSchedule?.work_days ? workSchedule.work_days.split(',').map(Number) : [1,2,3,4,5]

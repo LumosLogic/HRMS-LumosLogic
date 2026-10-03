@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Building2, Mail, Calendar, Bell, Shield, Save, Eye, EyeOff, ChevronDown, ChevronUp, CheckCircle2, ImageIcon, Upload, X } from 'lucide-react';
 import { apiGet, apiPut } from '@/lib/api';
+import { useOrgSettings } from '@/hooks/useReferenceData';
 import { useToast } from '@/context/ToastContext';
 import { useAuth } from '@/context/AuthContext';
 
@@ -80,10 +81,7 @@ export default function OrgSettings() {
   const [logoPreview, setLogoPreview] = useState(null);
   const [logoUploading, setLogoUploading] = useState(false);
 
-  const { data: org, isLoading } = useQuery({
-    queryKey: ['org-settings'],
-    queryFn:  () => apiGet('/org/settings'),
-  });
+  const { data: org, isLoading } = useOrgSettings({ staleTime: 0 });
 
   const [form, setForm] = useState({});
   const [savedForm, setSavedForm] = useState({}); // BUG_150: baseline to compare against

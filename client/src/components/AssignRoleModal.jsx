@@ -16,7 +16,8 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import {
   Shield, Lock, X, Save, AlertCircle, CheckCircle2,
   CheckSquare, Square, Users,
@@ -46,6 +47,7 @@ export function AssignRoleModal({ user, onClose, onSaved }) {
   const _bk1 = useBranch().selectedBranchId;
   const { data: allRoles = [], isLoading: rolesLoading } = useQuery({
     queryKey: ['roles', _bk1],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn: () => apiGet('/roles'),
   });
 

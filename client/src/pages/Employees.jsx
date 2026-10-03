@@ -7,7 +7,10 @@ import { useToast } from '@/context/ToastContext';
 import { useFeature } from '@/context/FeatureFlagContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { useBranchesList, useDepartmentsList, useDesignationsList, useWorkSchedule } from '@/hooks/useReferenceData';
 import { useEmployees } from '@/hooks/useEmployees';
+import { useLeavePolicies } from '@/hooks/useListQueries';
+import { usePrimedBalances } from '@/hooks/useLeaveBalances';
 import EmployeeProfileV2 from '@/components/EmployeeProfileV2';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -245,12 +248,7 @@ function EmployeeProfile({ emp, onBack, onEdit }) {
   });
 
   // Leave policies for balance
-  const _bk1 = useBranch().selectedBranchId;
-  const { data: leavePolicies = [] } = useQuery({
-    queryKey: ['leave-policies', _bk1],
-    queryFn:  () => apiGet('/leave-policies'),
-    staleTime: 300000,
-  });
+  const { data: leavePolicies = [] } = useLeavePolicies({ staleTime: 300000 });
 
   // API balance (includes HR adjustments); updates automatically after an adjustment is saved
   const { data: apiBalance } = useQuery({
@@ -278,11 +276,7 @@ function EmployeeProfile({ emp, onBack, onEdit }) {
     staleTime: 30000,
   });
 
-  const { data: schedule } = useQuery({
-    queryKey: ['work-schedule'],
-    queryFn:  () => apiGet('/settings/schedule'),
-    staleTime: 300000,
-  });
+  const { data: schedule } = useWorkSchedule({ staleTime: 300000 });
   const activeWorkDays = schedule?.work_days ? schedule.work_days.split(',').map(Number) : [1,2,3,4,5];
 
   // Current month range for header stats
@@ -1463,19 +1457,12 @@ function EmployeeFormModal({ open, onClose, employee, onSaved, departments = [],
   });
 
   // Fetch branches for extended profile
-  const { data: _branchData = [] } = useQuery({
-    queryKey: ['branches'],
-    queryFn:  () => apiGet('/branches'),
-  });
+  const { data: _branchData = [] } = useBranchesList();
   const branches = Array.isArray(_branchData) ? _branchData : [];
 
   // Fetch designations filtered by selected department(s)
   const primaryDeptId = form.department_ids?.[0] || null;
-  const { data: _desigData = [] } = useQuery({
-    queryKey: ['designations', primaryDeptId],
-    queryFn:  () => apiGet('/designations', primaryDeptId ? { department_id: primaryDeptId } : {}),
-    staleTime: 2 * 60 * 1000,
-  });
+  const { data: _desigData = [] } = useDesignationsList(primaryDeptId, { staleTime: 2 * 60 * 1000 });
   const designations = Array.isArray(_desigData) ? _desigData : [];
 
   // Tab definitions (only for edit mode)
@@ -2249,12 +2236,13 @@ function EmpStatusBadge({ status }) {
 }
 
 // Compact leave balance chips — fetches per-employee, cached by React Query
-function LeaveBalanceChips({ empId }) {
+function LeaveBalanceChips({ empId, ready = true }) {
   const curYear = new Date().getFullYear();
   const { data } = useQuery({
     queryKey: ['emp-balance', empId, curYear],
     queryFn:  () => apiGet('/leaves/balance', { userId: empId, year: curYear }),
     staleTime: 5 * 60 * 1000,
+    enabled: ready,   // the list primes this entry with one batch request; only a failed batch falls back to a per-employee request
   });
   const balances = (data?.balances || []).filter(b => b.leave_type !== 'wfh' && b.allocated > 0);
   if (!balances.length) return null;
@@ -2438,7 +2426,8 @@ export default function Employees() {
   // Other pages (Calendar, TeamCalendar, etc.) do NOT pass this flag so they
   // automatically get only active+probation employees from the backend.
   // Shared employee list hook (waits for the branch context, branch-keyed, previous branch kept while loading).
-  const { data: allEmployees = [], isLoading } = useEmployees({ includeInactive: true });
+  // useEmployees keeps the previous branch's list while the new one loads (isPlaceholderData) — shown dimmed + read-only below
+  const { data: allEmployees = [], isLoading, isPlaceholderData: empStale } = useEmployees({ includeInactive: true });
 
   useEffect(() => {
     if (viewParam && allEmployees.length > 0) {
@@ -2480,16 +2469,10 @@ export default function Employees() {
   useEffect(() => { setPage(1); setSelected(new Set()); },
     [search, deptFilter, statusFilterKey, typeFilter, sortBy, sortDir, pageSize, roleFilter, joinedYmParam, filterParam]);
 
-  const { data: _dData = [] } = useQuery({
-    queryKey: ['departments'],
-    queryFn:  () => apiGet('/departments'),
-  });
+  const { data: _dData = [] } = useDepartmentsList();
   const departments = Array.isArray(_dData) ? _dData : [];
 
-  const { data: _brData = [] } = useQuery({
-    queryKey: ['branches'],
-    queryFn:  () => apiGet('/branches'),
-  });
+  const { data: _brData = [] } = useBranchesList();
   const branchList = Array.isArray(_brData) ? _brData : [];
 
   // Drawer — attendance + leave data for the selected employee
@@ -2506,11 +2489,7 @@ export default function Employees() {
     queryFn:  () => apiGet('/leaves', { userId: profileDrawerEmp.id }),
     enabled:  !!profileDrawerEmp,
   });
-  const { data: drawerPolicies = [] } = useQuery({
-    queryKey: ['leave-policies', selectedBranchId],
-    queryFn:  () => apiGet('/leave-policies'),
-    enabled:  !!profileDrawerEmp,
-  });
+  const { data: drawerPolicies = [] } = useLeavePolicies({ enabled: !!profileDrawerEmp });
 
   const deleteMut = useMutation({
     mutationFn: id => apiDelete(`/employees/${id}`),
@@ -2594,6 +2573,7 @@ export default function Employees() {
   // ── Pagination ────────────────────────────────────────────────────────────
   const totalPages = Math.ceil(filtered.length / pageSize);
   const pageRows   = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const balancesReady = usePrimedBalances(pageRows.map(e => e.id));   // one request for the whole visible page
   // BUG_059: anyFilter — status is "filtered" only when selection differs from the default (active+probation)
   const anyFilter  = search || deptFilter || statusFilterKey !== defaultStatusKey || typeFilter || joinedYmParam || filterParam;
 
@@ -2684,7 +2664,7 @@ export default function Employees() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className={`space-y-4 transition-opacity ${empStale ? 'opacity-60 pointer-events-none' : ''}`} aria-busy={empStale || undefined}>
 
       {/* ── PAGE HEADER ───────────────────────────────────────────────────── */}
       <div className="flex items-start justify-between gap-3 flex-wrap">
@@ -3015,7 +2995,7 @@ export default function Employees() {
                     <span className="text-xs text-[#464555]">Joined {fmtDate(emp.joining_date)}</span>
                   </div>
                 )}
-                <LeaveBalanceChips empId={emp.id} />
+                <LeaveBalanceChips empId={emp.id} ready={balancesReady} />
               </div>
 
               {/* Actions */}
@@ -3115,7 +3095,7 @@ export default function Employees() {
                       {emp.branch_id ? (branchList.find(b => b.id === emp.branch_id)?.name || '—') : '—'}
                     </td>
                     <td className="px-4 py-3"><EmpStatusBadge status={emp.employee_status} /></td>
-                    <td className="px-4 py-3"><LeaveBalanceChips empId={emp.id} /></td>
+                    <td className="px-4 py-3"><LeaveBalanceChips empId={emp.id} ready={balancesReady} /></td>
                     <td className="px-4 py-3 text-xs text-[#464555] whitespace-nowrap">
                       {emp.joining_date ? fmtDate(emp.joining_date) : '—'}
                     </td>

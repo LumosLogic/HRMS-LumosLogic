@@ -5,6 +5,7 @@ import {
   AlertCircle, FileText, Calendar, X, Info,
 } from 'lucide-react';
 import { apiGet, apiPost, apiPut } from '@/lib/api';
+import { useLeavePolicies } from '@/hooks/useListQueries';
 import { useToast } from '@/context/ToastContext';
 import { cn } from '@/lib/utils';
 
@@ -226,11 +227,7 @@ export default function DeptHeadApprovals() {
     refetchInterval: 30000,
   });
 
-  const { data: leavePolicies = [] } = useQuery({
-    queryKey: ['leave-policies'],
-    queryFn:  () => apiGet('/leave-policies'),
-    staleTime: 10 * 60 * 1000,
-  });
+  const { data: leavePolicies = [] } = useLeavePolicies({ staleTime: 10 * 60 * 1000 });
   const policyMap = Object.fromEntries(
     leavePolicies.map(p => [p.leave_type, p.label]).filter(([k]) => !!k)
   );

@@ -16,6 +16,7 @@ const mobilePlatformRouter = require('./modules/mobile/mobile.platform.routes');
 const { mobileLoginGuard } = require('./modules/mobile/mobile.login');
 const { ensureMobileSchema } = require('./modules/mobile/mobile.schema');
 const { rateLimiter, LIMITS } = require('./middleware/rateLimiter');
+const { setStaticHeaders } = require('./utils/staticHeaders');
 const { maintenanceMiddleware } = require('./middleware/maintenanceMode');
 const { biometricSnGuard, biometricAuditLog } = require('./middleware/biometricSecurity');
 const { scheduleDailyAt, scheduleEveryMinutes, runDailyNotifications, runAutoMarkAbsent, runProbationExpiryCheck, runResignationExpiry, runScheduledAnnouncementPublisher, runEarlyLeaveAutoCheckout } = require('./utils/cronJobs');
@@ -50,6 +51,7 @@ const docRequirementsRouter = require('./modules/documents/doc_requirements.rout
 const payrollRouter        = require('./modules/payroll/payroll.routes');
 const assetsRouter         = require('./modules/assets/assets.routes');
 const expensesRouter       = require('./modules/expenses/expenses.routes');
+const pendingApprovalsRouter = require('./modules/pending-approvals/pendingApprovals.routes');
 const announcementsRouter  = require('./modules/announcements/announcements.routes');
 const shiftsRouter         = require('./modules/shifts/shifts.routes');
 const performanceRouter    = require('./modules/performance/performance.routes');
@@ -106,13 +108,7 @@ app.use('/iclock/cdata', (req, res, next) => {
 app.use('/iclock/', express.text({ type: '*/*' }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
-app.use(express.static(path.join(__dirname, '../../public'), {
-  setHeaders(res, filePath) {
-    if (filePath.endsWith('.html')) {
-      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
-    }
-  },
-}));
+app.use(express.static(path.join(__dirname, '../../public'), { setHeaders: setStaticHeaders }));
 
 // ── CORS ─────────────────────────────────────────────────────────────────────
 app.use((req, res, next) => {
@@ -196,6 +192,7 @@ app.use('/api/doc-requirements', docRequirementsRouter);
 app.use('/api/payroll',        payrollRouter);
 app.use('/api/assets',         assetsRouter);
 app.use('/api/expenses',       expensesRouter);
+app.use('/api/pending-approvals', pendingApprovalsRouter);
 app.use('/api/announcements',  announcementsRouter);
 app.use('/api/shifts',         shiftsRouter);
 app.use('/api/performance',    performanceRouter);

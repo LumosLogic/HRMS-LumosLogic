@@ -1,11 +1,14 @@
 import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { useNavigate } from 'react-router-dom';
 import { Plus, Fingerprint, Wifi, WifiOff, MapPin, Server, Eye, Trash2, History } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiDelete } from '@/lib/api';
+import { STALE } from '@/lib/queryTiers';
+import { useBranchesList } from '@/hooks/useReferenceData';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 
@@ -120,13 +123,12 @@ export default function BiometricDevices() {
 
   const { data: _devices, isLoading } = useQuery({
     queryKey: ['biometric-devices', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
+    staleTime: STALE.realtime,   // realtime
     queryFn:  () => apiGet('/biometric/devices'),
     refetchInterval: 30000,
   });
-  const { data: _branches } = useQuery({
-    queryKey: ['branches'],
-    queryFn:  () => apiGet('/branches'),
-  });
+  const { data: _branches } = useBranchesList();
 
   const devices  = Array.isArray(_devices)  ? _devices  : [];
   const branches = Array.isArray(_branches) ? _branches : [];

@@ -77,6 +77,23 @@ function getFilterState(branchContext) {
  *
  * Errors fail open (returns null) so a transient DB issue never breaks the UI.
  */
+/**
+ * Branch scoping WITHOUT loading the employee id list: adds "col IN (SELECT id FROM users WHERE organization_id = ? AND
+ * branch_id …)" to a db query-builder. Same scope, same fail-closed rules as resolveEmployeeIds:
+ *   'all'                → no filter (root / org-wide)
+ *   'specific' / 'multi' → subquery on the caller's accessible branch(es), always within the organisation
+ *   'none' (or unknown)  → { empty: true }: the caller must return an empty result
+ * Use it where the id list is only a filter on another table; keep resolveEmployeeIds where the ids are needed.
+ * @returns {{ query: object, empty: boolean }}
+ */
+function applyBranchUserScope(query, column, branchContext, orgId) {
+  const state = getFilterState(branchContext);
+  if (state.type === 'all') return { query, empty: false };
+  if (state.type === 'specific') return { query: query.inBranchUsers(column, { orgId, branchId: state.branchId }), empty: false };
+  if (state.type === 'multi')    return { query: query.inBranchUsers(column, { orgId, branchIds: state.branchIds }), empty: false };
+  return { query, empty: true };
+}
+
 async function resolveEmployeeIds(branchContext, orgId) {
   const state = getFilterState(branchContext);
 
@@ -315,6 +332,7 @@ module.exports = {
   // re-exported so modules importing it from here (doc_requirements) get the real function
   validateBranchAccess: (...a) => require('../services/branchService').validateBranchAccess(...a),
   getFilterState,
+  applyBranchUserScope,
   resolveEmployeeIds,
   getBranchUserSQLFilter,
   getBranchJoinSQLFilter,

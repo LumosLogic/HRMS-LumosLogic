@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { Plus, Pencil, Trash2, ShieldCheck, Mail, Building2, Check, Inbox, Eye, EyeOff, RefreshCw, AlertCircle } from 'lucide-react';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { useBranchesList } from '@/hooks/useReferenceData';
 import { useBranch } from '@/context/BranchContext';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
@@ -19,11 +21,7 @@ function HRFormModal({ open, onClose, editing }) {
 
   React.useEffect(() => { if (open) setForm(editing ? { ...editing, password: '' } : INITIAL); }, [editing, open]);
 
-  const { data: branches = [] } = useQuery({
-    queryKey: ['branches-for-hr-form'],
-    queryFn:  () => apiGet('/branches'),
-    enabled:  open && !editing,
-  });
+  const { data: branches = [] } = useBranchesList({ enabled: open && !editing });
 
   const save = useMutation({
     mutationFn: () => {
@@ -124,6 +122,7 @@ export default function ManageHR() {
 
   const { data: hrList = [], isLoading } = useQuery({
     queryKey: ['root-hr', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/root/hr'),
   });
 

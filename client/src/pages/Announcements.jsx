@@ -7,6 +7,7 @@ import { Plus, Pencil, Trash2, Megaphone, MessageSquare, Pin, AlertTriangle, Inf
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { useAnnouncements } from '@/hooks/useReferenceData';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 
@@ -249,12 +250,7 @@ export default function AnnouncementsPage() {
 
   const { selectedBranchId } = useBranch();
 
-  const { data: _annData, isLoading } = useQuery({
-    // Announcements can be branch-targeted, so the visible set depends on the selected branch.
-    queryKey: ['announcements', selectedBranchId],
-    queryFn:  () => apiGet('/announcements'),
-    placeholderData: keepPreviousData,
-  });
+  const { data: _annData, isLoading } = useAnnouncements();
   const announcements = Array.isArray(_annData) ? _annData : [];
 
   const delMut = useMutation({

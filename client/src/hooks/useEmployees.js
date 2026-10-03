@@ -1,6 +1,8 @@
 import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { apiGet } from '@/lib/api';
 import { useBranch } from '@/context/BranchContext';
+import { gateLoading } from '@/lib/queryGate';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 
 /**
  * The ONE way to load the employee list.
@@ -22,8 +24,9 @@ import { useBranch } from '@/context/BranchContext';
  */
 export function useEmployees({ includeInactive = false, lite = false, onlyEmployees = false, enabled = true, staleTime } = {}) {
   const { selectedBranchId, isBranchContextReady } = useBranch();
-  return useQuery({
+  const query = useQuery({
     queryKey: ['employees', 'list', { includeInactive, lite }, selectedBranchId],
+    meta: BRANCH_KEYED,
     queryFn: () => apiGet('/employees', {
       ...(includeInactive ? { include_inactive: 'true' } : {}),
       ...(lite ? { lite: '1' } : {}),
@@ -36,4 +39,5 @@ export function useEmployees({ includeInactive = false, lite = false, onlyEmploy
     placeholderData: keepPreviousData,
     ...(staleTime !== undefined ? { staleTime } : {}),
   });
+  return gateLoading(query, enabled && !isBranchContextReady);
 }

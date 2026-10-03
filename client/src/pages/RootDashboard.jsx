@@ -5,7 +5,8 @@ import {
   ArcElement, BarElement, Tooltip, Legend, Filler,
 } from 'chart.js';
 import { Line, Doughnut, Bar } from 'react-chartjs-2';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { useNavigate } from 'react-router-dom';
 import {
   Users, UserCheck, ClipboardList, ShieldCheck, CalendarDays,
@@ -15,6 +16,8 @@ import {
   ChevronUp, ChevronDown, Filter,
 } from 'lucide-react';
 import { apiGet, apiPut, apiDelete } from '@/lib/api';
+import { STALE } from '@/lib/queryTiers';
+import { useRegularizations } from '@/hooks/useListQueries';
 import { Avatar } from '@/components/ui/Avatar';
 import { useAuth } from '@/context/AuthContext';
 import { useBranch } from '@/context/BranchContext';
@@ -193,22 +196,21 @@ export default function RootDashboard() {
 
   const { data, isLoading, isFetching, dataUpdatedAt, refetch } = useQuery({
     queryKey:        ['root-dashboard', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
+    staleTime: STALE.frequent,   // frequent
     queryFn:         () => apiGet('/root/dashboard'),
     refetchInterval: 60000,
   });
 
   const { data: yearlyData } = useQuery({
     queryKey:        ['root-yearly-leaves', new Date().getFullYear(), selectedBranchId],
+    meta: BRANCH_KEYED,
     queryFn:         () => apiGet('/root/yearly-leaves'),
     refetchInterval: 300000,
   });
 
-  const { data: pendingRegs = [] } = useQuery({
-    queryKey:        ['root-pending-regs', selectedBranchId],
-    queryFn:         () => apiGet('/regularization').catch(() => []),
-    select:          d => (Array.isArray(d) ? d : []).filter(r => r.status === 'pending'),
-    refetchInterval: 60000,
-  });
+  // pending requests only (server-side status filter — it used to download the whole history every minute)
+  const { data: pendingRegs = [] } = useRegularizations({ statuses: ['pending'] }, { refetchInterval: 60000 });
 
   const approveMut = useMutation({
     mutationFn: id => apiPut(`/leaves/${id}/approve`),
@@ -222,12 +224,12 @@ export default function RootDashboard() {
   });
   const approveRegMut = useMutation({
     mutationFn: id => apiPut(`/regularization/${id}/review`, { status: 'approved' }),
-    onSuccess:  () => { toast('Regularization approved!', 'success'); qc.invalidateQueries({ queryKey: ['root-pending-regs', selectedBranchId] }); },
+    onSuccess:  () => { toast('Regularization approved!', 'success'); qc.invalidateQueries({ queryKey: ['regularization'] }); },
     onError:    err => toast(err.message, 'error'),
   });
   const rejectRegMut = useMutation({
     mutationFn: id => apiPut(`/regularization/${id}/review`, { status: 'rejected' }),
-    onSuccess:  () => { toast('Regularization rejected', 'warning'); qc.invalidateQueries({ queryKey: ['root-pending-regs', selectedBranchId] }); },
+    onSuccess:  () => { toast('Regularization rejected', 'warning'); qc.invalidateQueries({ queryKey: ['regularization'] }); },
     onError:    err => toast(err.message, 'error'),
   });
 

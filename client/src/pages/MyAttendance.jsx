@@ -7,7 +7,11 @@ import {
   Download, Search, TrendingUp, BarChart2,
   Fingerprint, ClipboardEdit,
 } from 'lucide-react';
+import { useLeavesList } from '@/hooks/useListQueries';
+import { invalidateMyAttendance } from '@/hooks/useAttendanceDay';
 import { apiGet, apiPost } from '@/lib/api';
+import { STALE } from '@/lib/queryTiers';
+import { useHolidays, useWorkSchedule } from '@/hooks/useReferenceData';
 import { useToast } from '@/context/ToastContext';
 import { useAuth } from '@/context/AuthContext';
 
@@ -82,7 +86,7 @@ function AttendanceCheckinCard({ onRefreshed }) {
       const { record: r, message } = await apiPost('/attendance/checkin', {});
       setRecord(r);
       toast(message || 'Checked in!', 'success');
-      qc.invalidateQueries(['my-attendance']);
+      invalidateMyAttendance(qc);
       onRefreshed?.();
     } catch (err) { toast(err.message, 'error'); }
     finally { setBusy(false); }
@@ -93,7 +97,7 @@ function AttendanceCheckinCard({ onRefreshed }) {
       const { record: r, message } = await apiPost('/attendance/checkout', {});
       setRecord(r);
       toast(message || 'Checked out!', (r.status === 'half_day' || r.status === 'early_leave') ? 'warning' : 'success');
-      qc.invalidateQueries(['my-attendance']);
+      invalidateMyAttendance(qc);
       onRefreshed?.();
     } catch (err) { toast(err.message, 'error'); }
     finally { setBusy(false); }
@@ -104,7 +108,7 @@ function AttendanceCheckinCard({ onRefreshed }) {
       const { record: r, message } = await apiPost('/attendance/break-in', {});
       setRecord(r);
       toast(message || 'Break started', 'info');
-      qc.invalidateQueries(['my-attendance']);
+      invalidateMyAttendance(qc);
       onRefreshed?.();
     } catch (err) { toast(err.message, 'error'); }
     finally { setBreakBusy(false); }
@@ -115,7 +119,7 @@ function AttendanceCheckinCard({ onRefreshed }) {
       const { record: r, message } = await apiPost('/attendance/break-out', {});
       setRecord(r);
       toast(message || 'Break ended', 'success');
-      qc.invalidateQueries(['my-attendance']);
+      invalidateMyAttendance(qc);
       onRefreshed?.();
     } catch (err) { toast(err.message, 'error'); }
     finally { setBreakBusy(false); }
@@ -310,24 +314,16 @@ export default function MyAttendance() {
 
   const { data: records = [], isLoading, refetch } = useQuery({
     queryKey: ['my-attendance', year, month],
+    staleTime: STALE.frequent,   // frequent
     queryFn:  () => apiGet(`/attendance?year=${year}&month=${month}`),
   });
 
-  const { data: allLeaves = [] } = useQuery({
-    queryKey: ['my-leaves-att', year, month],
-    queryFn:  () => apiGet(`/leaves?year=${year}&month=${month}`),
-  });
+  const { data: allLeaves = [] } = useLeavesList({ year, month });
 
-  const { data: schedule } = useQuery({
-    queryKey: ['work-schedule'], queryFn: () => apiGet('/settings/schedule'), staleTime: 300000,
-  });
+  const { data: schedule } = useWorkSchedule({ staleTime: 300000 });
   const activeWorkDays = schedule?.work_days ? schedule.work_days.split(',').map(Number) : [1,2,3,4,5];
 
-  const { data: holidays = [] } = useQuery({
-    queryKey: ['holidays-att'],
-    queryFn: () => apiGet('/holidays').catch(() => []),
-    staleTime: 5 * 60 * 1000,
-  });
+  const { data: holidays = [] } = useHolidays(null, { staleTime: 5 * 60 * 1000 });
 
   const { data: biometricData } = useQuery({
     queryKey: ['org-has-biometric'],

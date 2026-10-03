@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { CheckCircle2, Circle, UserPlus, ClipboardList, ChevronDown, ChevronUp, Search, X } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
@@ -189,7 +190,7 @@ function AdminOnboarding() {
   const [onbSearch,   setOnbSearch]   = useState('');
   const [onbFilter,   setOnbFilter]   = useState('all'); // 'all' | 'incomplete' | 'complete' | 'stuck'
 
-  const { data: _ovData, isLoading } = useQuery({ queryKey: ['onboarding-overview', selectedBranchId], queryFn: () => apiGet('/onboarding/overview') });
+  const { data: _ovData, isLoading } = useQuery({ queryKey: ['onboarding-overview', selectedBranchId], meta: BRANCH_KEYED, placeholderData: keepPreviousData, queryFn: () => apiGet('/onboarding/overview') });
   const { data: _eData }             = useEmployees();
   const overview  = Array.isArray(_ovData) ? _ovData : [];
   const employees = Array.isArray(_eData)  ? _eData  : [];

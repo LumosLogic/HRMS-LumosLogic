@@ -6,7 +6,8 @@ const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { generateEmployeePayslip } = require('../../services/payrollGenerationService');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee } = require('../../utils/branchFilter');
+const { applyBranchUserScope, resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee } = require('../../utils/branchFilter');
+const { parseListParams, setPagingHeaders, ListParamError } = require('../../utils/listParams');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
@@ -53,13 +54,25 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       // Employees see only their own regularization requests — no branch filter needed
       q = q.eq('user_id', uid);
     } else {
-      // Admin view — apply branch filter
-      const empIds = await resolveEmployeeIds(req.branchContext, oId);
-      if (empIds !== null && empIds.length === 0) return res.json([]);
-      if (empIds !== null) q = q.in('user_id', empIds);
+      // Admin view — apply branch filter // branch scope as a SQL subquery (no employee-id list round trip)
+      const scope = applyBranchUserScope(q, 'user_id', req.branchContext, oId);
+      if (scope.empty) return res.json([]);
+      q = scope.query;
     }
-    const { data, error } = await q;
+    // Optional server-side narrowing (no params = unchanged behaviour). Applied AFTER the RBAC + branch filters above.
+    const lp = parseListParams(req.query);
+    if (lp.statuses) q = q.in('status', lp.statuses);
+    if (lp.from)     q = q.gte('date', lp.from);
+    if (lp.to)       q = q.lte('date', lp.to);
+    if (lp.paging)   q = q.range(lp.paging.offset, lp.paging.offset + lp.paging.limit);   // +1 row = "has more" probe
+
+    const { data: rawRegs, error } = await q;
     if (error) throw error;
+    let data = rawRegs;
+    if (lp.paging) {
+      setPagingHeaders(res, lp.paging, (rawRegs || []).length > lp.paging.limit);
+      data = (rawRegs || []).slice(0, lp.paging.limit);
+    }
 
     const rows = data || [];
     if (rows.length === 0) return res.json([]);
@@ -83,7 +96,10 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       user_position:      userMap[r.user_id]?.position || '',
       reviewer_name:      userMap[r.reviewed_by]?.name || '',
     })));
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    if (err instanceof ListParamError) return res.status(400).json({ error: err.message });
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // GET /api/regularization/usage — monthly combined early-leave + late count for employee

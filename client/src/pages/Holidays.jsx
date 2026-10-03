@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { Plus, Pencil, Trash2, CalendarDays, Globe, Star, PartyPopper, ChevronLeft, ChevronRight, Copy, LayoutGrid, List, History } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
@@ -167,11 +168,11 @@ export default function HolidaysPage() {
   }, []);
 
   const { selectedBranchId } = useBranch();
-  const { data: _hData, isLoading } = useQuery({ queryKey: ['holidays', year, selectedBranchId], queryFn: () => apiGet('/holidays', { year }), placeholderData: keepPreviousData });
+  const { data: _hData, isLoading } = useQuery({ queryKey: ['holidays', year, selectedBranchId], meta: BRANCH_KEYED, queryFn: () => apiGet('/holidays', { year }), placeholderData: keepPreviousData });
   const holidays = Array.isArray(_hData) ? _hData : [];
 
   // EHN_Holidays_002: fetch prev-year count for copy confirmation
-  const { data: prevYearData = [] } = useQuery({ queryKey: ['holidays', year - 1, selectedBranchId], queryFn: () => apiGet('/holidays', { year: year - 1 }), enabled: copyConfirm });
+  const { data: prevYearData = [] } = useQuery({ queryKey: ['holidays', year - 1, selectedBranchId], meta: BRANCH_KEYED, queryFn: () => apiGet('/holidays', { year: year - 1 }), enabled: copyConfirm });
 
   const delMut = useMutation({
     mutationFn: id => apiDelete(`/holidays/${id}`),

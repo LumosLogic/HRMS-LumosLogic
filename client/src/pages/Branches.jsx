@@ -8,6 +8,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { useBranchesList } from '@/hooks/useReferenceData';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 
@@ -255,10 +256,7 @@ export default function Branches() {
   const [confirmDel,   setConfirmDel]   = useState(null);
   const [accessBranch, setAccessBranch] = useState(null); // for HR access modal
 
-  const { data: _data, isLoading } = useQuery({
-    queryKey: ['branches'],
-    queryFn:  () => apiGet('/branches'),
-  });
+  const { data: _data, isLoading } = useBranchesList();
   const branches = Array.isArray(_data) ? _data : [];
 
   const delMut = useMutation({

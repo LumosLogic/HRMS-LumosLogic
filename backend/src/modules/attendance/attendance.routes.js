@@ -6,7 +6,7 @@ const { auth, isAdminRole, rootAdminOnly } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { getUserBranchId, localDateStr, localTimeStr, flat, orgId, toMinutes, getSettings, getEffectiveWorkSchedule, isWorkingDay } = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
+const { applyBranchUserScope, resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
 
 // ── One-time table bootstrap for attendance audit log ─────────────────────────
 pool.query(`
@@ -44,10 +44,10 @@ router.get('/', auth, withBranchContext, async (req, res) => {
         return res.status(403).json({ error: "You do not have access to this employee's branch." });
       query = query.eq('user_id', parseInt(userId));
     } else {
-      // Admin viewing all employees — apply branch filter
-      const empIds = await resolveEmployeeIds(req.branchContext, orgId(req));
-      if (empIds !== null && empIds.length === 0) return res.json([]);
-      if (empIds !== null) query = query.in('user_id', empIds);
+      // Admin viewing all employees — apply branch filter // branch scope as a SQL subquery (no employee-id list round trip)
+      const scope = applyBranchUserScope(query, 'user_id', req.branchContext, orgId(req));
+      if (scope.empty) return res.json([]);
+      query = scope.query;
     }
 
     if (date) {

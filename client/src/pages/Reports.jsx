@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import {
   Download, BarChart3, Users, FileText, CalendarDays, TrendingUp,
   Search, Filter, X, ChevronUp, ChevronDown, Printer,
@@ -8,6 +9,7 @@ import {
   Building2, ArrowUpDown, ChevronRight, Fingerprint, Pencil, Calendar,
 } from 'lucide-react';
 import { apiGet, apiDownload } from '@/lib/api';
+import { useHolidays, useSettings } from '@/hooks/useReferenceData';
 import { MONTHS } from '@/lib/utils';
 import { useBranch } from '@/context/BranchContext';
 import { useAuth } from '@/context/AuthContext';
@@ -437,6 +439,7 @@ export default function Reports() {
 
   const { data: headcount } = useQuery({
     queryKey: ['headcount', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/reports/headcount'),
     enabled:  isBranchContextReady,
   });
@@ -455,6 +458,7 @@ export default function Reports() {
 
   const { data: _empData = [], isLoading: empLoading } = useQuery({
     queryKey: ['report-employees', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/reports/employees'),
     enabled:  isBranchContextReady,
   });
@@ -474,18 +478,10 @@ export default function Reports() {
   const empRows   = Array.isArray(_empData) ? _empData : [];
 
   // ── Work schedule (for full calendar) ─────────────────────────────────────────
-  const { data: _wsData } = useQuery({
-    queryKey: ['work-schedule'],
-    queryFn:  () => apiGet('/settings'),
-    staleTime: 300000,
-  });
+  const { data: _wsData } = useSettings({ staleTime: 300000 });
 
   // ── Holidays for the selected year (for full calendar holiday detection) ───────
-  const { data: _holData = [] } = useQuery({
-    queryKey: ['holidays-report', year, selectedBranchId],
-    queryFn:  () => apiGet('/holidays', { year }),
-    staleTime: 300000,
-  });
+  const { data: _holData = [] } = useHolidays(year, { staleTime: 300000 });
   const holidayDateSet = useMemo(() => {
     const s = new Set();
     for (const h of Array.isArray(_holData) ? _holData : []) s.add(h.date);
@@ -1307,7 +1303,7 @@ export default function Reports() {
             qc.invalidateQueries({ queryKey: ['dashboard'] });
             qc.invalidateQueries({ queryKey: ['calendar'] });
             qc.invalidateQueries({ queryKey: ['att-day-modal'] });
-            qc.invalidateQueries({ queryKey: ['leaves-month'] });
+            qc.invalidateQueries({ queryKey: ['leaves'] });
           }}
         />
       )}

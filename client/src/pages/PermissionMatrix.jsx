@@ -1,13 +1,15 @@
 const _bk1 = useBranch().selectedBranchId;
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import {
   ArrowLeft, Shield, Lock, Save, CheckSquare, Square,
   Users, AlertCircle, CheckCircle2, ChevronDown, ChevronUp,
   UserPlus, X, Search, Pencil, ArrowRightLeft,
 } from 'lucide-react';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { useEmployees } from '@/hooks/useEmployees';
 import { useBranch } from '@/context/BranchContext';
 import { cn } from '@/lib/utils';
 import { useFeature } from '@/context/FeatureFlagContext';
@@ -405,17 +407,13 @@ function MembersPanel({ members = [], roleId, onRefetch }) {
   const _bk2 = useBranch().selectedBranchId;
   const { data: allRoles = [] } = useQuery({
     queryKey: ['roles', _bk2],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/roles'),
     staleTime: 60000,
   });
 
   // All employees in the org (for the picker)
-  const { data: allUsers = [], isLoading: usersLoading } = useQuery({
-    queryKey: ['employees-list'],
-    queryFn:  () => apiGet('/employees'),
-    enabled:  showPicker,
-    select:   d => Array.isArray(d) ? d : (d?.employees || []),
-  });
+  const { data: allUsers = [], isLoading: usersLoading } = useEmployees({ enabled: showPicker });
 
   // BUG_135/141: also fetch members directly from the dedicated endpoint
   const { data: directMembers, isLoading: membersLoading, refetch: refetchMembers } = useQuery({

@@ -12,6 +12,7 @@ import { FeatureFlagContext, FeatureFlagsLoadedContext } from '@/context/Feature
 import { BranchSelector } from '@/components/layout/BranchSelector';
 import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '@/lib/api';
+import { STALE } from '@/lib/queryTiers';
 import { initials, cn } from '@/lib/utils';
 import { GlobalSearchModal } from '@/components/ui/GlobalSearchModal';
 
@@ -282,6 +283,7 @@ export function Sidebar({ onClose, prefix = '', onMenuClick, onSearchOpen }) {
 
   const { data: countData } = useQuery({
     queryKey: ['notif-count'],
+    staleTime: STALE.realtime,   // realtime
     queryFn: () => apiGet('/notifications/unread-count'),
     refetchInterval: 30000,
   });

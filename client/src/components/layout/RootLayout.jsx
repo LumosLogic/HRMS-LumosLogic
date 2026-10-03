@@ -11,11 +11,13 @@ import {
 import { useAuth } from '@/context/AuthContext';
 import { FeatureFlagContext, FeatureFlagsLoadedContext } from '@/context/FeatureFlagContext';
 import { Header } from './Header';
+import { BranchSwitchGuard } from './BranchSwitchGuard';
 import { initials, cn } from '@/lib/utils';
 import { useTour } from '@/hooks/useTour';
 import { rootAdminTourSteps } from '@/lib/tours';
 import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '@/lib/api';
+import { STALE } from '@/lib/queryTiers';
 import { GlobalSearchModal } from '@/components/ui/GlobalSearchModal';
 import { BranchSelector } from '@/components/layout/BranchSelector';
 
@@ -219,6 +221,7 @@ function RootSidebar({ onClose, onMenuClick, onSearchOpen }) {
 
   const { data: countData } = useQuery({
     queryKey: ['notif-count-root'],
+    staleTime: STALE.realtime,   // realtime
     queryFn: () => apiGet('/notifications/unread-count'),
     refetchInterval: 30000,
   });
@@ -373,7 +376,7 @@ export function RootLayout() {
 
         <Header />
         <main id="tour-main-content" className="flex-1 overflow-y-auto p-4 md:p-7">
-          <Outlet />
+          <BranchSwitchGuard><Outlet /></BranchSwitchGuard>
         </main>
       </div>
 

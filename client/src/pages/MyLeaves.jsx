@@ -7,6 +7,7 @@ import {
   Filter, ChevronDown, Download, SortDesc, CalendarRange, ArrowRight,
 } from 'lucide-react';
 import { apiGet, apiPost, apiDelete } from '@/lib/api';
+import { useLeavesList, useLeavePolicies } from '@/hooks/useListQueries';
 import { Modal } from '@/components/ui/Modal';
 import { useToast } from '@/context/ToastContext';
 import { countWorkingDaysInRange } from '@/lib/utils';
@@ -554,14 +555,8 @@ export default function MyLeaves() {
     if (s && ['pending', 'approved', 'rejected'].includes(s)) setStatusFilter(s);
   }, []);
 
-  const { data: leaves = [], isLoading } = useQuery({
-    queryKey: ['my-leaves'],
-    queryFn:  () => apiGet('/leaves'),
-  });
-  const { data: policies = [] } = useQuery({
-    queryKey: ['leave-policies'],
-    queryFn:  () => apiGet('/leave-policies'),
-  });
+  const { data: leaves = [], isLoading } = useLeavesList();
+  const { data: policies = [] } = useLeavePolicies();
   // BUG_14: staleTime:0 ensures balance always refreshes after leave submission.
   // refetchOnWindowFocus:true restores window-focus refresh explicitly since the
   // global default was changed to false — needed so the balance updates when an
@@ -577,8 +572,7 @@ export default function MyLeaves() {
     mutationFn: (payload) => apiPost('/leaves', payload),
     onSuccess: (newLeave, vars) => {
       // BUG_13: Remove refetchType:'active' so invalidation always triggers a refetch
-      qc.invalidateQueries({ queryKey: ['my-leaves'] });
-      qc.invalidateQueries({ queryKey: ['my-leaves-recent'] });
+      qc.invalidateQueries({ queryKey: ['leaves'] });
       qc.invalidateQueries({ queryKey: ['my-leave-balance'] });
       qc.invalidateQueries({ queryKey: ['leave-policies'] });
       qc.invalidateQueries({ queryKey: ['dashboard-stats'] });
@@ -591,8 +585,7 @@ export default function MyLeaves() {
   const del = useMutation({
     mutationFn: (id) => apiDelete(`/leaves/${id}`),
     onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['my-leaves'] });
-      qc.invalidateQueries({ queryKey: ['my-leaves-recent'] });
+      qc.invalidateQueries({ queryKey: ['leaves'] });
       toast('Request cancelled.', 'success');
       setDelTarget(null);
     },

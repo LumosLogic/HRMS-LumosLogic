@@ -1,11 +1,12 @@
 const express    = require('express');
 const router     = express.Router();
 const { sameId } = require('../../utils/ids');
+const { parseListParams, setPagingHeaders, ListParamError } = require('../../utils/listParams');
 const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { getFilterState, resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee } = require('../../utils/branchFilter');
+const { applyBranchUserScope, getFilterState, resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee } = require('../../utils/branchFilter');
 const cloudinary = require('cloudinary').v2;
 const multer     = require('multer');
 
@@ -25,18 +26,29 @@ function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
-    const { status } = req.query;
+    const lp = parseListParams(req.query);   // status (now a comma list), from/to, limit/page — all optional
     let q = db.from('expenses').select('*').eq('organization_id', oId).order('created_at', { ascending: false });
     if (!isAdmin(req.user.role)) {
       q = q.or(`user_id.eq.${req.user.id},manager_id.eq.${req.user.id}`);
     } else {
-      const empIds = await resolveEmployeeIds(req.branchContext, oId);
-      if (empIds !== null && empIds.length === 0) return res.json([]);
-      if (empIds !== null) q = q.in('user_id', empIds);
+      // branch scope as a SQL subquery (no employee-id list round trip)
+      const scope = applyBranchUserScope(q, 'user_id', req.branchContext, oId);
+      if (scope.empty) return res.json([]);
+      q = scope.query;
     }
-    if (status) q = q.eq('status', status);
-    const { data, error } = await q;
+    // Optional server-side narrowing (no params = unchanged behaviour). Applied AFTER the RBAC + branch filters above.
+    if (lp.statuses) q = lp.statuses.length === 1 ? q.eq('status', lp.statuses[0]) : q.in('status', lp.statuses);
+    if (lp.from)     q = q.gte('expense_date', lp.from);
+    if (lp.to)       q = q.lte('expense_date', lp.to);
+    if (lp.paging)   q = q.range(lp.paging.offset, lp.paging.offset + lp.paging.limit);   // +1 row = "has more" probe
+
+    const { data: rawExp, error } = await q;
     if (error) throw error;
+    let data = rawExp;
+    if (lp.paging) {
+      setPagingHeaders(res, lp.paging, (rawExp || []).length > lp.paging.limit);
+      data = (rawExp || []).slice(0, lp.paging.limit);
+    }
 
     const rows = data || [];
     if (rows.length === 0) return res.json([]);
@@ -56,7 +68,10 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       reviewer_name:     uMap[r.reviewed_by]?.name     || '',
       manager_name:      uMap[r.manager_id]?.name      || '',
     })));
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    if (err instanceof ListParamError) return res.status(400).json({ error: err.message });
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // BUG_220: currency validation for expense amounts — a positive rupee amount with at most

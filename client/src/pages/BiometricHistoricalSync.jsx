@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useQuery, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import {
   Upload, Database, RefreshCw, CheckCircle2, AlertCircle, Loader2,
   FileText, Copy, XCircle, ChevronDown, BarChart2, Info,
@@ -162,6 +163,7 @@ export default function BiometricHistoricalSync() {
   const _bk1 = useBranch().selectedBranchId;
   const { data: devices = [] } = useQuery({
     queryKey: ['biometric-devices', _bk1],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/biometric/devices'),
     staleTime: 2 * 60 * 1000,
   });

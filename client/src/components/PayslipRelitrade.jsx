@@ -13,6 +13,7 @@ import React, { useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Printer, X } from 'lucide-react';
 import { apiGet } from '@/lib/api';
+import { useOrgSettings, usePayrollSettings } from '@/hooks/useReferenceData';
 import { MONTHS } from '@/lib/utils';
 
 const num    = n => Number(n || 0);
@@ -99,18 +100,9 @@ export default function PayslipRelitrade({ payslipId, onClose }) {
     enabled:  Boolean(payslipId),
   });
 
-  const { data: orgSettings, isFetched: orgFetched } = useQuery({
-    queryKey: ['org-settings'],
-    queryFn:  () => apiGet('/org/settings'),
-    staleTime: 5 * 60 * 1000,
-    retry: 1,
-  });
+  const { data: orgSettings, isFetched: orgFetched } = useOrgSettings({ staleTime: 5 * 60 * 1000 });
 
-  const { data: payrollSettings } = useQuery({
-    queryKey: ['payroll-settings'],
-    queryFn:  () => apiGet('/payroll/settings'),
-    staleTime: 5 * 60 * 1000,
-  });
+  const { data: payrollSettings } = usePayrollSettings({ staleTime: 5 * 60 * 1000 });
 
   const { data: statutory } = useQuery({
     queryKey: ['emp-statutory-relitrade', slip?.user_id],

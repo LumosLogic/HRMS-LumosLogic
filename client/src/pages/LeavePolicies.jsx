@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { Save, RefreshCw, Info, Copy, History } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
@@ -77,7 +78,7 @@ export default function LeavePolicies() {
   // Group edit mode: the page edits a configuration group's policies instead of the selected branch's.
   const [editGroup, setEditGroup] = useState(null);
 
-  const { data: _lpData, isLoading: _lpLoading } = useQuery({ queryKey: ['leave-policies', selectedBranchId], queryFn: () => apiGet('/leave-policies'), placeholderData: keepPreviousData });
+  const { data: _lpData, isLoading: _lpLoading } = useQuery({ queryKey: ['leave-policies', selectedBranchId], meta: BRANCH_KEYED, queryFn: () => apiGet('/leave-policies'), placeholderData: keepPreviousData });
   const { data: _grpData, isLoading: _grpLoading } = useQuery({
     queryKey: ['leave-policies-group', editGroup?.id],
     queryFn:  () => apiGet(`/config-groups/${editGroup.id}/config`),
@@ -86,6 +87,7 @@ export default function LeavePolicies() {
   // Where the selected branch's effective policies come from: its own override, its group, or the org default.
   const { data: effective } = useQuery({
     queryKey: ['effective-config', 'leave_policies', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/config-groups/effective', { domain: 'leave_policies', branch_id: selectedBranchId }),
     enabled:  !!selectedBranchId && !editGroup,
     retry:    false,

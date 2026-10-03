@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { useNavigate } from 'react-router-dom';
 import {
   Play, Eye, Lock, Unlock, CheckCircle2, AlertCircle, Clock,
@@ -78,6 +79,7 @@ export default function PayrollGeneration() {
 
   const { data: runs = [], isLoading: runsLoading } = useQuery({
     queryKey: ['payroll-runs', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/payroll/runs'),
   });
 

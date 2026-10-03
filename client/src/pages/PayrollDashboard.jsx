@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { Link } from 'react-router-dom';
 import {
   Users, IndianRupee, TrendingDown, AlertTriangle,
@@ -79,6 +80,7 @@ export default function PayrollDashboard() {
 
   const { data, isLoading } = useQuery({
     queryKey: ['payroll-dashboard', month, year, selectedBranchId],
+    meta: BRANCH_KEYED,
     queryFn:  () => apiGet('/payroll/dashboard', {
       ...(month ? { month } : {}),
       year,

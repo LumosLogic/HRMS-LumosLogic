@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
@@ -25,6 +26,7 @@ function GenerateModal({ open, onClose, selectedBranchId }) {
   // Include selectedBranchId in queryKey so branch switching shows the correct employees.
   const { data: _empForGenerate = [] } = useQuery({
     queryKey: ['payroll-employees-modal', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn: () => apiGet('/payroll/employees'),
     enabled: open,
   });

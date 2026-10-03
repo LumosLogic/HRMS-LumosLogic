@@ -1,10 +1,13 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import {
   ChevronLeft, ChevronRight, Home, Umbrella, Activity, AlertTriangle,
   Globe, Users, CalendarDays, Clock, Search, Filter, X, ChevronDown,
 } from 'lucide-react';
 import { apiGet } from '@/lib/api';
+import { STALE } from '@/lib/queryTiers';
+import { useHolidays, useWorkSchedule } from '@/hooks/useReferenceData';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
 import { useAuth } from '@/context/AuthContext';
@@ -289,6 +292,7 @@ export default function TeamCalendar() {
   // ── Data fetching ──────────────────────────────────────────────────────────
   const { data: teamLeaves = [], isLoading } = useQuery({
     queryKey: ['team-leaves', year, month, selectedBranchId],
+    meta: BRANCH_KEYED,
     queryFn:  () => apiGet('/team-leaves', { startDate: monthStart, endDate: monthEnd }),
     staleTime: 60000,
   });
@@ -296,6 +300,8 @@ export default function TeamCalendar() {
   // BUG_072: fetch attendance records for the month so absent employees show on the calendar
   const { data: monthAttendance = [] } = useQuery({
     queryKey: ['team-attendance', year, month, selectedBranchId],
+    meta: BRANCH_KEYED,
+    staleTime: STALE.frequent,   // frequent
     queryFn:  () => apiGet('/attendance', { year, month }).catch(() => []),
     staleTime: 60000,
   });
@@ -308,23 +314,16 @@ export default function TeamCalendar() {
     }
   }
 
-  const { data: holidays = [] } = useQuery({
-    queryKey: ['holidays', year, selectedBranchId],
-    queryFn:  () => apiGet('/holidays', { year }),
-    staleTime: 300000,
-  });
+  const { data: holidays = [] } = useHolidays(year, { staleTime: 300000 });
 
   const { data: employees = [] } = useQuery({
     queryKey: ['employees-calendar', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/employees'),
     staleTime: 300000,
   });
 
-  const { data: schedule } = useQuery({
-    queryKey: ['work-schedule'],
-    queryFn:  () => apiGet('/settings/schedule'),
-    staleTime: 300000,
-  });
+  const { data: schedule } = useWorkSchedule({ staleTime: 300000 });
 
   const activeWorkDays = schedule?.work_days
     ? schedule.work_days.split(',').map(Number)

@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { Plus, Pencil, Trash2, Monitor, Package, Smartphone, Tablet, Headphones, CreditCard, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useBranch } from '@/context/BranchContext';
 import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { RefreshingOverlay } from '@/components/ui/HistoryWindowNote';
 import { useEmployees } from '@/hooks/useEmployees';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -161,9 +163,9 @@ export default function Assets() {
   const [confirmDel, setConfirmDel] = useState(null);
   const [filter,     setFilter]     = useState('all');
 
-  const { data: _aData, isLoading } = useQuery({ queryKey: ['assets', filter, selectedBranchId], queryFn: () => apiGet('/assets', filter !== 'all' ? { status: filter } : {}) });
+  const { data: _aData, isLoading, isPlaceholderData: assetsStale } = useQuery({ queryKey: ['assets', filter, selectedBranchId], meta: BRANCH_KEYED, placeholderData: keepPreviousData, queryFn: () => apiGet('/assets', filter !== 'all' ? { status: filter } : {}) });
   // Unfiltered list used for client-side duplicate validation in the modal
-  const { data: _allAData }         = useQuery({ queryKey: ['assets-all', selectedBranchId], queryFn: () => apiGet('/assets'), staleTime: 30000 });
+  const { data: _allAData }         = useQuery({ queryKey: ['assets-all', selectedBranchId], meta: BRANCH_KEYED, placeholderData: keepPreviousData, queryFn: () => apiGet('/assets'), staleTime: 30000 });
   const { data: _eData }            = useEmployees({ enabled: isAdmin });
   const assets    = Array.isArray(_aData)    ? _aData    : [];
   const allAssets = Array.isArray(_allAData) ? _allAData : [];
@@ -213,6 +215,7 @@ export default function Assets() {
         ))}
       </div>
 
+      <RefreshingOverlay active={assetsStale}>
       {isLoading ? (
         <div className="loading"><div className="spinner" />Loading assets…</div>
       ) : assets.length === 0 ? (
@@ -260,6 +263,7 @@ export default function Assets() {
           })}
         </div>
       )}
+      </RefreshingOverlay>
 
       {addOpen   && <AssetModal open onClose={() => setAddOpen(false)} employees={employees} allAssets={allAssets} />}
       {editAsset && <AssetModal open onClose={() => setEditAsset(null)} asset={editAsset} employees={employees} allAssets={allAssets} />}

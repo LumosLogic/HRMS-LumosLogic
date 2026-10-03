@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import {
   FileText, Save, CheckCircle2, Clock, AlertCircle,
   ChevronDown, ChevronUp, Info, Upload, ExternalLink, RefreshCw,
@@ -331,12 +332,14 @@ export default function TaxDeclaration() {
 
   const { data: allDecl = [] } = useQuery({
     queryKey: ['declarations-hr', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/statutory/declarations'),
     enabled:  isHR,
   });
 
   const { data: allProofs = [], refetch: refetchProofs } = useQuery({
     queryKey: ['proofs-hr', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/statutory/proofs'),
     enabled:  isHR,
     staleTime: 60000,

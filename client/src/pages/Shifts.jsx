@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import {
   Plus, Pencil, Trash2, Clock, Calendar,
   UserPlus, Search, X, ChevronLeft, AlertTriangle,
@@ -8,6 +9,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { useShiftsList } from '@/hooks/useReferenceData';
 import { useEmployees } from '@/hooks/useEmployees';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -765,12 +767,10 @@ export default function Shifts() {
     `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
   );
 
-  const { data: _sData, isLoading: sLoad } = useQuery({
-    queryKey: ['shifts', selectedBranchId],
-    queryFn:  () => apiGet('/shifts'),
-  });
+  const { data: _sData, isLoading: sLoad } = useShiftsList();
   const { data: _aData, isLoading: aLoad } = useQuery({
     queryKey: ['shift-assign', month, selectedBranchId],
+    meta: BRANCH_KEYED,
     queryFn:  () => apiGet('/shifts/assignments', { month }),
   });
   const { data: _eData } = useEmployees({ enabled: isAdmin });

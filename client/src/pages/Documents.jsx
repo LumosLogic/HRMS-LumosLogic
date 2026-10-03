@@ -9,12 +9,14 @@ import {
   ChevronDown, RotateCcw, FileCheck, UploadCloud, Settings, UserPlus, Calendar,
   Building2,
 } from 'lucide-react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
+import { useBranchesList, useDocumentsList } from '@/hooks/useReferenceData';
 import { useEmployees } from '@/hooks/useEmployees';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { Avatar } from '@/components/ui/Avatar';
@@ -586,15 +588,13 @@ function SharedDocumentsTab({ onUploadClick }) {
   const [requestDelDoc, setRequestDelDoc] = useState(null); // { id, name }
   const [accessDrawerDoc, setAccessDrawerDoc] = useState(null);
 
-  const { data: _docs = [], isLoading } = useQuery({
-    queryKey: ['documents', 'admin-all', selectedBranchId],
-    queryFn:  () => apiGet('/documents'),
-  });
+  const { data: _docs = [], isLoading } = useDocumentsList();
 
   const { data: allEmployees = [] } = useEmployees({ onlyEmployees: true });
 
   const { data: colleagues = [] } = useQuery({
     queryKey: ['doc-colleagues', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/documents/colleagues'),
   });
 
@@ -1196,10 +1196,7 @@ function RequirementAssignModal({ requirement, employees, onClose, onSaved }) {
   const [saving, setSaving]         = useState(false);
 
   // Fetch org branches for branch picker
-  const { data: branches = [] } = useQuery({
-    queryKey: ['branches'],
-    queryFn:  () => apiGet('/branches'),
-  });
+  const { data: branches = [] } = useBranchesList();
   const activeBranches = branches.filter(b => b.is_active !== false);
 
   const filtered = useMemo(() => {
@@ -1385,15 +1382,16 @@ function EmployeeRequirementsTab() {
 
   const { data: requirements = [], isLoading } = useQuery({
     queryKey: ['doc-requirements', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/doc-requirements'),
   });
 
   // Bug-119: use the scoped org-wide endpoint instead of /employees (which applies
   // branch filtering and can make the picker empty). Branch scope for the requirement
   // is enforced through assigned_branch_ids[], not the employee list itself.
-  const _bk1 = useBranch().selectedBranchId;
   const { data: allEmployees = [] } = useQuery({
     queryKey: ['doc-requirement-employees', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/doc-requirements/employees'),
   });
 
@@ -1725,6 +1723,7 @@ function VerificationQueueTab() {
   const _bk2 = useBranch().selectedBranchId;
   const { data: allSubs = [], isLoading } = useQuery({
     queryKey: ['verification-queue', _bk2],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/doc-requirements/verification-queue'),
   });
 
@@ -1904,6 +1903,7 @@ function AnalyticsTab() {
   const _bk3 = useBranch().selectedBranchId;
   const { data: a, isLoading } = useQuery({
     queryKey: ['doc-analytics', _bk3],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/doc-requirements/analytics'),
     staleTime: 60000,
   });
@@ -2471,10 +2471,7 @@ function EmployeeDocumentsDashboard() {
   });
 
   // Shared documents from HR/Root Admin (visibility='all', 'self', or 'specific' with me included)
-  const { data: sharedDocs = [] } = useQuery({
-    queryKey: ['my-shared-docs'],
-    queryFn:  () => apiGet('/documents'),
-  });
+  const { data: sharedDocs = [] } = useDocumentsList();
 
   // Compute stats
   const requiredReqs   = requirements.filter(r => r.is_required);
@@ -2528,7 +2525,6 @@ function EmployeeDocumentsDashboard() {
     setUploadFor(null);
     qc.invalidateQueries({ queryKey: ['doc-requirements-my'] });
     qc.invalidateQueries({ queryKey: ['doc-activity'] });
-    qc.invalidateQueries({ queryKey: ['my-shared-docs'] });
     qc.invalidateQueries({ queryKey: ['documents'] });
   }
 

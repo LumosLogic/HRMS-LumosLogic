@@ -86,6 +86,16 @@ function from(table) {
             const placeholders = f.val.map(v => addParam(v)).join(', ');
             return `${col} IN (${placeholders})`;
           }
+          case 'in_branch_users': {
+            // col IN (users of this organisation in the given branch(es)) — evaluated by the database, so the id
+            // list never travels to the app and back. Typed (not free SQL): only { orgId, branchId | branchIds }.
+            const sc = f.val || {};
+            const org = addParam(sc.orgId);
+            if (Array.isArray(sc.branchIds)) {
+              return `${col} IN (SELECT "id" FROM "users" WHERE "organization_id" = ${org} AND "branch_id" = ANY(${addParam(sc.branchIds)}::bigint[]))`;
+            }
+            return `${col} IN (SELECT "id" FROM "users" WHERE "organization_id" = ${org} AND "branch_id" = ${addParam(sc.branchId)})`;
+          }
           case 'not_in': {
             // NOT IN must also include IS NULL rows (SQL NULL NOT IN (...) = NULL = excluded)
             if (!Array.isArray(f.val) || f.val.length === 0) return 'TRUE';
@@ -447,6 +457,12 @@ function from(table) {
     },
     in(col, val) {
       state.filters.push({ col, op: 'in', val });
+      return builder;
+    },
+    // Branch scoping as a subquery: .inBranchUsers('user_id', { orgId, branchId }) or { orgId, branchIds: [...] }.
+    // Prefer utils/branchFilter.applyBranchUserScope — it derives the scope from the caller's branch context.
+    inBranchUsers(col, scope) {
+      state.filters.push({ col, op: 'in_branch_users', val: scope });
       return builder;
     },
     not(col, op, val) {

@@ -13,6 +13,8 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useFeature } from '@/context/FeatureFlagContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { useDocumentsList } from '@/hooks/useReferenceData';
+import { useLeavesList } from '@/hooks/useListQueries';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -599,10 +601,7 @@ function OverviewTab({ empId }) {
     enabled: !!empId,
   });
 
-  const { data: leaves = [] } = useQuery({
-    queryKey: ['leaves'],
-    queryFn: () => apiGet('/leaves'),
-  });
+  const { data: leaves = [] } = useLeavesList();
 
   // BUG_182: use the proper /leaves/balance endpoint (same as MyLeaves page)
   // instead of computing from /leave-policies which returns 0 when policies aren't configured
@@ -2626,7 +2625,7 @@ function ProfileCompletionBar({ empId }) {
   const { data } = useQuery({ queryKey: ['profile-overview', empId], queryFn: () => apiGet(`/profile/${empId}/overview`), enabled: !!empId });
   const { data: per } = useQuery({ queryKey: ['profile-personal', empId], queryFn: () => apiGet(`/profile/${empId}/personal`), enabled: !!empId });
   // BUG_230: /profile/:id/documents endpoint doesn't exist — use the documents module endpoint instead
-  const { data: docs = [] } = useQuery({ queryKey: ['employee-documents', empId], queryFn: () => apiGet(`/documents`), enabled: !!empId });
+  const { data: docs = [] } = useDocumentsList({ enabled: !!empId });
   const { data: contacts = [] } = useQuery({ queryKey: ['emergency-contacts', empId], queryFn: () => apiGet(`/profile/${empId}/emergency-contacts`), enabled: !!empId });
   if (!data) return null;
   const sections = [

@@ -6,7 +6,11 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { useHolidays, useOrgSettings } from '@/hooks/useReferenceData';
 import { useEmployees } from '@/hooks/useEmployees';
+import { useLeavesList, useLeavePolicies, HISTORY_DAYS, historyFrom } from '@/hooks/useListQueries';
+import { fetchBalanceMap } from '@/hooks/useLeaveBalances';
+import { HistoryWindowNote, RefreshingOverlay } from '@/components/ui/HistoryWindowNote';
 import { Avatar } from '@/components/ui/Avatar';
 import { DateInput } from '@/components/ui/DateInput';
 import { StatusBadge, LeaveTypeBadge } from '@/components/ui/Badge';
@@ -66,10 +70,19 @@ export default function Leaves() {
   const [confirmDel,    setConfirmDel]    = useState(null);
   const [confirmRevert, setConfirmRevert] = useState(null);
 
-  const { data: leaves = [], refetch: refetchLeaves } = useQuery({
-    queryKey: ['leaves', userIdParam, selectedBranchId],
-    queryFn: () => apiGet('/leaves', userIdParam ? { userId: userIdParam } : {}),
-  });
+  // Admin list: recent history by default (server-side window) with an explicit "Show full history" switch.
+  // An explicit date filter, a single-employee view, a pending-only deep link and a highlighted leave
+  // (notification link) all load what they ask for instead of the default window. Employees keep their own full list.
+  const [allHistory, setAllHistory] = useState(() => !!highlightId);
+  const hasDateFilter = !!(filterStart || filterEnd);
+  const pendingOnlyLink = statusParam === 'pending';
+  const defaultWindow = isAdmin && !hasDateFilter && !allHistory && !userIdParam && !pendingOnlyLink;
+  const leaveParams = !isAdmin ? {} : {
+    userId: userIdParam || undefined,
+    statuses: pendingOnlyLink ? ['pending', 'pending_approval', 'pending_dept', 'pending_root'] : undefined,
+    from: defaultWindow ? historyFrom(HISTORY_DAYS.leaves) : undefined,
+  };
+  const { data: leaves = [], refetch: refetchLeaves, isPlaceholderData: leavesStale, isFetching: leavesFetching } = useLeavesList(leaveParams);
 
   // BUG_094: switch to correct tab (WFH vs normal) then scroll to highlighted leave
   useEffect(() => {
@@ -88,10 +101,7 @@ export default function Leaves() {
     }, 200);
   }, [highlightId, leaves.length]);
 
-  const { data: policies = [] } = useQuery({
-    queryKey: ['leave-policies', selectedBranchId],
-    queryFn: () => apiGet('/leave-policies'),
-  });
+  const { data: policies = [] } = useLeavePolicies();
 
   const { data: employees = [] } = useEmployees({ lite: true, onlyEmployees: true });
 
@@ -102,17 +112,7 @@ export default function Leaves() {
   // Admin: batch-fetch balances for every employee visible in the list
   const { data: adminBalances = {} } = useQuery({
     queryKey: ['leaves-page-balances', uniqueUserIds.join(','), curYear],
-    queryFn: async () => {
-      const map = {};
-      await Promise.all(uniqueUserIds.map(async uid => {
-        try {
-          const d = await apiGet('/leaves/balance', { userId: uid, year: curYear });
-          map[uid] = {};
-          for (const b of (d?.balances || [])) map[uid][b.leave_type] = b;
-        } catch { map[uid] = {}; }
-      }));
-      return map;
-    },
+    queryFn: () => fetchBalanceMap(uniqueUserIds, curYear),   // ONE request (was one per employee)
     enabled: isAdmin && uniqueUserIds.length > 0,
     staleTime: 2 * 60 * 1000,
   });
@@ -234,6 +234,11 @@ export default function Leaves() {
             </div>
           )}
 
+          {isAdmin && !hasDateFilter && !userIdParam && !pendingOnlyLink && (
+            <HistoryWindowNote since={historyFrom(HISTORY_DAYS.leaves)} showingAll={allHistory} noun="leaves"
+              loading={leavesFetching} onToggle={() => setAllHistory(v => !v)} />
+          )}
+
           {/* Date range filter */}
           <div className="flex items-center gap-2 mb-3 flex-wrap">
             <label className="text-xs font-semibold text-[#777587] flex items-center gap-1 shrink-0"><Calendar size={12} />Filter:</label>
@@ -283,6 +288,7 @@ export default function Leaves() {
           </div>
 
           {/* List / Summary */}
+          <RefreshingOverlay active={leavesStale}>
           {tab === 'summary' ? (
             <LeaveSummaryTable
               employees={employees}
@@ -307,6 +313,7 @@ export default function Leaves() {
               }
             </div>
           )}
+          </RefreshingOverlay>
         </div>
 
         {/* Right column */}
@@ -842,17 +849,8 @@ export function ApplyLeaveModal({ employees, isAdmin, allLeaves, policies, onClo
 
   // Fetch holidays for current year and next year
   const currentYear = new Date().getFullYear();
-  const _bk1 = useBranch().selectedBranchId;
-  const { data: holidaysThisYear = [] } = useQuery({
-    queryKey: ['holidays', currentYear, _bk1],
-    queryFn: () => apiGet(`/holidays?year=${currentYear}`),
-    staleTime: 1000 * 60 * 60, // 1 hour
-  });
-  const { data: holidaysNextYear = [] } = useQuery({
-    queryKey: ['holidays', currentYear + 1, _bk1],
-    queryFn: () => apiGet(`/holidays?year=${currentYear + 1}`),
-    staleTime: 1000 * 60 * 60,
-  });
+  const { data: holidaysThisYear = [] } = useHolidays(currentYear, { staleTime: 1000 * 60 * 60 });
+  const { data: holidaysNextYear = [] } = useHolidays(currentYear + 1, { staleTime: 1000 * 60 * 60 });
   const holidays = React.useMemo(() => [...holidaysThisYear, ...holidaysNextYear], [holidaysThisYear, holidaysNextYear]);
 
   // Build holiday set for range calculations
@@ -1216,11 +1214,7 @@ function LeaveSummaryTable({ employees, leaves, policies, filterStart, filterEnd
   const [sortKey, setSortKey] = useState('name');
   const [sortDir, setSortDir] = useState('asc');
 
-  const { data: orgSettings } = useQuery({
-    queryKey: ['org-settings'],
-    queryFn: () => apiGet('/org/settings'),
-    staleTime: 5 * 60 * 1000,
-  });
+  const { data: orgSettings } = useOrgSettings({ staleTime: 5 * 60 * 1000 });
 
   const { cyclePeriod } = useMemo(() => {
     const startMonth = orgSettings?.leave_year_start_month || 1;

@@ -127,6 +127,9 @@ function buildApp() {
   app.use('/api/expenses', load('modules/expenses/expenses.routes'));
   app.use('/api/attendance', load('modules/attendance/attendance.routes'));
   app.use('/api/regularization', load('modules/regularization/regularization.routes'));
+  app.use('/api/pending-approvals', load('modules/pending-approvals/pendingApprovals.routes'));
+  app.use('/api/dashboard', load('modules/dashboard/dashboard.routes'));
+  app.use('/api/dashboard-before', load('tests/fixtures/dashboard.before_parallelisation.js'));
   app.use('/api/biometric', load('modules/biometric/biometric.routes'));
   app.use('/api/payroll', load('modules/payroll/payroll.routes'));
   app.use('/api/settings', load('modules/settings/settings.routes'));
@@ -149,7 +152,7 @@ async function call(method, url, { as, branch, body } = {}) {
   if (branch != null) headers['X-Branch-Id'] = String(branch);
   const r = await fetch(base + url, { method, headers, body: body ? JSON.stringify(body) : undefined });
   let json = null; try { json = await r.json(); } catch { /* empty */ }
-  return { status: r.status, body: json };
+  return { status: r.status, body: json, headers: r.headers };
 }
 const names = (rows) => {
   if (!Array.isArray(rows)) throw new Error('expected an array, got ' + JSON.stringify(rows).slice(0, 300));
@@ -680,6 +683,217 @@ async function devicePunch(sn, pin, when) {
   });
 
   // ════════════════════════════════════════════════════════════════════════════════════════
+
+  console.log('\nLIST FILTERS + PENDING-APPROVALS SUMMARY (leaves / regularization / expenses)');
+  const lv = async (u, st, sd, ed, reason) => (await one(`INSERT INTO leaves (user_id, organization_id, start_date, end_date, leave_type, status, reason) VALUES ($1,$2,$3,$4,'casual',$5,$6) RETURNING id`, [u, ID.orgA, sd, ed, st, reason])).id;
+  const idsOf = (rows) => rows.map(r => Number(r.id)).sort((a, b) => a - b);
+  let L = {};
+  await t('seed: leaves/regularizations/expenses in several statuses, dates and both branches', async () => {
+    L.oldApprD = await lv(ID.empD, 'approved', '2024-03-01', '2024-03-01', 'old approved');
+    L.rejD = await lv(ID.empD, 'rejected', '2026-02-02', '2026-02-03', 'rejected');
+    L.deptB = await lv(ID.empB, 'pending_dept', '2026-12-10', '2026-12-10', 'dept pending B');
+    L.rootB = await lv(ID.empB, 'pending_root', '2026-12-11', '2026-12-11', 'root pending B');
+    const rg = async (u, d, st) => (await one(`INSERT INTO attendance_regularization (user_id, organization_id, date, requested_check_in, requested_check_out, reason, status, type) VALUES ($1,$2,$3,'09:00','18:00','r',$4,'check_time') RETURNING id`, [u, ID.orgA, d, st])).id;
+    L.regOldD = await rg(ID.empD, '2024-03-05', 'approved'); L.regPendD = await rg(ID.empD, '2026-09-10', 'pending');
+    L.regPendB = await rg(ID.empB, '2026-09-10', 'pending'); L.regRejB = await rg(ID.empB, '2026-09-11', 'rejected');
+    const ex = async (u, st, d) => (await one(`INSERT INTO expenses (user_id, organization_id, title, amount, status, expense_date) VALUES ($1,$2,'Cab',50,$3,$4) RETURNING id`, [u, ID.orgA, st, d])).id;
+    L.exOldD = await ex(ID.empD, 'approved', '2024-04-01'); L.exPendD = await ex(ID.empD, 'pending', '2026-09-20');
+    L.exMgrB = await ex(ID.empB, 'manager_approved', '2026-09-21'); L.exRejB = await ex(ID.empB, 'rejected', '2026-09-22');
+    await resetAccess();
+  });
+
+  await t('/leaves: no params = unchanged (every status, every date); status/from/to narrow server-side', async () => {
+    const all = (await call('GET', '/api/leaves', { as: ID.root })).body;
+    for (const id of [L.oldApprD, L.rejD, L.deptB, L.rootB]) assert.ok(idsOf(all).includes(Number(id)), 'unfiltered list still contains leave ' + id);
+    const pend = (await call('GET', '/api/leaves?status=pending,pending_dept,pending_root', { as: ID.root })).body;
+    assert.ok(pend.length > 0 && pend.every(l => ['pending', 'pending_dept', 'pending_root'].includes(l.status)), 'status filter');
+    assert.ok(!idsOf(pend).includes(Number(L.oldApprD)) && !idsOf(pend).includes(Number(L.rejD)));
+    const recent = (await call('GET', '/api/leaves?from=2025-01-01', { as: ID.root })).body;
+    assert.ok(!idsOf(recent).includes(Number(L.oldApprD)), 'leave that ended before "from" excluded');
+    assert.ok(idsOf(recent).includes(Number(L.rejD)), 'recent leave kept');
+    const upto = (await call('GET', '/api/leaves?to=2025-01-01', { as: ID.root })).body;
+    assert.deepStrictEqual(idsOf(upto), [Number(L.oldApprD)], '"to" excludes leaves that start after it');
+  });
+  await t('/leaves paging: limit/page slice the same ordering; X-Has-More tells whether more rows exist', async () => {
+    const full = (await call('GET', '/api/leaves', { as: ID.root })).body;
+    const p1 = await call('GET', '/api/leaves?limit=2&page=1', { as: ID.root });
+    const p2 = await call('GET', '/api/leaves?limit=2&page=2', { as: ID.root });
+    assert.strictEqual(p1.status, 200); assert.strictEqual(p1.body.length, 2);
+    assert.strictEqual(p1.headers.get('x-has-more'), full.length > 2 ? '1' : '0');
+    assert.deepStrictEqual(idsOf([...p1.body, ...p2.body]), idsOf(full.slice(0, 2 + p2.body.length)), 'pages are consecutive slices of the unpaged order');
+    const last = await call('GET', '/api/leaves?limit=500', { as: ID.root });
+    assert.strictEqual(last.headers.get('x-has-more'), '0');
+  });
+  await t('list params are validated (400, no SQL reaches the DB) and never widen access', async () => {
+    for (const q of ['status=pending;drop', 'from=2026-13-45', 'to=yesterday', 'limit=0', 'limit=abc'])
+      for (const base of ['/api/leaves', '/api/regularization', '/api/expenses'])
+        assert.strictEqual((await call('GET', base + '?' + q, { as: ID.root })).status, 400, base + '?' + q);
+    // restricted HR + filters: still only the own branch (Dalal), even when the filter would match Bhuj rows
+    const hr = (await call('GET', '/api/leaves?status=pending_dept,pending_root&from=2026-01-01', { as: ID.hrD, branch: ID.dalal })).body;
+    assert.ok(!idsOf(hr).includes(Number(L.deptB)) && !idsOf(hr).includes(Number(L.rootB)), 'Bhuj leaves never appear for Dalal HR');
+    assert.strictEqual((await call('GET', '/api/leaves?limit=5', { as: ID.hrD, branch: ID.bhuj })).status, 403, 'foreign branch still refused');
+    // org isolation
+    const foreign = (await call('GET', '/api/leaves?status=pending_dept,pending_root,pending', { as: ID.froot })).body;
+    assert.ok(!idsOf(foreign).includes(Number(L.deptB)), 'other organisation never visible');
+  });
+  await t('/regularization and /expenses: status list, date bounds, paging, branch-safe', async () => {
+    const r = (await call('GET', '/api/regularization?status=pending', { as: ID.root })).body;
+    assert.ok(r.every(x => x.status === 'pending') && idsOf(r).includes(Number(L.regPendD)) && !idsOf(r).includes(Number(L.regRejB)));
+    assert.ok(!idsOf((await call('GET', '/api/regularization?from=2025-01-01', { as: ID.root })).body).includes(Number(L.regOldD)));
+    assert.ok(idsOf((await call('GET', '/api/regularization', { as: ID.root })).body).includes(Number(L.regOldD)), 'no params = full history as before');
+    const rd = (await call('GET', '/api/regularization?status=pending', { as: ID.hrD, branch: ID.dalal })).body;
+    assert.ok(idsOf(rd).includes(Number(L.regPendD)) && !idsOf(rd).includes(Number(L.regPendB)), 'Dalal HR: Dalal pending only');
+    const e = (await call('GET', '/api/expenses?status=pending,manager_approved', { as: ID.root })).body;
+    assert.ok(e.every(x => ['pending', 'manager_approved'].includes(x.status)) && idsOf(e).includes(Number(L.exMgrB)) && !idsOf(e).includes(Number(L.exRejB)));
+    assert.strictEqual((await call('GET', '/api/expenses?status=approved', { as: ID.root })).body.every(x => x.status === 'approved'), true, 'single status still works (legacy)');
+    assert.ok(!idsOf((await call('GET', '/api/expenses?from=2025-01-01', { as: ID.root })).body).includes(Number(L.exOldD)));
+    const ed = (await call('GET', '/api/expenses?status=pending,manager_approved', { as: ID.hrD, branch: ID.dalal })).body;
+    assert.ok(idsOf(ed).includes(Number(L.exPendD)) && !idsOf(ed).includes(Number(L.exMgrB)), 'Dalal HR: Dalal claims only');
+    const pg = await call('GET', '/api/expenses?limit=1', { as: ID.root });
+    assert.strictEqual(pg.body.length, 1); assert.strictEqual(pg.headers.get('x-has-more'), '1');
+  });
+
+  await t('/api/pending-approvals returns EXACTLY what the five old requests returned (same rows, same RBAC + branch scope)', async () => {
+    const PEND = ['pending', 'pending_approval', 'pending_dept', 'pending_root'];
+    const arr = (r) => (Array.isArray(r.body) ? r.body : []);
+    for (const who of [{ as: ID.root }, { as: ID.hrD, branch: ID.dalal }, { as: ID.hrB, branch: ID.bhuj }, { as: ID.hrAll }, { as: ID.empD }, { as: ID.empB }, { as: ID.froot }]) {
+      const sum = await call('GET', '/api/pending-approvals', who);
+      assert.strictEqual(sum.status, 200, JSON.stringify(sum.body));
+      const oldLeaves = arr(await call('GET', '/api/leaves', who)).filter(l => PEND.includes(l.status));
+      const oldMy = arr(await call('GET', '/api/leaves/my-approvals', who));
+      const oldRegs = arr(await call('GET', '/api/regularization', who)).filter(r => r.status === 'pending');
+      const oldExp = arr(await call('GET', '/api/expenses', who)).filter(e => ['pending', 'manager_approved'].includes(e.status));
+      const label = JSON.stringify(who);
+      assert.deepStrictEqual(idsOf(sum.body.leaves), idsOf(oldLeaves), 'leaves ' + label);
+      assert.deepStrictEqual(idsOf(sum.body.my_approvals), idsOf(oldMy), 'my_approvals ' + label);
+      assert.deepStrictEqual(idsOf(sum.body.regularizations), idsOf(oldRegs), 'regularizations ' + label);
+      assert.deepStrictEqual(idsOf(sum.body.expenses), idsOf(oldExp), 'expenses ' + label);
+      assert.deepStrictEqual(sum.body.failed, [], 'no part failed ' + label);
+      // enrichment the page relies on is preserved
+      for (const l of sum.body.leaves) assert.ok('name' in l || 'user_id' in l, 'leave rows keep the joined user fields');
+    }
+  });
+  await t('/api/pending-approvals respects branch isolation and role', async () => {
+    const d = (await call('GET', '/api/pending-approvals', { as: ID.hrD, branch: ID.dalal })).body;
+    assert.ok(!idsOf(d.leaves).includes(Number(L.deptB)) && !idsOf(d.regularizations).includes(Number(L.regPendB)) && !idsOf(d.expenses).includes(Number(L.exMgrB)), 'Dalal HR sees no Bhuj item in any section');
+    assert.ok(idsOf(d.regularizations).includes(Number(L.regPendD)) && idsOf(d.expenses).includes(Number(L.exPendD)), 'but does see the Dalal items');
+    assert.strictEqual((await call('GET', '/api/pending-approvals', { as: ID.hrD, branch: ID.bhuj })).status, 403, 'foreign branch refused before any data is read');
+    const e = (await call('GET', '/api/pending-approvals', { as: ID.empD })).body;
+    assert.ok(e.leaves.every(l => Number(l.user_id) === ID.empD) && e.regularizations.every(r => Number(r.user_id) === ID.empD), 'an employee only ever gets their own rows');
+    const f = (await call('GET', '/api/pending-approvals', { as: ID.froot })).body;
+    assert.ok(![...f.leaves, ...f.regularizations, ...f.expenses].some(x => Number(x.organization_id) === ID.orgA), 'other organisation never leaks');
+    assert.strictEqual((await call('GET', '/api/pending-approvals', {})).status, 401, 'unauthenticated');
+  });
+
+
+  console.log('\nDASHBOARD — parallelised handler vs the previous sequential handler (same real data)');
+  await t('/dashboard returns identical JSON to the sequential version for every kind of caller', async () => {
+    // attendance + approved leave for today so the stats are non-trivial
+    const today = new Date().toISOString().slice(0, 10);
+    await S(`INSERT INTO attendance (user_id, organization_id, date, check_in, status, is_late) VALUES ($1,$2,$3,'09:40','present',true) ON CONFLICT DO NOTHING`, [ID.empD, ID.orgA, today]);
+    await S(`INSERT INTO attendance (user_id, organization_id, date, check_in, status) VALUES ($1,$2,$3,'09:00','present') ON CONFLICT DO NOTHING`, [ID.empB, ID.orgA, today]);
+    await lv(ID.empB2, 'approved', today, today, 'on leave today');
+    await resetAccess();
+    const strip = (b) => JSON.parse(JSON.stringify(b));
+    for (const who of [{ as: ID.root }, { as: ID.hrD, branch: ID.dalal }, { as: ID.hrB, branch: ID.bhuj }, { as: ID.hrAll }, { as: ID.hrAll, branch: ID.dalal }, { as: ID.empD }, { as: ID.empB }, { as: ID.froot }, { as: ID.root, branch: ID.bhuj }]) {
+      const a = await call('GET', '/api/dashboard-before', who), b = await call('GET', '/api/dashboard', who);
+      assert.strictEqual(b.status, a.status, 'status ' + JSON.stringify(who));
+      assert.deepStrictEqual(strip(b.body), strip(a.body), 'body ' + JSON.stringify(who));
+    }
+    const r = (await call('GET', '/api/dashboard', { as: ID.root })).body;
+    assert.ok(r.totalEmployees >= 4 && r.checkedInToday >= 2 && r.onLeaveToday >= 1 && r.pendingLeaves >= 1, 'non-trivial stats were compared: ' + JSON.stringify({ t: r.totalEmployees, c: r.checkedInToday, l: r.onLeaveToday, p: r.pendingLeaves }));
+  });
+  await t('/dashboard: a branch with NO active employees shows zeros, never org-wide pending counts/names', async () => {
+    const hrE = (await one(`INSERT INTO users (name, email, password, role, organization_id, branch_id, employee_status, status, joining_date) VALUES ('HR Empty','hr.empty@t.com','x','admin',$1,NULL,'active','active','2025-01-01') RETURNING id`, [ID.orgA])).id;
+    await S(`INSERT INTO hr_branch_access (user_id, org_id, branch_id, all_branches) VALUES ($1,$2,$3,false)`, [hrE, ID.orgA, ID.ahm]);
+    await resetAccess();
+    const d = (await call('GET', '/api/dashboard', { as: hrE, branch: ID.ahm })).body;
+    assert.strictEqual(d.totalEmployees, 0);
+    assert.strictEqual(d.pendingLeaves, 0, 'no org-wide pending count');
+    assert.deepStrictEqual(d.pendingLeaveList, [], 'no other branch\'s pending requests');
+    assert.deepStrictEqual(d.recentActivity, []);
+    const old = (await call('GET', '/api/dashboard-before', { as: hrE, branch: ID.ahm })).body;
+    assert.ok(old.pendingLeaves > 0 || old.pendingLeaveList.length > 0, 'the previous handler DID leak org-wide pending data for an empty branch (this is the fixed defect)');
+  });
+
+
+  console.log('\nBRANCH SCOPE AS A SUBQUERY + MEASURED DB STATEMENTS (no runtime-latency claims)');
+  const stmtCount = async (fn) => {
+    const { pool: appPool } = load('config/db'); let n = 0; const orig = appPool.query.bind(appPool);
+    appPool.query = (...a) => { n++; return orig(...a); };
+    const t0 = process.hrtime.bigint();
+    try { await fn(); } finally { appPool.query = orig; }
+    return { n, ms: Number(process.hrtime.bigint() - t0) / 1e6 };
+  };
+  await t('subquery scope == the old id-list scope for specific, multi-branch and all-branch callers (and never crosses org)', async () => {
+    const hrM = (await one(`INSERT INTO users (name, email, password, role, organization_id, branch_id, employee_status, status, joining_date) VALUES ('HR Multi','hr.multi@t.com','x','admin',$1,NULL,'active','active','2025-01-01') RETURNING id`, [ID.orgA])).id;
+    await S(`INSERT INTO hr_branch_access (user_id, org_id, branch_id, all_branches) VALUES ($1,$2,$3,false),($1,$2,$4,false)`, [hrM, ID.orgA, ID.dalal, ID.bhuj]);
+    await resetAccess();
+    const { resolveEmployeeIds, applyBranchUserScope } = load('utils/branchFilter');
+    const { withBranchContext } = load('middleware/branchContext');
+    for (const who of [{ as: hrM }, { as: hrM, branch: ID.dalal }, { as: ID.hrD, branch: ID.dalal }, { as: ID.hrB, branch: ID.bhuj }, { as: ID.hrAll }, { as: ID.root }]) {
+      const lst = (await call('GET', '/api/leaves', who)).body;
+      const ids = await new Promise((resolve, reject) => {
+        const req = { user: { id: who.as, role: (who.as === ID.root ? 'root_admin' : 'admin'), organization_id: ID.orgA }, headers: who.branch ? { 'x-branch-id': String(who.branch) } : {}, query: {} };
+        withBranchContext(req, { status: () => ({ json: (b) => reject(new Error('ctx ' + JSON.stringify(b))) }) }, async () => {
+          try { resolve(await resolveEmployeeIds(req.branchContext, ID.orgA)); } catch (e) { reject(e); }
+        });
+      });
+      const expected = (await S(`SELECT id FROM leaves WHERE organization_id=$1 ${ids === null ? '' : 'AND user_id = ANY($2::bigint[])'} ORDER BY id`, ids === null ? [ID.orgA] : [ID.orgA, ids])).map(r => Number(r.id));
+      assert.deepStrictEqual(lst.map(l => Number(l.id)).sort((a, b) => a - b), expected, 'leaves visible to ' + JSON.stringify(who));
+    }
+    // a branch id of another organisation yields NOTHING (the subquery is always constrained to the caller's organisation)
+    const q = load('config/db').db.from('leaves').select('id').eq('organization_id', ID.orgA)
+      .inBranchUsers('user_id', { orgId: ID.orgA, branchId: ID.foreignBr });
+    assert.deepStrictEqual((await q).data, [], 'foreign-org branch never matches Org A users');
+    const none = applyBranchUserScope({ inBranchUsers() { throw new Error('must not build a filter'); } }, 'user_id', { selectedBranchId: null, hasAllBranches: false, accessibleBranchIds: [] }, ID.orgA);
+    assert.strictEqual(none.empty, true, "'none' fails closed");
+  });
+  await t('DB statements per request: the consolidated pending-approvals call vs the five requests it replaces', async () => {
+    const who = { as: ID.hrD, branch: ID.dalal };
+    const old = await stmtCount(async () => {
+      await call('GET', '/api/leaves', who); await call('GET', '/api/leaves/pending-root', who); await call('GET', '/api/leaves/my-approvals', who);
+      await call('GET', '/api/regularization', who); await call('GET', '/api/expenses', who);
+    });
+    const neu = await stmtCount(async () => { await call('GET', '/api/pending-approvals', who); });
+    console.log(`       measured on the local test DB — old (5 requests): ${old.n} statements, ${old.ms.toFixed(0)} ms | new (1 request): ${neu.n} statements, ${neu.ms.toFixed(0)} ms (small local data; not a production latency claim)`);
+    assert.ok(neu.n < old.n, 'fewer DB statements: ' + neu.n + ' vs ' + old.n);
+  });
+
+
+  console.log('\nLEAVE BALANCE — batch endpoint vs the per-employee endpoint');
+  await t('GET /leaves/balance/batch returns exactly what GET /leaves/balance returns for each employee', async () => {
+    await S(`INSERT INTO leave_policies (organization_id, branch_id, leave_type, label, annual_quota) VALUES ($1,$2,'casual','Casual (Dalal)',10) ON CONFLICT DO NOTHING`, [ID.orgA, ID.dalal]);   // branch-specific quota for Dalal only
+    await S(`INSERT INTO leave_balance_adjustments (user_id, org_id, year, leave_type, delta, reason) VALUES ($1,$2,2026,'casual',1.5,'carry')`, [ID.empD, ID.orgA]).catch(() => {});
+    await lv(ID.empD, 'approved', '2026-03-02', '2026-03-04', 'balance check');
+    await lv(ID.empB, 'approved', '2026-03-09', '2026-03-09', 'balance check');
+    await resetAccess();
+    const idsAll = [ID.empD, ID.empB, ID.empB2, ID.head];
+    const batch = await call('GET', '/api/leaves/balance/batch?year=2026&userIds=' + idsAll.join(','), { as: ID.root });
+    assert.strictEqual(batch.status, 200, JSON.stringify(batch.body));
+    assert.strictEqual(batch.body.year, 2026);
+    for (const id of idsAll) {
+      const single = (await call('GET', `/api/leaves/balance?year=2026&userId=${id}`, { as: ID.root })).body;
+      assert.deepStrictEqual(batch.body.balances[id], single.balances, 'employee ' + id);
+    }
+    assert.strictEqual(batch.body.balances[ID.empD].find(b => b.leave_type === 'casual').allocated, 10, 'Dalal employee uses the branch-specific quota');
+    assert.strictEqual(batch.body.balances[ID.empB].find(b => b.leave_type === 'casual').allocated, 8, 'Bhuj employee falls back to the org quota');
+    assert.ok(batch.body.balances[ID.empD].find(b => b.leave_type === 'casual').adjustment === 1.5 && batch.body.balances[ID.empD].find(b => b.leave_type === 'casual').used > 0, 'adjustments and used days are included');
+  });
+  await t('GET /leaves/balance/batch keeps RBAC + branch isolation (all-or-nothing, admin only, bounded)', async () => {
+    const q = (ids) => '/api/leaves/balance/batch?year=2026&userIds=' + ids.join(',');
+    assert.strictEqual((await call('GET', q([ID.empD, ID.head]), { as: ID.hrD, branch: ID.dalal })).status, 200, 'own branch');
+    assert.strictEqual((await call('GET', q([ID.empD, ID.empB]), { as: ID.hrD, branch: ID.dalal })).status, 403, 'one foreign-branch id refuses the whole request');
+    assert.strictEqual((await call('GET', q([ID.empB]), { as: ID.hrD })).status, 403, 'limited HR without a selection cannot read another branch');
+    assert.strictEqual((await call('GET', q([ID.empB]), { as: ID.hrD, branch: ID.bhuj })).status, 403, 'foreign branch header refused');
+    assert.strictEqual((await call('GET', q([ID.empD]), { as: ID.empD })).status, 403, 'employees cannot use the admin batch');
+    assert.strictEqual((await call('GET', q([ID.empD]), { as: ID.froot })).status, 403, 'another organisation never reads Org A employees');
+    assert.strictEqual((await call('GET', q(['abc', ID.empD]), { as: ID.root })).status, 403, 'garbage id');
+    assert.strictEqual((await call('GET', q([999999]), { as: ID.root })).status, 403, 'unknown id');
+    assert.strictEqual((await call('GET', q(Array.from({ length: 501 }, (_, i) => i + 1)), { as: ID.root })).status, 400, 'bounded');
+    assert.deepStrictEqual((await call('GET', '/api/leaves/balance/batch?year=2026', { as: ID.root })).body.balances, {}, 'empty list = empty answer');
+  });
+
   console.log('\nTENANT ISOLATION / CONSTRAINTS');
   await t('login refuses a user with no organisation (no fallback to org 1)', async () => {
     const authRoutes = load('modules/auth/auth.routes');

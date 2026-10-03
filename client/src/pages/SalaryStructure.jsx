@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import {
   DollarSign, Plus, Clock, ChevronRight, CheckCircle2,
   AlertCircle, Search, History, X, TrendingUp, TrendingDown,
@@ -8,6 +9,7 @@ import {
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut } from '@/lib/api';
+import { usePayrollSettings } from '@/hooks/useReferenceData';
 import { Avatar } from '@/components/ui/Avatar';
 import { cn, fmtDate } from '@/lib/utils';
 import {
@@ -790,13 +792,11 @@ export default function SalaryStructure() {
   // Include selectedBranchId so branch switching loads the correct employees.
   const { data: employees = [], isLoading } = useQuery({
     queryKey: ['payroll-employees', selectedBranchId],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn: () => apiGet('/payroll/employees'),
   });
 
-  const { data: payrollSettings } = useQuery({
-    queryKey: ['payroll-settings'],
-    queryFn: () => apiGet('/payroll/settings'),
-  });
+  const { data: payrollSettings } = usePayrollSettings();
 
   const { data: statutoryData } = useQuery({
     queryKey: ['statutory-config'],

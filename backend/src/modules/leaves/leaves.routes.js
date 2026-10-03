@@ -1,14 +1,15 @@
 const express = require('express');
 const router  = express.Router();
 const { sameId } = require('../../utils/ids');
+const { parseListParams, setPagingHeaders, ListParamError } = require('../../utils/listParams');
 const { db, pool } = require('../../config/db');
 const { auth, isAdminRole } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
-const { getUserBranchId, holidayAppliesToBranch, flat, flatOne, orgId, getSettings, getSettingsForUser, isWorkingDay, getRecipients, localDateStr, getOrgContext, toMinutes } = require('../../utils/helpers');
+const { getUserBranchId, holidayAppliesToBranch, flat, flatOne, orgId, getSettings, getEffectiveWorkSchedule, getSettingsForUser, isWorkingDay, getRecipients, localDateStr, getOrgContext, toMinutes } = require('../../utils/helpers');
 const { sendMail, leaveAppliedHtml, leaveStatusHtml, leaveDeptApprovalHtml, leaveForwardedToRootHtml } = require('../../services/emailService');
 const engine = require('../../services/leaveWorkflowEngine');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee } = require('../../utils/branchFilter');
+const { applyBranchUserScope, assertUsersAccessible, resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee } = require('../../utils/branchFilter');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -413,6 +414,61 @@ router.get('/team', auth, withBranchContext, async (req, res) => {
 });
 
 // ─── ROUTE: GET /balance ──────────────────────────────────────────────────────
+// ─── Leave balance core — shared by GET /balance (one employee) and GET /balance/batch (many) ─────────────────────────
+// The calculation itself is unchanged; it only takes its data as arguments so the batch route can load that data ONCE
+// for every employee instead of once per employee.
+const BALANCE_PENDING_STATUSES = ['pending', 'pending_dept', 'pending_root', 'pending_approval'];
+
+/** Leave-cycle window for `yearParam` (defaults to the current cycle). startMonth 1 = calendar year, 4 = Apr–Mar, … */
+async function leaveYearWindow(oId, yearParam) {
+  const { data: orgRow } = await db.from('organizations')
+    .select('leave_year_start_month')
+    .eq('id', oId)
+    .maybeSingle();
+  const startMonth = orgRow?.leave_year_start_month || 1;
+  const now = new Date();
+  const curMonth = now.getMonth() + 1; // 1-indexed
+  const curYear  = now.getFullYear();
+  const defaultYear = (startMonth > 1 && curMonth < startMonth) ? curYear - 1 : curYear;
+  const year = parseInt(yearParam) || defaultYear;
+  const mm       = String(startMonth).padStart(2, '0');
+  const fyStart  = `${year}-${mm}-01`;
+  const fyEndYear  = startMonth === 1 ? year : year + 1;
+  const fyEndMonth = startMonth === 1 ? 12  : startMonth - 1;
+  // Date.UTC month is 0-indexed; day 0 = last day of previous month. UTC avoids TZ shift.
+  const fyEnd = new Date(Date.UTC(fyEndYear, fyEndMonth, 0)).toISOString().split('T')[0];
+  return { year, fyStart, fyEnd };
+}
+
+/** balances[] for one employee from already-loaded policies / leaves / schedule / adjustments */
+function calcLeaveBalances({ policies, leaves, settings, adjustments, year }) {
+  const adjByType = {};
+  (adjustments || []).forEach(a => { adjByType[a.leave_type] = (adjByType[a.leave_type] || 0) + Number(a.delta); });
+  const own = (leaves || []).filter(l => l.leave_time !== 'wfh');
+
+  function workDays(leave) {
+    if (leave.leave_time === 'half') return 0.5;
+    return buildWorkingDates(leave.start_date, leave.end_date, settings).length;
+  }
+
+  return (policies || []).map(p => {
+    const approved = own.filter(l => l.leave_type === p.leave_type && l.status === 'approved');
+    const pending  = own.filter(l => l.leave_type === p.leave_type && BALANCE_PENDING_STATUSES.includes(l.status));
+    const used     = approved.reduce((sum, l) => sum + workDays(l), 0);
+    const inProg   = pending.reduce((sum, l) => sum + workDays(l), 0);
+    const adj      = adjByType[p.leave_type] || 0;
+    return {
+      leave_type:  p.leave_type,
+      label:       p.label || p.leave_type,
+      allocated:   p.annual_quota,
+      adjustment:  Math.round(adj   * 2) / 2,
+      used:        Math.round(used  * 2) / 2,
+      pending:     Math.round(inProg * 2) / 2,
+      remaining:   Math.max(0, p.annual_quota + adj - used),
+    };
+  });
+}
+
 router.get('/balance', auth, withBranchContext, async (req, res) => {
   try {
     const oId   = orgId(req);
@@ -426,28 +482,7 @@ router.get('/balance', auth, withBranchContext, async (req, res) => {
         return res.status(403).json({ error: "You do not have access to this employee's branch." });
     }
 
-    // Fetch org's leave-year start month (1=Jan calendar year, 4=Apr financial year, etc.)
-    const { data: orgRow } = await db.from('organizations')
-      .select('leave_year_start_month')
-      .eq('id', oId)
-      .maybeSingle();
-    const startMonth = orgRow?.leave_year_start_month || 1;
-
-    // Default 'year' to the starting year of the CURRENT leave cycle.
-    // e.g. for Apr-start FY: if today is Feb 2027, the current FY started in Apr 2026 → year=2026.
-    const now = new Date();
-    const curMonth = now.getMonth() + 1; // 1-indexed
-    const curYear  = now.getFullYear();
-    const defaultYear = (startMonth > 1 && curMonth < startMonth) ? curYear - 1 : curYear;
-    const year = parseInt(req.query.year) || defaultYear;
-
-    // Compute the leave-cycle date window for this year + start month
-    const mm       = String(startMonth).padStart(2, '0');
-    const fyStart  = `${year}-${mm}-01`;
-    const fyEndYear  = startMonth === 1 ? year : year + 1;
-    const fyEndMonth = startMonth === 1 ? 12  : startMonth - 1;
-    // Date.UTC month is 0-indexed; day 0 = last day of previous month. UTC avoids TZ shift.
-    const fyEnd = new Date(Date.UTC(fyEndYear, fyEndMonth, 0)).toISOString().split('T')[0];
+    const { year, fyStart, fyEnd } = await leaveYearWindow(oId, req.query.year);
 
     // Use branch-specific leave policies for this employee (if their branch has them),
     // falling back to org-wide policies.
@@ -457,16 +492,16 @@ router.get('/balance', auth, withBranchContext, async (req, res) => {
     if (empBranchId) {
       const { data: branchPols } = await db.from('leave_policies')
         .select('leave_type, label, annual_quota').eq('organization_id', oId)
-        .eq('branch_id', empBranchId).eq('active', true).gt('annual_quota', 0);
+        .eq('branch_id', empBranchId).eq('active', true).gt('annual_quota', 0).order('leave_type');
       if (branchPols && branchPols.length > 0) {
         policiesQuery = Promise.resolve({ data: branchPols });
       } else {
         policiesQuery = db.from('leave_policies').select('leave_type, label, annual_quota')
-          .eq('organization_id', oId).is('branch_id', null).eq('active', true).gt('annual_quota', 0);
+          .eq('organization_id', oId).is('branch_id', null).eq('active', true).gt('annual_quota', 0).order('leave_type');
       }
     } else {
       policiesQuery = db.from('leave_policies').select('leave_type, label, annual_quota')
-        .eq('organization_id', oId).is('branch_id', null).eq('active', true).gt('annual_quota', 0);
+        .eq('organization_id', oId).is('branch_id', null).eq('active', true).gt('annual_quota', 0).order('leave_type');
     }
 
     const [policiesRes, leavesRes, settings, adjRes] = await Promise.all([
@@ -474,7 +509,7 @@ router.get('/balance', auth, withBranchContext, async (req, res) => {
       db.from('leaves')
         .select('leave_type, leave_time, start_date, end_date, status')
         .eq('user_id', targetId).eq('organization_id', oId)
-        .in('status', ['approved', 'pending', 'pending_dept', 'pending_root', 'pending_approval'])
+        .in('status', ['approved', ...BALANCE_PENDING_STATUSES])
         .gte('start_date', fyStart).lte('end_date', fyEnd)
         .neq('leave_type', 'wfh'),
       getSettingsForUser(oId, targetId),
@@ -483,35 +518,63 @@ router.get('/balance', auth, withBranchContext, async (req, res) => {
         .eq('user_id', targetId).eq('org_id', oId).eq('year', year),
     ]);
 
-    const policies = policiesRes.data || [];
-    const leaves   = (leavesRes.data || []).filter(l => l.leave_time !== 'wfh');
+    const balances = calcLeaveBalances({ policies: policiesRes.data, leaves: leavesRes.data, settings, adjustments: adjRes.data, year });
+    res.json({ year, balances });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
-    const adjByType = {};
-    (adjRes.data || []).forEach(a => { adjByType[a.leave_type] = (adjByType[a.leave_type] || 0) + Number(a.delta); });
+// ─── ROUTE: GET /balance/batch?userIds=1,2,3&year=2026 ───────────────────────────────────────────────────────────────
+// The balances of many employees in ONE request (the Leaves page and the Employees list used to send one /balance request
+// per employee — 100+ requests per page load). Same calculation, same policy / schedule / adjustment rules as GET /balance;
+// admin callers only, and every requested employee must be inside the caller's organisation AND branch scope, otherwise the
+// whole request is refused (no partial answers that would reveal which ids exist).
+// Response: { year, balances: { "<userId>": [ …same objects as GET /balance… ] } }
+const BALANCE_BATCH_MAX = 500;
+router.get('/balance/batch', auth, withBranchContext, async (req, res) => {
+  try {
+    if (!isAdminRole(req.user.role)) return res.status(403).json({ error: 'Admin access required' });
+    const oId = orgId(req);
+    const raw = String(req.query.userIds || '').split(',').map(x => x.trim()).filter(Boolean);
+    if (!raw.length) return res.json({ year: (await leaveYearWindow(oId, req.query.year)).year, balances: {} });
+    if (raw.length > BALANCE_BATCH_MAX) return res.status(400).json({ error: `At most ${BALANCE_BATCH_MAX} employees per request.` });
+    const access = await assertUsersAccessible(req.branchContext, raw.map(Number), oId);
+    if (!access.ok) return res.status(403).json({ error: "You do not have access to one or more of these employees." });
+    const ids = access.ids;
 
-    function workDays(leave) {
-      if (leave.leave_time === 'half') return 0.5;
-      return buildWorkingDates(leave.start_date, leave.end_date, settings).length;
+    const { year, fyStart, fyEnd } = await leaveYearWindow(oId, req.query.year);
+
+    // everything is loaded once for ALL employees, then split per employee in memory
+    const [usersRes, polRes, leavesRes, adjRes] = await Promise.all([
+      pool.query(`SELECT id, branch_id FROM users WHERE organization_id = $1 AND id = ANY($2::bigint[])`, [oId, ids]),
+      pool.query(`SELECT leave_type, label, annual_quota, branch_id FROM leave_policies WHERE organization_id = $1 AND active = true AND annual_quota > 0 ORDER BY leave_type`, [oId]),
+      pool.query(`SELECT user_id, leave_type, leave_time, start_date, end_date, status FROM leaves
+                    WHERE organization_id = $1 AND user_id = ANY($2::bigint[]) AND status = ANY($3::text[])
+                      AND start_date >= $4 AND end_date <= $5 AND leave_type <> 'wfh'`,
+        [oId, ids, ['approved', ...BALANCE_PENDING_STATUSES], fyStart, fyEnd]),
+      pool.query(`SELECT user_id, leave_type, delta FROM leave_balance_adjustments WHERE org_id = $1 AND year = $2 AND user_id = ANY($3::bigint[])`, [oId, year, ids]),
+    ]);
+
+    const branchOf = new Map(usersRes.rows.map(u => [Number(u.id), u.branch_id == null ? null : Number(u.branch_id)]));
+    const orgPolicies = polRes.rows.filter(p => p.branch_id == null);
+    const policiesFor = (branchId) => {                       // branch-specific set if the branch has any, else the org-wide set
+      if (branchId != null) { const own = polRes.rows.filter(p => Number(p.branch_id) === branchId); if (own.length) return own; }
+      return orgPolicies;
+    };
+    const scheduleCache = new Map();                          // effective work schedule per branch (users without a branch → org schedule)
+    const scheduleFor = async (branchId) => {
+      const k = branchId == null ? 'org' : String(branchId);
+      if (!scheduleCache.has(k)) scheduleCache.set(k, branchId == null ? await getSettings(oId) : await getEffectiveWorkSchedule(oId, branchId));
+      return scheduleCache.get(k);
+    };
+    const group = (rows) => { const m = new Map(); for (const r of rows) { const k = Number(r.user_id); (m.get(k) || m.set(k, []).get(k)).push(r); } return m; };
+    const leavesBy = group(leavesRes.rows), adjBy = group(adjRes.rows);
+
+    const balances = {};
+    for (const id of ids) {
+      if (!branchOf.has(id)) continue;                        // (assertUsersAccessible already guarantees membership)
+      const b = branchOf.get(id);
+      balances[id] = calcLeaveBalances({ policies: policiesFor(b), leaves: leavesBy.get(id) || [], settings: await scheduleFor(b), adjustments: adjBy.get(id) || [], year });
     }
-
-    const pendingStatuses = ['pending', 'pending_dept', 'pending_root', 'pending_approval'];
-    const balances = policies.map(p => {
-      const approved = leaves.filter(l => l.leave_type === p.leave_type && l.status === 'approved');
-      const pending  = leaves.filter(l => l.leave_type === p.leave_type && pendingStatuses.includes(l.status));
-      const used     = approved.reduce((s, l) => s + workDays(l), 0);
-      const inProg   = pending.reduce((s, l) => s + workDays(l), 0);
-      const adj      = adjByType[p.leave_type] || 0;
-      return {
-        leave_type:  p.leave_type,
-        label:       p.label || p.leave_type,
-        allocated:   p.annual_quota,
-        adjustment:  Math.round(adj   * 2) / 2,
-        used:        Math.round(used  * 2) / 2,
-        pending:     Math.round(inProg * 2) / 2,
-        remaining:   Math.max(0, p.annual_quota + adj - used),
-      };
-    });
-
     res.json({ year, balances });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -815,10 +878,10 @@ router.get('/', auth, withBranchContext, async (req, res) => {
         return res.status(403).json({ error: "You do not have access to this employee's branch." });
       query = query.eq('user_id', parseInt(userId));
     } else {
-      // Admin viewing all leaves — apply branch filter
-      const empIds = await resolveEmployeeIds(req.branchContext, orgId(req));
-      if (empIds !== null && empIds.length === 0) return res.json([]);
-      if (empIds !== null) query = query.in('user_id', empIds);
+      // Admin viewing all leaves — apply branch filter // branch scope as a SQL subquery (no employee-id list round trip)
+      const scope = applyBranchUserScope(query, 'user_id', req.branchContext, orgId(req));
+      if (scope.empty) return res.json([]);
+      query = scope.query;
     }
     if (year && month) {
       const ym = `${year}-${String(month).padStart(2,'0')}`;
@@ -829,8 +892,20 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       query = query.lte('start_date', req.query.endDate).gte('end_date', req.query.startDate);
     }
 
-    const { data, error } = await query;
+    // Optional server-side narrowing (no params = unchanged behaviour). Applied AFTER the RBAC + branch filters above.
+    const lp = parseListParams(req.query);
+    if (lp.statuses) query = query.in('status', lp.statuses);
+    if (lp.from)     query = query.gte('end_date', lp.from);     // leave overlaps [from, to]
+    if (lp.to)       query = query.lte('start_date', lp.to);
+    if (lp.paging)   query = query.range(lp.paging.offset, lp.paging.offset + lp.paging.limit);   // +1 row = "has more" probe
+
+    const { data: rawLeaves, error } = await query;
     if (error) throw new Error(error.message);
+    let data = rawLeaves;
+    if (lp.paging) {
+      setPagingHeaders(res, lp.paging, (rawLeaves || []).length > lp.paging.limit);
+      data = (rawLeaves || []).slice(0, lp.paging.limit);
+    }
 
     const result = (data || []).map(l => ({
       ...l, ...l.users,
@@ -914,7 +989,10 @@ router.get('/', auth, withBranchContext, async (req, res) => {
     }
 
     res.json(result);
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    if (err instanceof ListParamError) return res.status(400).json({ error: err.message });
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ─── ROUTE: POST / — create leave ─────────────────────────────────────────────

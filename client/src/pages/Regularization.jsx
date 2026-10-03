@@ -11,6 +11,9 @@ import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { Avatar } from '@/components/ui/Avatar';
 import { fmtDate } from '@/lib/utils';
 import { DateInput } from '@/components/ui/DateInput';
+import { useRegularizations, HISTORY_DAYS, historyFrom } from '@/hooks/useListQueries';
+import { useMyAttendanceRecord, useMyPunches } from '@/hooks/useAttendanceDay';
+import { HistoryWindowNote, RefreshingOverlay } from '@/components/ui/HistoryWindowNote';
 
 function fmtPunchTs(ts) {
   if (!ts) return '--';
@@ -187,46 +190,18 @@ function ApplyModal({ open, onClose, initialDate }) {
   const qc    = useQueryClient();
   const [form, setForm] = useState({ date: initialDate || '', requested_check_in: '', requested_check_out: '', reason: '' });
   const [timeErr, setTimeErr] = useState('');
-  // EHN_REGU_002: attendance record for selected date
-  const [attRecord,    setAttRecord]    = useState(null);
-  const [attLoading,   setAttLoading]   = useState(false);
-  // Biometric raw punch log for selected date
-  const [punches,      setPunches]      = useState([]);
-  const [punchLoading, setPunchLoading] = useState(false);
-  // EHN_REGU_001: pending dates set
-  const [pendingDates, setPendingDates] = useState(new Set());
+  // EHN_REGU_002: attendance record + biometric raw punch log for the selected date (cached per day — see useAttendanceDay)
+  const { data: attData, isLoading: attLoading } = useMyAttendanceRecord(form.date, open);
+  const { data: punchData, isLoading: punchLoading } = useMyPunches(form.date, open);
+  const attRecord = open && form.date ? (attData ?? null) : null;
+  const punches = open && form.date && Array.isArray(punchData) ? punchData : [];
+  // EHN_REGU_001: dates that already have a pending request (server-side status filter; shared list cache)
+  const { data: pendingRegs } = useRegularizations({ statuses: ['pending'] }, { enabled: open });
+  const pendingDates = useMemo(() => new Set((Array.isArray(pendingRegs) ? pendingRegs : []).map(r => r.date)), [pendingRegs]);
 
   useEffect(() => {
-    if (open && initialDate) {
-      setForm(f => ({ ...f, date: initialDate }));
-      // Fetch attendance + punches for the pre-filled date
-      setAttLoading(true);
-      apiGet('/attendance/my-record', { date: initialDate })
-        .then(d => setAttRecord(d))
-        .catch(() => setAttRecord(null))
-        .finally(() => setAttLoading(false));
-      setPunchLoading(true);
-      apiGet('/biometric/my-punches', { date: initialDate })
-        .then(d => setPunches(Array.isArray(d) ? d : []))
-        .catch(() => setPunches([]))
-        .finally(() => setPunchLoading(false));
-    }
-    if (!open) {
-      setAttRecord(null);
-      setPunches([]);
-    }
+    if (open && initialDate) setForm(f => ({ ...f, date: initialDate }));
   }, [open, initialDate]);
-
-  // Fetch pending dates for this employee when modal opens
-  useEffect(() => {
-    if (!open) return;
-    apiGet('/regularization').then(data => {
-      if (Array.isArray(data)) {
-        const pending = new Set(data.filter(r => r.status === 'pending').map(r => r.date));
-        setPendingDates(pending);
-      }
-    }).catch(() => {});
-  }, [open]);
   const set = (k, v) => {
     setForm(f => {
       const updated = { ...f, [k]: v };
@@ -273,24 +248,7 @@ function ApplyModal({ open, onClose, initialDate }) {
           <input type="date" className={`form-control ${form.date && pendingDates.has(form.date) ? 'border-amber-400' : ''}`}
             value={form.date}
             onChange={e => {
-              const val = e.target.value;
-              set('date', val);
-              setAttRecord(null);
-              setPunches([]);
-              if (val) {
-                // Fetch processed attendance record
-                setAttLoading(true);
-                apiGet('/attendance/my-record', { date: val })
-                  .then(d => setAttRecord(d))
-                  .catch(() => setAttRecord(null))
-                  .finally(() => setAttLoading(false));
-                // Fetch raw biometric punch log
-                setPunchLoading(true);
-                apiGet('/biometric/my-punches', { date: val })
-                  .then(d => setPunches(Array.isArray(d) ? d : []))
-                  .catch(() => setPunches([]))
-                  .finally(() => setPunchLoading(false));
-              }
+              set('date', e.target.value);   // the date-keyed queries above load the attendance + punches
             }}
             max={new Date().toISOString().split('T')[0]} />
           {/* EHN_REGU_001: warn if date already has a pending request */}
@@ -870,7 +828,14 @@ export default function Regularization() {
     staleTime: 60 * 1000,
   });
 
-  const { data: _regData, isLoading } = useQuery({ queryKey: ['regularization', selectedBranchId], queryFn: () => apiGet('/regularization') });
+  // Admin: recent history by default (server-side window), full history on request / when a date filter or a
+  // highlighted request needs it. Employees keep their own full list (small). Status tabs stay client-side
+  // because their counts need every status.
+  const [allHistory, setAllHistory] = useState(() => !!highlightId);
+  const hasDateFilter = !!(dateFrom || dateTo);
+  const showWindowNote = isAdmin && !hasDateFilter;
+  const regParams = !isAdmin ? {} : { from: (allHistory || hasDateFilter) ? undefined : historyFrom(HISTORY_DAYS.regularization) };
+  const { data: _regData, isLoading, isPlaceholderData: regStale, isFetching: regFetching } = useRegularizations(regParams);
   const requests = Array.isArray(_regData) ? _regData : [];
 
   // BUG_094: scroll to highlighted request; clear filters so the item is visible
@@ -1188,6 +1153,12 @@ export default function Regularization() {
         )}
       </div>
 
+      {showWindowNote && (
+        <HistoryWindowNote since={historyFrom(HISTORY_DAYS.regularization)} showingAll={allHistory} noun="requests"
+          loading={regFetching} onToggle={() => setAllHistory(v => !v)} />
+      )}
+
+      <RefreshingOverlay active={regStale}>
       {isLoading ? (
         <div className="loading"><div className="spinner" />Loading…</div>
       ) : filtered.length === 0 ? (
@@ -1375,6 +1346,7 @@ export default function Regularization() {
           )}
         </div>
       )}
+      </RefreshingOverlay>
 
       {applyOpen && !isAdmin && hasBiometric && (
         <MultiDayApplyModal open onClose={() => setApplyOpen(false)} initialDate={dateParam} />
