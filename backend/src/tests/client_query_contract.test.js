@@ -162,6 +162,21 @@ t('admin pages wait for the branch context before fetching (no first-load duplic
   assert.match(g, /GATE_TIMEOUT_MS = 5000/);
 });
 
+console.log('\nPAYLOAD (Phase 4)');
+t('list hooks request the compact view; Leaves narrows by date on the server and takes badge counts from /leaves/counts', () => {
+  const h = read('hooks/useListQueries.js');
+  for (const ep of ["'/leaves', { view: 'list', ...params }", "'/regularization', { view: 'list', ...params }", "'/expenses', { view: 'list', ...params }"]) assert.ok(h.includes(ep), ep);
+  assert.match(h, /useLeaveCounts = /);
+  const l = read('pages/Leaves.jsx');
+  assert.match(l, /from: hasDateFilter \? \(filterStart \|\| undefined\)/); assert.match(l, /to: hasDateFilter \? \(filterEnd \|\| undefined\)/);
+  assert.match(l, /badgeServerSide \? \(badgeCounts\?\.pending/);
+});
+t('no screen reads a column the compact view drops (list screens only)', () => {
+  const dropped = ['google_event_id', 'dept_head_id', 'dept_head_reviewed_at', 'root_admin_id', 'root_admin_reviewed_at', 'manager_approved_at'];
+  const screens = ['pages/Leaves.jsx', 'pages/MyLeaves.jsx', 'pages/Regularization.jsx', 'pages/Expenses.jsx', 'pages/PendingApprovals.jsx', 'pages/EmployeeHome.jsx', 'components/LeaveTimeline.jsx'];
+  for (const rel of screens) for (const col of dropped) assert.ok(!new RegExp('\\b' + col + '\\b').test(read(rel)), rel + ' reads ' + col);
+});
+
 console.log('\nGLOBAL SEARCH');
 t('search reuses shared hooks and makes no API call of its own', () => {
   const s = read('components/ui/GlobalSearchModal.jsx');

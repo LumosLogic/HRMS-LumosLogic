@@ -1,7 +1,7 @@
 const express    = require('express');
 const router     = express.Router();
 const { sameId } = require('../../utils/ids');
-const { parseListParams, setPagingHeaders, ListParamError } = require('../../utils/listParams');
+const { parseListParams, setPagingHeaders, compactRows, ListParamError } = require('../../utils/listParams');
 const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
@@ -60,14 +60,15 @@ router.get('/', auth, withBranchContext, async (req, res) => {
     const uMap = {};
     (users || []).forEach(u => { uMap[u.id] = u; });
 
-    res.json(rows.map(r => ({
+    const out = rows.map(r => ({
       ...r,
       user_name:         uMap[r.user_id]?.name  || '',
       user_avatar_color: uMap[r.user_id]?.avatar_color || '',
       user_department:   uMap[r.user_id]?.department   || '',
       reviewer_name:     uMap[r.reviewed_by]?.name     || '',
       manager_name:      uMap[r.manager_id]?.name      || '',
-    })));
+    }));
+    res.json(lp.view === 'list' ? compactRows(out, 'expenses') : out);
   } catch (err) {
     if (err instanceof ListParamError) return res.status(400).json({ error: err.message });
     res.status(500).json({ error: err.message });

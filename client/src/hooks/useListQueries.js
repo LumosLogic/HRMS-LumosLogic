@@ -59,13 +59,18 @@ function useListQuery(root, extraKey, endpoint, params, { enabled = true, staleT
 }
 
 /** GET /leaves — params: userId, year, month, statuses, from, to, limit, page */
-export const useLeavesList = (params = {}, opts) => useListQuery(['leaves'], ['list'], '/leaves', params, opts);
+// view=list: the server drops columns no screen reads (see backend utils/listParams LIST_VIEW_DROP); every field the web
+// screens use is kept. Other API consumers are unaffected — the compact view is opt-in.
+export const useLeavesList = (params = {}, opts) => useListQuery(['leaves'], ['list'], '/leaves', { view: 'list', ...params }, opts);
+
+/** GET /leaves/counts — { pending, wfh_pending } for the Leaves tab badges without downloading the rows. params: from, userId */
+export const useLeaveCounts = (params = {}, opts) => useListQuery(['leaves'], ['counts'], '/leaves/counts', params, opts);
 
 /** GET /regularization — params: statuses, from, to, limit, page */
-export const useRegularizations = (params = {}, opts) => useListQuery(['regularization'], [], '/regularization', params, opts);
+export const useRegularizations = (params = {}, opts) => useListQuery(['regularization'], [], '/regularization', { view: 'list', ...params }, opts);
 
 /** GET /expenses — params: statuses, from, to, limit, page */
-export const useExpenses = (params = {}, opts) => useListQuery(['expenses'], [], '/expenses', params, opts);
+export const useExpenses = (params = {}, opts) => useListQuery(['expenses'], [], '/expenses', { view: 'list', ...params }, opts);
 
 /** GET /leave-policies — organisation/branch policy set (branch-dependent, so the branch is in the key) */
 // configuration: long cache, invalidated by every policy save (LeavePolicies, ConfigGroupsManager, MyLeaves apply)

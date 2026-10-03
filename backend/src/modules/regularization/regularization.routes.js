@@ -7,7 +7,7 @@ const { hasPermission } = require('../../middleware/permissions');
 const { generateEmployeePayslip } = require('../../services/payrollGenerationService');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { applyBranchUserScope, resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee } = require('../../utils/branchFilter');
-const { parseListParams, setPagingHeaders, ListParamError } = require('../../utils/listParams');
+const { parseListParams, setPagingHeaders, compactRows, ListParamError } = require('../../utils/listParams');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
@@ -88,14 +88,15 @@ router.get('/', auth, withBranchContext, async (req, res) => {
     const userMap = {};
     (users || []).forEach(u => { userMap[u.id] = u; });
 
-    res.json(rows.map(r => ({
+    const out = rows.map(r => ({
       ...r,
       user_name:          userMap[r.user_id]?.name || '',
       user_avatar_color:  userMap[r.user_id]?.avatar_color || '',
       user_department:    userMap[r.user_id]?.department || '',
       user_position:      userMap[r.user_id]?.position || '',
       reviewer_name:      userMap[r.reviewed_by]?.name || '',
-    })));
+    }));
+    res.json(lp.view === 'list' ? compactRows(out, 'regularization') : out);
   } catch (err) {
     if (err instanceof ListParamError) return res.status(400).json({ error: err.message });
     res.status(500).json({ error: err.message });

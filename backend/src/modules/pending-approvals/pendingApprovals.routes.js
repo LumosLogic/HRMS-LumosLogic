@@ -28,10 +28,10 @@ const LEAVE_STATUSES = 'pending,pending_approval,pending_dept,pending_root';
 router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const parts = {
-      leaves:          dispatchGet(leavesRouter, '/', { status: LEAVE_STATUSES }, req),
+      leaves:          dispatchGet(leavesRouter, '/', { status: LEAVE_STATUSES, view: 'list' }, req),
       my_approvals:    dispatchGet(leavesRouter, '/my-approvals', {}, req),
-      regularizations: dispatchGet(regularizationRouter, '/', { status: 'pending' }, req),
-      expenses:        dispatchGet(expensesRouter, '/', { status: 'pending,manager_approved' }, req),
+      regularizations: dispatchGet(regularizationRouter, '/', { status: 'pending', view: 'list' }, req),
+      expenses:        dispatchGet(expensesRouter, '/', { status: 'pending,manager_approved', view: 'list' }, req),
     };
     const keys = Object.keys(parts);
     const results = await Promise.all(keys.map(k => parts[k]));
@@ -41,6 +41,12 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       if (r.status >= 200 && r.status < 300 && Array.isArray(r.body)) out[k] = r.body;
       else { out[k] = []; out.failed.push(k); }
     });
+    // A leave the caller must act on appears in BOTH `leaves` and `my_approvals` (the latter with the workflow's current_level_*
+    // enrichment). The page already prefers my_approvals and drops those ids from `leaves`, so send each leave only once.
+    if (out.leaves.length && out.my_approvals.length) {
+      const mine = new Set(out.my_approvals.map(l => String(l.id)));
+      out.leaves = out.leaves.filter(l => !mine.has(String(l.id)));
+    }
     // A branch the caller may not use is rejected by withBranchContext before we get here (403), so a part
     // failing with 403 can only be a missing per-endpoint permission — report it as empty, like the old page did.
     res.json(out);

@@ -1,7 +1,7 @@
 const express = require('express');
 const router  = express.Router();
 const { sameId } = require('../../utils/ids');
-const { parseListParams, setPagingHeaders, ListParamError } = require('../../utils/listParams');
+const { parseListParams, setPagingHeaders, compactRows, ListParamError } = require('../../utils/listParams');
 const { db, pool } = require('../../config/db');
 const { auth, isAdminRole } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
@@ -9,7 +9,7 @@ const { getUserBranchId, holidayAppliesToBranch, flat, flatOne, orgId, getSettin
 const { sendMail, leaveAppliedHtml, leaveStatusHtml, leaveDeptApprovalHtml, leaveForwardedToRootHtml } = require('../../services/emailService');
 const engine = require('../../services/leaveWorkflowEngine');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { applyBranchUserScope, assertUsersAccessible, resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee } = require('../../utils/branchFilter');
+const { applyBranchUserScope, getFilterState, assertUsersAccessible, resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee } = require('../../utils/branchFilter');
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -895,6 +895,7 @@ router.get('/', auth, withBranchContext, async (req, res) => {
     // Optional server-side narrowing (no params = unchanged behaviour). Applied AFTER the RBAC + branch filters above.
     const lp = parseListParams(req.query);
     if (lp.statuses) query = query.in('status', lp.statuses);
+    if (lp.types)    query = query.in('leave_type', lp.types);
     if (lp.from)     query = query.gte('end_date', lp.from);     // leave overlaps [from, to]
     if (lp.to)       query = query.lte('start_date', lp.to);
     if (lp.paging)   query = query.range(lp.paging.offset, lp.paging.offset + lp.paging.limit);   // +1 row = "has more" probe
@@ -988,7 +989,44 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       console.warn('[leaves] approval trail fetch skipped:', e.message);
     }
 
-    res.json(result);
+    res.json(lp.view === 'list' ? compactRows(result, 'leaves') : result);
+  } catch (err) {
+    if (err instanceof ListParamError) return res.status(400).json({ error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── ROUTE: GET /counts?from=&userId= ──────────────────────────────────────────────────────────────────────────────
+// The Leaves page tab badges (pending leaves / pending WFH) without downloading the rows behind them. Same scope as GET /
+// (employees: own leaves; admins: their branch scope, or one employee via userId with the same access check), same
+// definition of "pending" and "WFH" as the page, optional `from` = leaves ending on/after that date.
+// Response: { pending, wfh_pending }
+router.get('/counts', auth, withBranchContext, async (req, res) => {
+  try {
+    const oId = orgId(req);
+    const lp = parseListParams({ from: req.query.from });
+    const params = [oId, ['pending', 'pending_dept', 'pending_root', 'pending_approval']];
+    let scope = '';
+    if (!isAdminRole(req.user.role)) { params.push(req.user.id); scope = `AND l.user_id = $${params.length}`; }
+    else if (req.query.userId) {
+      const uid = parseInt(req.query.userId, 10);
+      if (!Number.isInteger(uid) || !await canAdminAccessUser(req.branchContext, uid, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+      params.push(uid); scope = `AND l.user_id = $${params.length}`;
+    } else {
+      const st = getFilterState(req.branchContext);
+      if (st.type === 'none') return res.json({ pending: 0, wfh_pending: 0 });
+      if (st.type === 'specific') { params.push(st.branchId);  scope = `AND l.user_id IN (SELECT id FROM users WHERE organization_id = $1 AND branch_id = $${params.length})`; }
+      if (st.type === 'multi')    { params.push(st.branchIds); scope = `AND l.user_id IN (SELECT id FROM users WHERE organization_id = $1 AND branch_id = ANY($${params.length}::bigint[]))`; }
+    }
+    let fromSql = '';
+    if (lp.from) { params.push(lp.from); fromSql = `AND l.end_date >= $${params.length}`; }
+    const { rows } = await pool.query(
+      `SELECT COUNT(*) FILTER (WHERE COALESCE(l.leave_time,'') <> 'wfh' AND COALESCE(l.leave_type,'') <> 'wfh')::int AS pending,
+              COUNT(*) FILTER (WHERE l.leave_time = 'wfh' OR l.leave_type = 'wfh')::int AS wfh_pending
+         FROM leaves l
+        WHERE l.organization_id = $1 AND l.status = ANY($2::text[]) ${scope} ${fromSql}`, params);
+    res.json(rows[0]);
   } catch (err) {
     if (err instanceof ListParamError) return res.status(400).json({ error: err.message });
     res.status(500).json({ error: err.message });

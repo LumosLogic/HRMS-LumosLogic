@@ -764,7 +764,9 @@ async function devicePunch(sn, pin, when) {
       const oldRegs = arr(await call('GET', '/api/regularization', who)).filter(r => r.status === 'pending');
       const oldExp = arr(await call('GET', '/api/expenses', who)).filter(e => ['pending', 'manager_approved'].includes(e.status));
       const label = JSON.stringify(who);
-      assert.deepStrictEqual(idsOf(sum.body.leaves), idsOf(oldLeaves), 'leaves ' + label);
+      // a leave that is in my_approvals is sent once (there); what the page can see is unchanged: leaves ∪ my_approvals
+      assert.deepStrictEqual(idsOf([...sum.body.leaves, ...sum.body.my_approvals.filter(m => oldLeaves.some(o => Number(o.id) === Number(m.id)))]), idsOf(oldLeaves), 'leaves ' + label);
+      assert.ok(!sum.body.leaves.some(l => sum.body.my_approvals.some(m => Number(m.id) === Number(l.id))), 'no leave is sent twice ' + label);
       assert.deepStrictEqual(idsOf(sum.body.my_approvals), idsOf(oldMy), 'my_approvals ' + label);
       assert.deepStrictEqual(idsOf(sum.body.regularizations), idsOf(oldRegs), 'regularizations ' + label);
       assert.deepStrictEqual(idsOf(sum.body.expenses), idsOf(oldExp), 'expenses ' + label);
@@ -892,6 +894,77 @@ async function devicePunch(sn, pin, when) {
     assert.strictEqual((await call('GET', q([999999]), { as: ID.root })).status, 403, 'unknown id');
     assert.strictEqual((await call('GET', q(Array.from({ length: 501 }, (_, i) => i + 1)), { as: ID.root })).status, 400, 'bounded');
     assert.deepStrictEqual((await call('GET', '/api/leaves/balance/batch?year=2026', { as: ID.root })).body.balances, {}, 'empty list = empty answer');
+  });
+
+
+  console.log('\nPAYLOAD: compact list view, type filter, server-side counts');
+  const KEPT_LEAVE = ['id', 'user_id', 'start_date', 'end_date', 'leave_type', 'leave_time', 'half_type', 'reason', 'remarks', 'status', 'approved_at', 'created_at',
+    'dept_head_status', 'root_admin_status', 'workflow_id', 'current_level', 'current_approver_id', 'name', 'avatar_color', 'department', 'approver_name', 'approval_trail'];
+  const DROPPED_LEAVE = ['organization_id', 'google_event_id', 'deleted_at', 'dept_head_id', 'dept_head_reviewed_at', 'root_admin_id', 'root_admin_reviewed_at', 'approved_by', 'email'];
+  await t('GET /leaves?view=list drops only unused columns; without view the full row is unchanged; same rows either way', async () => {
+    const full = (await call('GET', '/api/leaves', { as: ID.root })).body, lite = (await call('GET', '/api/leaves?view=list', { as: ID.root })).body;
+    assert.deepStrictEqual(idsOf(lite), idsOf(full), 'identical set of rows');
+    for (const k of DROPPED_LEAVE) { assert.ok(k in full[0], 'full row still has ' + k); assert.ok(!(k in lite[0]), 'compact row dropped ' + k); }
+    for (const k of KEPT_LEAVE) assert.ok(k in lite[0], 'compact row keeps ' + k);
+    const byId = new Map(full.map(r => [r.id, r]));
+    for (const r of lite) for (const k of Object.keys(r)) assert.deepStrictEqual(r[k], byId.get(r.id)[k], k + ' value unchanged');
+    assert.ok(JSON.stringify(lite).length < JSON.stringify(full).length, 'smaller');
+    assert.strictEqual((await call('GET', '/api/leaves?view=full', { as: ID.root })).status, 400);
+  });
+  await t('GET /leaves?type= filters server-side; invalid type refused; scope unchanged', async () => {
+    await lv(ID.empD, 'approved', '2026-05-05', '2026-05-05', 'sick for type filter');
+    await S(`UPDATE leaves SET leave_type='sick' WHERE reason='sick for type filter'`);
+    const sick = (await call('GET', '/api/leaves?type=sick', { as: ID.root })).body;
+    assert.ok(sick.length > 0 && sick.every(l => l.leave_type === 'sick'));
+    const both = (await call('GET', '/api/leaves?type=sick,casual', { as: ID.root })).body;
+    assert.ok(both.every(l => ['sick', 'casual'].includes(l.leave_type)) && both.length >= sick.length);
+    assert.strictEqual((await call('GET', '/api/leaves?type=casual;drop', { as: ID.root })).status, 400);
+    const d = (await call('GET', '/api/leaves?type=casual&view=list', { as: ID.hrD, branch: ID.dalal })).body;
+    assert.ok(!idsOf(d).includes(Number(L.deptB)) && !idsOf(d).includes(Number(L.rootB)), 'Dalal HR never gets Bhuj rows');
+  });
+  await t('GET /leaves/counts equals the counts computed from the rows it replaces (admin scope, branch scope, own, from, userId)', async () => {
+    await lv(ID.empD, 'pending', '2026-12-20', '2026-12-20', 'wfh pending test').then(id => S(`UPDATE leaves SET leave_time='wfh', leave_type='wfh' WHERE id=$1`, [id]));
+    await resetAccess();
+    const PEND = ['pending', 'pending_dept', 'pending_root', 'pending_approval'];
+    const fromRows = (rows) => ({ pending: rows.filter(l => PEND.includes(l.status) && l.leave_time !== 'wfh' && l.leave_type !== 'wfh').length,
+                                  wfh_pending: rows.filter(l => PEND.includes(l.status) && (l.leave_time === 'wfh' || l.leave_type === 'wfh')).length });
+    for (const who of [{ as: ID.root }, { as: ID.hrD, branch: ID.dalal }, { as: ID.hrB, branch: ID.bhuj }, { as: ID.hrAll }, { as: ID.empD }, { as: ID.empB }]) {
+      for (const qs of ['', '?from=2026-06-01']) {
+        const rows = (await call('GET', '/api/leaves' + qs, who)).body;
+        const c = await call('GET', '/api/leaves/counts' + qs, who);
+        assert.strictEqual(c.status, 200, JSON.stringify(c.body));
+        assert.deepStrictEqual(c.body, fromRows(rows), JSON.stringify(who) + ' ' + qs);
+      }
+    }
+    assert.ok((await call('GET', '/api/leaves/counts', { as: ID.root })).body.wfh_pending >= 1, 'wfh pending is counted separately');
+    const one = await call('GET', `/api/leaves/counts?userId=${ID.empD}`, { as: ID.hrD, branch: ID.dalal });
+    assert.deepStrictEqual(one.body, fromRows((await call('GET', `/api/leaves?userId=${ID.empD}`, { as: ID.hrD, branch: ID.dalal })).body));
+    assert.strictEqual((await call('GET', `/api/leaves/counts?userId=${ID.empB}`, { as: ID.hrD, branch: ID.dalal })).status, 403, 'other branch employee refused');
+    assert.strictEqual((await call('GET', '/api/leaves/counts', { as: ID.hrD, branch: ID.bhuj })).status, 403, 'foreign branch header refused');
+    const f = (await call('GET', '/api/leaves/counts', { as: ID.froot })).body;
+    assert.ok(f.pending === 0 && f.wfh_pending === 0, 'another organisation counts only its own leaves');
+    assert.strictEqual((await call('GET', '/api/leaves/counts?from=not-a-date', { as: ID.root })).status, 400);
+  });
+  await t('regularization / expenses ?view=list: same rows, unused columns dropped, every field the screens read kept', async () => {
+    const rf = (await call('GET', '/api/regularization', { as: ID.root })).body, rl = (await call('GET', '/api/regularization?view=list', { as: ID.root })).body;
+    assert.deepStrictEqual(idsOf(rl), idsOf(rf));
+    for (const k of ['organization_id', 'reviewed_by']) { assert.ok(k in rf[0]); assert.ok(!(k in rl[0])); }
+    for (const k of ['id', 'user_id', 'date', 'requested_check_in', 'requested_check_out', 'reason', 'status', 'reviewer_notes', 'reviewed_at', 'created_at', 'type', 'requested_early_exit_time', 'actual_check_in', 'actual_check_out', 'user_name', 'user_avatar_color', 'user_department', 'user_position', 'reviewer_name']) { if (k in rf[0]) assert.ok(k in rl[0], 'regularization keeps ' + k); }
+    const ef = (await call('GET', '/api/expenses', { as: ID.root })).body, el = (await call('GET', '/api/expenses?view=list', { as: ID.root })).body;
+    assert.deepStrictEqual(idsOf(el), idsOf(ef));
+    for (const k of ['organization_id', 'deleted_at', 'reviewed_by', 'manager_approved_at']) { assert.ok(k in ef[0]); assert.ok(!(k in el[0])); }
+    for (const k of ['id', 'user_id', 'title', 'category', 'amount', 'expense_date', 'description', 'receipt_url', 'receipt_filename', 'merchant_name', 'receipt_number', 'status', 'reviewer_notes', 'reviewed_at', 'created_at', 'manager_id', 'manager_notes', 'user_name', 'user_avatar_color', 'user_department', 'reviewer_name', 'manager_name']) { if (k in ef[0]) assert.ok(k in el[0], 'expenses keeps ' + k); }   // (a column the scratch schema lacks cannot be asserted)
+    assert.strictEqual((await call('GET', '/api/expenses?view=nope', { as: ID.root })).status, 400);
+    const hr = (await call('GET', '/api/regularization?view=list', { as: ID.hrD, branch: ID.dalal })).body;
+    assert.ok(!idsOf(hr).includes(Number(L.regPendB)), 'branch isolation unchanged under the compact view');
+  });
+  await t('pending-approvals summary uses the compact rows and still equals the per-endpoint results (ids)', async () => {
+    const sum = (await call('GET', '/api/pending-approvals', { as: ID.root })).body;
+    for (const row of sum.leaves) for (const k of DROPPED_LEAVE) assert.ok(!(k in row), 'summary leaf row has no ' + k);
+    for (const row of sum.expenses) assert.ok(!('organization_id' in row));
+    const PEND = ['pending', 'pending_approval', 'pending_dept', 'pending_root'];
+    const oldPend = (await call('GET', '/api/leaves', { as: ID.root })).body.filter(l => PEND.includes(l.status));
+    assert.deepStrictEqual(idsOf([...sum.leaves, ...sum.my_approvals.filter(m => oldPend.some(o => Number(o.id) === Number(m.id)))]), idsOf(oldPend), 'every pending leave is present exactly once (in leaves or my_approvals)');
   });
 
   console.log('\nTENANT ISOLATION / CONSTRAINTS');

@@ -8,7 +8,7 @@ import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { useHolidays, useOrgSettings } from '@/hooks/useReferenceData';
 import { useEmployees } from '@/hooks/useEmployees';
-import { useLeavesList, useLeavePolicies, HISTORY_DAYS, historyFrom } from '@/hooks/useListQueries';
+import { useLeavesList, useLeaveCounts, useLeavePolicies, HISTORY_DAYS, historyFrom } from '@/hooks/useListQueries';
 import { fetchBalanceMap } from '@/hooks/useLeaveBalances';
 import { HistoryWindowNote, RefreshingOverlay } from '@/components/ui/HistoryWindowNote';
 import { Avatar } from '@/components/ui/Avatar';
@@ -71,8 +71,10 @@ export default function Leaves() {
   const [confirmRevert, setConfirmRevert] = useState(null);
 
   // Admin list: recent history by default (server-side window) with an explicit "Show full history" switch.
-  // An explicit date filter, a single-employee view, a pending-only deep link and a highlighted leave
-  // (notification link) all load what they ask for instead of the default window. Employees keep their own full list.
+  // An explicit date filter is applied ON THE SERVER (only leaves overlapping the chosen range are downloaded — it used to
+  // pull the whole history and filter in the browser: ~686 KB for one month). The tab badges then come from a tiny
+  // /leaves/counts request, because the rows no longer contain every pending leave. A single-employee view, a pending-only
+  // deep link and a highlighted leave (notification link) load what they ask for. Employees keep their own full list.
   const [allHistory, setAllHistory] = useState(() => !!highlightId);
   const hasDateFilter = !!(filterStart || filterEnd);
   const pendingOnlyLink = statusParam === 'pending';
@@ -80,9 +82,13 @@ export default function Leaves() {
   const leaveParams = !isAdmin ? {} : {
     userId: userIdParam || undefined,
     statuses: pendingOnlyLink ? ['pending', 'pending_approval', 'pending_dept', 'pending_root'] : undefined,
-    from: defaultWindow ? historyFrom(HISTORY_DAYS.leaves) : undefined,
+    from: hasDateFilter ? (filterStart || undefined) : (defaultWindow ? historyFrom(HISTORY_DAYS.leaves) : undefined),
+    to: hasDateFilter ? (filterEnd || undefined) : undefined,
   };
   const { data: leaves = [], refetch: refetchLeaves, isPlaceholderData: leavesStale, isFetching: leavesFetching } = useLeavesList(leaveParams);
+  // all-time badge counts while a date filter narrows the rows (same numbers the page showed when it loaded everything)
+  const badgeServerSide = isAdmin && hasDateFilter;
+  const { data: badgeCounts } = useLeaveCounts({ userId: userIdParam || undefined }, { enabled: badgeServerSide });
 
   // BUG_094: switch to correct tab (WFH vs normal) then scroll to highlighted leave
   useEffect(() => {
@@ -163,7 +169,9 @@ export default function Leaves() {
   const activeList = (() => {
     if (tab === 'summary') return [];
     let src = tab === 'all' ? allLeaves : (tab === 'wfh' ? allLeaves : myLeaves);
-    const hasRange = filterStart || filterEnd;
+    // While the previous range's rows are still on screen (leavesStale) they must not be filtered by the NEW range — that
+    // would blank the list into "No leave records" for a moment. They stay visible (dimmed, read-only) until the new rows arrive.
+    const hasRange = (filterStart || filterEnd) && !leavesStale;
     const s = filterStart || '0000-01-01';
     const e = filterEnd   || '9999-12-31';
     if (tab === 'wfh') {
@@ -178,8 +186,8 @@ export default function Leaves() {
   })();
 
   const PENDING_STATUSES = ['pending', 'pending_dept', 'pending_root', 'pending_approval'];
-  const pendingCount    = allLeaves.filter(l => PENDING_STATUSES.includes(l.status) && l.leave_time !== 'wfh' && l.leave_type !== 'wfh').length;
-  const wfhPendingCount = allLeaves.filter(l => PENDING_STATUSES.includes(l.status) && (l.leave_time === 'wfh' || l.leave_type === 'wfh')).length;
+  const pendingCount    = badgeServerSide ? (badgeCounts?.pending ?? 0)     : allLeaves.filter(l => PENDING_STATUSES.includes(l.status) && l.leave_time !== 'wfh' && l.leave_type !== 'wfh').length;
+  const wfhPendingCount = badgeServerSide ? (badgeCounts?.wfh_pending ?? 0) : allLeaves.filter(l => PENDING_STATUSES.includes(l.status) && (l.leave_time === 'wfh' || l.leave_type === 'wfh')).length;
 
   // When navigated with a status param, filter accordingly
   const pendingOnly    = statusParam === 'pending';
@@ -294,8 +302,8 @@ export default function Leaves() {
               employees={employees}
               leaves={leaves}
               policies={policies}
-              filterStart={filterStart}
-              filterEnd={filterEnd}
+              filterStart={leavesStale ? '' : filterStart}
+              filterEnd={leavesStale ? '' : filterEnd}
               balanceMap={adminBalances}
             />
           ) : (
