@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import LegalLayout from '@/components/layout/LegalLayout';
 import { useAuth } from '@/context/AuthContext';
 import { apiPost } from '@/lib/api';
-import { PageHero, Prose, Section, Sub, P, UL, Callout, Divider } from '@/components/legal/LegalKit';
+import { PageHero, Prose, Section, Sub, P, UL, OL, Callout, Divider } from '@/components/legal/LegalKit';
 
 const LAST_UPDATED = 'October 3, 2026';
 
