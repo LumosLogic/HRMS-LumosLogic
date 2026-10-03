@@ -5,7 +5,48 @@ const { pool } = require('../../config/db-pg-adapter');
 const { auth, adminOnly } = require('../../middleware/auth');
 const { invalidateBiometricIpCache } = require('../../middleware/biometricIpGuard');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { getFilterState, canAdminAccessUser } = require('../../utils/branchFilter');
+const { getFilterState, canAdminAccessUser, canModifyBranchRecord, assertUsersAccessible, resolveWriteBranch } = require('../../utils/branchFilter');
+const { validateBranchIdList } = require('../../services/branchService');
+const { hasPermissionOrLegacyAdmin } = require('../../middleware/permissions');
+
+// RBAC for the biometric admin API (replaces the blanket adminOnly):
+//   bio('view')   → read devices / logs / mappings / jobs          (biometric.view)
+//   bio('manage') → create/update/delete, mapping, sync, reprocess (biometric.manage)
+// Device branch is the physical location (device management scope). Employee branch
+// (users.branch_id) is ownership. Ingestion (/iclock, collector push) is never branch-gated:
+// an employee may punch on ANY organisation device.
+const bio = a => hasPermissionOrLegacyAdmin('biometric', a);
+
+/** Org-wide operations (bulk import / rollback / scheduler) need all-branch access. */
+function requireAllBranches(req, res, next) {
+  if (req.branchContext?.hasAllBranches) return next();
+  return res.status(403).json({ error: 'This operation affects the whole organisation and needs all-branch access.' });
+}
+
+/** Loads a device of THIS org and checks the caller may manage it (device branch in scope). */
+async function loadManageableDevice(req, deviceId, cols = 'id, branch_id, serial_number, device_name') {
+  const id = parseInt(deviceId, 10);
+  if (!Number.isInteger(id) || id <= 0) return { status: 404, error: 'Device not found' };
+  const { rows } = await pool.query(
+    `SELECT ${cols} FROM biometric_devices WHERE id = $1 AND org_id = $2`, [id, req.user.organization_id]);
+  if (!rows.length) return { status: 404, error: 'Device not found' };
+  if (!canModifyBranchRecord(req.branchContext, rows[0].branch_id))
+    return { status: 403, error: 'You do not have access to this device.' };
+  return { device: rows[0] };
+}
+
+/** PINs (of unprocessed logs) whose mapped employee is inside the caller's branch scope. */
+async function scopedPinFilterSql(req, alias = 'm') {
+  const state = getFilterState(req.branchContext);
+  if (state.type === 'all')  return { join: '', where: '', params: [] };
+  if (state.type === 'none') return { join: '', where: 'AND 1=0', params: [] };
+  return {
+    join: `JOIN biometric_employee_map ${alias} ON ${alias}.org_id = l.org_id AND ${alias}.employee_pin = l.employee_pin
+          JOIN users bu ON bu.id = ${alias}.user_id AND bu.organization_id = l.org_id`,
+    where: state.type === 'specific' ? 'AND bu.branch_id = $PARAM' : 'AND bu.branch_id = ANY($PARAM::bigint[])',
+    params: [state.type === 'specific' ? state.branchId : state.branchIds],
+  };
+}
 const { scheduleSyncForSn } = require('./biometricHeartbeat.handler');
 const { processAttlogLine } = require('./biometricPush.handler');
 const biometricEmitter = require('../../utils/biometricEmitter');
@@ -25,7 +66,7 @@ const upload = multer({
 });
 
 // ─── GET /api/biometric/devices ───────────────────────────────────────────────
-router.get('/devices', auth, adminOnly, withBranchContext, async (req, res) => {
+router.get('/devices', auth, bio('view'), withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const branchState = getFilterState(req.branchContext);
@@ -68,17 +109,23 @@ router.get('/devices', auth, adminOnly, withBranchContext, async (req, res) => {
 });
 
 // ─── POST /api/biometric/devices ─────────────────────────────────────────────
-router.post('/devices', auth, adminOnly, withBranchContext, async (req, res) => {
+router.post('/devices', auth, bio('manage'), withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const { device_name, serial_number, location, branch_id, area_code, device_ip } = req.body;
     if (!serial_number) return res.status(400).json({ error: 'serial_number is required' });
 
-    // Branch isolation: non-root admin can only create a device in an accessible branch
-    if (req.user.role !== 'root_admin' && branch_id) {
-      const { validateBranchAccess } = require('../../services/branchService');
-      const ok = await validateBranchAccess(req.user.id, orgId, req.user.role, parseInt(branch_id, 10));
-      if (!ok) return res.status(403).json({ error: 'You do not have access to the specified branch.' });
+    // Device branch (physical location): validated against org + caller access. A restricted
+    // HR must supply / have selected a branch — no unassigned (NULL) devices from them.
+    let deviceBranchId = null;
+    if (branch_id) {
+      const v = await validateBranchIdList(req.user.id, orgId, req.user.role, [branch_id]);
+      if (!v.ok) return res.status(403).json({ error: v.error });
+      deviceBranchId = v.ids[0];
+    } else {
+      const w = resolveWriteBranch(req.branchContext);
+      if (!w.ok) return res.status(w.status).json({ error: w.error });
+      deviceBranchId = req.branchContext?.selectedBranchId ? w.branchId : null;
     }
 
     const result = await pool.query(
@@ -87,7 +134,7 @@ router.post('/devices', auth, adminOnly, withBranchContext, async (req, res) => 
        VALUES ($1, $2, $3, $4, $5, $6, $7, 'offline')
        RETURNING *`,
       [orgId, serial_number, device_name || null, location || null,
-       branch_id || null, area_code || null, device_ip || null]
+       deviceBranchId, area_code || null, device_ip || null]
     );
     invalidateBiometricIpCache(); // new device IP must take effect immediately
     res.json(result.rows[0]);
@@ -98,27 +145,23 @@ router.post('/devices', auth, adminOnly, withBranchContext, async (req, res) => 
 });
 
 // ─── PUT /api/biometric/devices/:id ──────────────────────────────────────────
-router.put('/devices/:id', auth, adminOnly, withBranchContext, async (req, res) => {
+router.put('/devices/:id', auth, bio('manage'), withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const { device_name, location, branch_id, area_code, device_ip } = req.body;
 
-    // Branch isolation: load current device and verify admin can access its branch
-    if (req.user.role !== 'root_admin') {
-      const cur = await pool.query(
-        `SELECT branch_id FROM biometric_devices WHERE id = $1 AND org_id = $2`,
-        [req.params.id, orgId]
-      );
-      if (!cur.rows.length) return res.status(404).json({ error: 'Device not found' });
-      const { getFilterState } = require('../../utils/branchFilter');
-      const state = getFilterState(req.branchContext);
-      const devBranch = cur.rows[0].branch_id;
-      if (state.type === 'specific' && devBranch !== state.branchId)
-        return res.status(403).json({ error: 'You do not have access to this device.' });
-      if (state.type === 'multi' && devBranch && !state.branchIds.includes(devBranch))
-        return res.status(403).json({ error: 'You do not have access to this device.' });
-      if (state.type === 'none')
-        return res.status(403).json({ error: 'You do not have access to this device.' });
+    // Device must be in the caller's branch scope. (branch_id is BIGINT → string from pg, so the
+    // comparison is numeric inside canModifyBranchRecord; a strict !== here used to mis-deny.)
+    const dev = await loadManageableDevice(req, req.params.id);
+    if (dev.error) return res.status(dev.status).json({ error: dev.error });
+    let nextBranch = dev.device.branch_id;
+    if (branch_id !== undefined && String(branch_id || '') !== String(dev.device.branch_id ?? '')) {
+      if (branch_id) {
+        const v = await validateBranchIdList(req.user.id, orgId, req.user.role, [branch_id]);
+        if (!v.ok) return res.status(403).json({ error: v.error });
+        nextBranch = v.ids[0];
+      } else if (req.branchContext?.hasAllBranches) { nextBranch = null; }
+      else return res.status(403).json({ error: 'Only users with all-branch access can unassign a device from its branch.' });
     }
 
     const result = await pool.query(
@@ -126,7 +169,7 @@ router.put('/devices/:id', auth, adminOnly, withBranchContext, async (req, res) 
        SET device_name = $1, location = $2, branch_id = $3, area_code = $4, device_ip = $5
        WHERE id = $6 AND org_id = $7
        RETURNING *`,
-      [device_name || null, location || null, branch_id || null,
+      [device_name || null, location || null, nextBranch,
        area_code || null, device_ip || null, req.params.id, orgId]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Device not found' });
@@ -136,27 +179,12 @@ router.put('/devices/:id', auth, adminOnly, withBranchContext, async (req, res) 
 });
 
 // ─── DELETE /api/biometric/devices/:id ───────────────────────────────────────
-router.delete('/devices/:id', auth, adminOnly, withBranchContext, async (req, res) => {
+router.delete('/devices/:id', auth, bio('manage'), withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
 
-    // Branch isolation: verify admin can access this device's branch before deleting
-    if (req.user.role !== 'root_admin') {
-      const cur = await pool.query(
-        `SELECT branch_id FROM biometric_devices WHERE id = $1 AND org_id = $2`,
-        [req.params.id, orgId]
-      );
-      if (!cur.rows.length) return res.status(404).json({ error: 'Device not found' });
-      const { getFilterState } = require('../../utils/branchFilter');
-      const state = getFilterState(req.branchContext);
-      const devBranch = cur.rows[0].branch_id;
-      if (state.type === 'specific' && devBranch !== state.branchId)
-        return res.status(403).json({ error: 'You do not have access to this device.' });
-      if (state.type === 'multi' && devBranch && !state.branchIds.includes(devBranch))
-        return res.status(403).json({ error: 'You do not have access to this device.' });
-      if (state.type === 'none')
-        return res.status(403).json({ error: 'You do not have access to this device.' });
-    }
+    const dev = await loadManageableDevice(req, req.params.id);
+    if (dev.error) return res.status(dev.status).json({ error: dev.error });
 
     const result = await pool.query(
       `DELETE FROM biometric_devices WHERE id = $1 AND org_id = $2 RETURNING id, device_name`,
@@ -169,7 +197,7 @@ router.delete('/devices/:id', auth, adminOnly, withBranchContext, async (req, re
 });
 
 // ─── GET /api/biometric/live-logs ─────────────────────────────────────────────
-router.get('/live-logs', auth, adminOnly, withBranchContext, async (req, res) => {
+router.get('/live-logs', auth, bio('view'), withBranchContext, async (req, res) => {
   const orgId = req.user.organization_id;
 
   res.setHeader('Content-Type', 'text/event-stream');
@@ -221,7 +249,7 @@ router.get('/live-logs', auth, adminOnly, withBranchContext, async (req, res) =>
 });
 
 // ─── GET /api/biometric/logs ──────────────────────────────────────────────────
-router.get('/logs', auth, adminOnly, withBranchContext, async (req, res) => {
+router.get('/logs', auth, bio('view'), withBranchContext, async (req, res) => {
   try {
     const orgId  = req.user.organization_id;
     const page   = Math.max(1, parseInt(req.query.page)  || 1);
@@ -320,7 +348,7 @@ router.get('/logs', auth, adminOnly, withBranchContext, async (req, res) => {
 });
 
 // ─── GET /api/biometric/employee-map ─────────────────────────────────────────
-router.get('/employee-map', auth, adminOnly, withBranchContext, async (req, res) => {
+router.get('/employee-map', auth, bio('view'), withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const branchState = getFilterState(req.branchContext);
@@ -357,13 +385,16 @@ router.get('/employee-map', auth, adminOnly, withBranchContext, async (req, res)
 });
 
 // ─── POST /api/biometric/employee-map ────────────────────────────────────────
-router.post('/employee-map', auth, adminOnly, async (req, res) => {
+router.post('/employee-map', auth, bio('manage'), withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const { employee_pin, user_id } = req.body;
     if (!employee_pin || !user_id) {
       return res.status(400).json({ error: 'employee_pin and user_id are required' });
     }
+    // Mapping targets an employee: must exist in THIS org and inside the caller's branch scope.
+    if (!await canAdminAccessUser(req.branchContext, parseInt(user_id, 10), orgId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
     const result = await pool.query(
       `INSERT INTO biometric_employee_map (org_id, employee_pin, user_id)
        VALUES ($1, $2, $3)
@@ -378,9 +409,14 @@ router.post('/employee-map', auth, adminOnly, async (req, res) => {
 });
 
 // ─── DELETE /api/biometric/employee-map/:id ──────────────────────────────────
-router.delete('/employee-map/:id', auth, adminOnly, async (req, res) => {
+router.delete('/employee-map/:id', auth, bio('manage'), withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
+    const { rows: mapRow } = await pool.query(
+      'SELECT user_id FROM biometric_employee_map WHERE id = $1 AND org_id = $2', [req.params.id, orgId]);
+    if (!mapRow.length) return res.status(404).json({ error: 'Mapping not found' });
+    if (!await canAdminAccessUser(req.branchContext, mapRow[0].user_id, orgId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
     const result = await pool.query(
       `DELETE FROM biometric_employee_map WHERE id = $1 AND org_id = $2 RETURNING id`,
       [req.params.id, orgId]
@@ -395,14 +431,12 @@ router.delete('/employee-map/:id', auth, adminOnly, async (req, res) => {
 // Schedules GET ATTLOG Stamp=0 for the device's next heartbeat (~60s).
 // Records are received via the existing live PUSH pipeline with full duplicate
 // protection — already-stored punches are silently skipped (ON CONFLICT DO NOTHING).
-router.post('/devices/:id/force-sync', auth, adminOnly, async (req, res) => {
+router.post('/devices/:id/force-sync', auth, bio('manage'), withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
-    const devRes = await pool.query(
-      `SELECT serial_number, device_name FROM biometric_devices WHERE id = $1 AND org_id = $2`,
-      [req.params.id, orgId]
-    );
-    if (!devRes.rows.length) return res.status(404).json({ error: 'Device not found' });
+    const dev = await loadManageableDevice(req, req.params.id);
+    if (dev.error) return res.status(dev.status).json({ error: dev.error });
+    const devRes = { rows: [dev.device] };
     const { serial_number, device_name } = devRes.rows[0];
 
     // Schedule GET ATTLOG Stamp=0 — full re-upload of all device-stored records
@@ -427,11 +461,17 @@ router.post('/devices/:id/force-sync', auth, adminOnly, async (req, res) => {
 });
 
 // ─── POST /api/biometric/reprocess ───────────────────────────────────────────
-router.post('/reprocess', auth, adminOnly, async (req, res) => {
+router.post('/reprocess', auth, bio('manage'), withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const { employee_pin } = req.body;
     if (!employee_pin) return res.status(400).json({ error: 'employee_pin is required' });
+    {
+      const { rows: owner } = await pool.query(
+        'SELECT user_id FROM biometric_employee_map WHERE org_id = $1 AND employee_pin = $2 LIMIT 1', [orgId, String(employee_pin)]);
+      if (owner.length && !await canAdminAccessUser(req.branchContext, owner[0].user_id, orgId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
 
     const result = await reprocessPin(orgId, employee_pin);
     if (result.noMapping) return res.status(404).json({ error: 'No employee mapping found for this PIN' });
@@ -443,8 +483,9 @@ router.post('/reprocess', auth, adminOnly, async (req, res) => {
 // Reprocesses every mapped employee PIN for this org using the org's attendance
 // policy. Run once after enabling first_in_last_out to fix all historical data.
 // Also useful after a bulk raw-log reset (UPDATE biometric_raw_logs SET processed=false).
-router.post('/reprocess-all', auth, adminOnly, async (req, res) => {
+router.post('/reprocess-all', auth, bio('manage'), withBranchContext, async (req, res) => {
   const orgId = req.user.organization_id;
+  const scope = await scopedPinFilterSql(req);
 
   // Respond immediately — reprocessing can take a while
   res.json({ ok: true, message: 'Reprocess started in background. Check server logs for progress.' });
@@ -452,10 +493,11 @@ router.post('/reprocess-all', auth, adminOnly, async (req, res) => {
   setImmediate(async () => {
     try {
       const pinsRes = await pool.query(
-        `SELECT DISTINCT employee_pin FROM biometric_raw_logs
-         WHERE org_id = $1 AND processed = false
-         ORDER BY employee_pin`,
-        [orgId]
+        `SELECT DISTINCT l.employee_pin FROM biometric_raw_logs l
+         ${scope.join}
+         WHERE l.org_id = $1 AND l.processed = false ${scope.where.replace('$PARAM', '$2')}
+         ORDER BY l.employee_pin`,
+        [orgId, ...scope.params]
       );
 
       const pins = pinsRes.rows.map(r => r.employee_pin);
@@ -699,16 +741,16 @@ router.post('/bulk-import', async (req, res) => {
 // ─── POST /api/biometric/preview-easywdms ────────────────────────────────────
 // Parse file + validate + check DB for duplicates — returns counts WITHOUT writing.
 // Accepts same multipart form as import-easywdms (file, date_from, date_to).
-router.post('/preview-easywdms', auth, adminOnly, upload.single('file'), previewEasyWDMS);
+router.post('/preview-easywdms', auth, bio('manage'), withBranchContext, requireAllBranches, upload.single('file'), previewEasyWDMS);
 
 // ─── POST /api/biometric/import-easywdms ─────────────────────────────────────
 // Upload an EasyWDMS Transaction Report file (.xlsx/.xls/.csv/.tsv/.txt).
 // Parses, inserts historical raw logs (bypassing go-live cutoff), auto-reprocesses.
 // Optional multipart fields: date_from, date_to (YYYY-MM-DD) to filter by date range.
-router.post('/import-easywdms', auth, adminOnly, upload.single('file'), importEasyWDMS);
+router.post('/import-easywdms', auth, bio('manage'), withBranchContext, requireAllBranches, upload.single('file'), importEasyWDMS);
 
 // ─── GET /api/biometric/import-batches ───────────────────────────────────────
-router.get('/import-batches', auth, adminOnly, async (req, res) => {
+router.get('/import-batches', auth, bio('view'), withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const result = await pool.query(
@@ -727,7 +769,7 @@ router.get('/import-batches', auth, adminOnly, async (req, res) => {
 // ─── DELETE /api/biometric/import-batches/:id ────────────────────────────────
 // Rollback: deletes raw logs for this batch and marks the batch rolled_back.
 // Attendance records already created are left in place (admin must fix manually).
-router.delete('/import-batches/:id', auth, adminOnly, async (req, res) => {
+router.delete('/import-batches/:id', auth, bio('manage'), withBranchContext, requireAllBranches, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
 
@@ -771,7 +813,7 @@ router.delete('/import-batches/:id', auth, adminOnly, async (req, res) => {
 //
 // Returns { job_id, status: "running", ... }
 // Poll GET /api/biometric/historical-sync-jobs/:job_id for live progress.
-router.post('/devices/:id/historical-sync', auth, adminOnly, async (req, res) => {
+router.post('/devices/:id/historical-sync', auth, bio('manage'), withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const { from, to, dry_run = false } = req.body;
@@ -793,13 +835,9 @@ router.post('/devices/:id/historical-sync', auth, adminOnly, async (req, res) =>
     }
 
     // ── Look up device ─────────────────────────────────────────────────────
-    const devRes = await pool.query(
-      `SELECT id, serial_number, device_name
-       FROM biometric_devices WHERE id = $1 AND org_id = $2`,
-      [req.params.id, orgId]
-    );
-    if (!devRes.rows.length) return res.status(404).json({ error: 'Device not found' });
-    const device = devRes.rows[0];
+    const dev = await loadManageableDevice(req, req.params.id);
+    if (dev.error) return res.status(dev.status).json({ error: dev.error });
+    const device = dev.device;
 
     // ── Prevent concurrent jobs ────────────────────────────────────────────
     if (getActiveJobForSn(device.serial_number)) {
@@ -862,35 +900,37 @@ router.post('/devices/:id/historical-sync', auth, adminOnly, async (req, res) =>
 
 // ─── GET /api/biometric/historical-sync-jobs ──────────────────────────────────
 // List all historical sync jobs for this org (most recent first, max 50).
-router.get('/historical-sync-jobs', auth, adminOnly, async (req, res) => {
+router.get('/historical-sync-jobs', auth, bio('view'), withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const result = await pool.query(
-      `SELECT j.*, d.device_name
+      `SELECT j.*, d.device_name, d.branch_id AS device_branch_id
        FROM biometric_historical_sync_jobs j
        LEFT JOIN biometric_devices d ON d.id = j.device_id
        WHERE j.org_id = $1
        ORDER BY j.created_at DESC
-       LIMIT 50`,
+       LIMIT 200`,
       [orgId]
     );
-    res.json(result.rows);
+    res.json(result.rows.filter(j => canModifyBranchRecord(req.branchContext, j.device_branch_id)).slice(0, 50));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ─── GET /api/biometric/historical-sync-jobs/:jobId ──────────────────────────
 // Single job status — includes live in-memory stats while status='running'.
-router.get('/historical-sync-jobs/:jobId', auth, adminOnly, async (req, res) => {
+router.get('/historical-sync-jobs/:jobId', auth, bio('view'), withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const result = await pool.query(
-      `SELECT j.*, d.device_name
+      `SELECT j.*, d.device_name, d.branch_id AS device_branch_id
        FROM biometric_historical_sync_jobs j
        LEFT JOIN biometric_devices d ON d.id = j.device_id
        WHERE j.id = $1 AND j.org_id = $2`,
       [req.params.jobId, orgId]
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Job not found' });
+    if (!canModifyBranchRecord(req.branchContext, result.rows[0].device_branch_id))
+      return res.status(403).json({ error: 'You do not have access to this job.' });
 
     const job = result.rows[0];
 
@@ -913,7 +953,7 @@ router.get('/historical-sync-jobs/:jobId', auth, adminOnly, async (req, res) => 
 //   • Uses reprocessPinForDates() which reuses applyFILODay() exactly
 //   • Idempotent: processed=true records are skipped (already processed)
 //   • Retry-safe: imported raw logs are NOT deleted if reprocess fails
-router.post('/historical-sync-jobs/:jobId/reprocess', auth, adminOnly, async (req, res) => {
+router.post('/historical-sync-jobs/:jobId/reprocess', auth, bio('manage'), withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
 
@@ -926,6 +966,13 @@ router.post('/historical-sync-jobs/:jobId/reprocess', auth, adminOnly, async (re
     );
     if (!jobRes.rows.length) return res.status(404).json({ error: 'Job not found' });
     const job = jobRes.rows[0];
+    {
+      const { rows: jd } = await pool.query(
+        `SELECT d.branch_id FROM biometric_historical_sync_jobs j
+           LEFT JOIN biometric_devices d ON d.id = j.device_id WHERE j.id = $1`, [job.id]);
+      if (!canModifyBranchRecord(req.branchContext, jd[0]?.branch_id))
+        return res.status(403).json({ error: 'You do not have access to this job.' });
+    }
 
     if (job.dry_run) return res.status(400).json({ error: 'Cannot reprocess a dry-run job — run a real sync first.' });
     if (job.status !== 'completed') return res.status(400).json({ error: `Job is not completed yet (status=${job.status})` });
@@ -940,13 +987,17 @@ router.post('/historical-sync-jobs/:jobId/reprocess', auth, adminOnly, async (re
 
     // Find only PINs inserted by THIS specific job (historical_sync_job_id = jobId).
     // Falls back to device+date+source filter for records inserted before this column existed.
+    // Employees punch on any device, so a job's PINs can belong to several branches: a restricted
+    // admin reprocesses only the PINs of employees inside their own scope.
+    const jobScope = await scopedPinFilterSql(req);
     const pinsRes = await pool.query(
-      `SELECT DISTINCT employee_pin
-       FROM biometric_raw_logs
-       WHERE historical_sync_job_id = $1
-         AND processed = false
-       ORDER BY employee_pin`,
-      [job.id]
+      `SELECT DISTINCT l.employee_pin
+       FROM biometric_raw_logs l
+       ${jobScope.join}
+       WHERE l.historical_sync_job_id = $1
+         AND l.processed = false ${jobScope.where.replace('$PARAM', '$2')}
+       ORDER BY l.employee_pin`,
+      [job.id, ...jobScope.params]
     );
 
     const pins = pinsRes.rows.map(r => r.employee_pin);
@@ -1062,7 +1113,7 @@ router.get('/my-punches', auth, async (req, res) => {
 // Admin-facing: raw punch logs for a specific employee on a specific date.
 // Query params: userId=<id>&date=YYYY-MM-DD
 // Scoped to org + branch access. Does NOT modify raw logs (read-only).
-router.get('/punches-for-date', auth, adminOnly, withBranchContext, async (req, res) => {
+router.get('/punches-for-date', auth, bio('view'), withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const { userId, date } = req.query;
@@ -1112,7 +1163,7 @@ router.get('/punches-for-date', auth, adminOnly, withBranchContext, async (req, 
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── GET /api/biometric/auto-sync/config ──────────────────────────────────────
-router.get('/auto-sync/config', auth, adminOnly, async (req, res) => {
+router.get('/auto-sync/config', auth, bio('view'), withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const result = await pool.query(
@@ -1129,7 +1180,7 @@ router.get('/auto-sync/config', auth, adminOnly, async (req, res) => {
 
 // ─── PUT /api/biometric/auto-sync/config ──────────────────────────────────────
 // Upserts schedule config and immediately reschedules the org's timers.
-router.put('/auto-sync/config', auth, adminOnly, async (req, res) => {
+router.put('/auto-sync/config', auth, bio('manage'), withBranchContext, requireAllBranches, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const { enabled, frequency, sync_time_1, sync_time_2 } = req.body;
@@ -1170,7 +1221,7 @@ router.put('/auto-sync/config', auth, adminOnly, async (req, res) => {
 
 // ─── GET /api/biometric/auto-sync/history ─────────────────────────────────────
 // Returns auto-triggered historical sync jobs filtered by selected branch (via X-Branch-Id).
-router.get('/auto-sync/history', auth, adminOnly, withBranchContext, async (req, res) => {
+router.get('/auto-sync/history', auth, bio('view'), withBranchContext, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const limit = Math.min(100, parseInt(req.query.limit) || 20);
@@ -1178,11 +1229,10 @@ router.get('/auto-sync/history', auth, adminOnly, withBranchContext, async (req,
     const params = [orgId, limit];
     let branchWhere = '';
 
-    const selectedBranchId = req.branchContext?.selectedBranchId;
-    if (selectedBranchId) {
-      branchWhere = `AND d.branch_id = $3`;
-      params.push(selectedBranchId);
-    }
+    const hState = getFilterState(req.branchContext);
+    if (hState.type === 'none') return res.json([]);
+    if (hState.type === 'specific') { branchWhere = 'AND d.branch_id = $3'; params.push(hState.branchId); }
+    else if (hState.type === 'multi') { branchWhere = 'AND d.branch_id = ANY($3::bigint[])'; params.push(hState.branchIds); }
 
     const result = await pool.query(
       `SELECT j.id, j.serial_number, j.from_date, j.to_date,
@@ -1204,7 +1254,7 @@ router.get('/auto-sync/history', auth, adminOnly, withBranchContext, async (req,
 // ─── POST /api/biometric/auto-sync/reset-stuck ────────────────────────────────
 // Marks jobs stuck in 'running' state for >2 hours as 'failed'.
 // Safe: does NOT touch the scheduler, config, or any active in-memory jobs.
-router.post('/auto-sync/reset-stuck', auth, adminOnly, async (req, res) => {
+router.post('/auto-sync/reset-stuck', auth, bio('manage'), withBranchContext, requireAllBranches, async (req, res) => {
   try {
     const orgId = req.user.organization_id;
     const result = await pool.query(
@@ -1224,7 +1274,7 @@ router.post('/auto-sync/reset-stuck', auth, adminOnly, async (req, res) => {
 
 // ─── POST /api/biometric/auto-sync/trigger ────────────────────────────────────
 // Manually trigger an immediate sync (for testing or on-demand use).
-router.post('/auto-sync/trigger', auth, adminOnly, async (req, res) => {
+router.post('/auto-sync/trigger', auth, bio('manage'), withBranchContext, requireAllBranches, async (req, res) => {
   const orgId = req.user.organization_id;
   res.json({ ok: true, message: 'Sync triggered. Device(s) will upload on next heartbeat (~30–60 s). Check history for results.' });
   setImmediate(async () => {

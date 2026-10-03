@@ -12,6 +12,7 @@ import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPost, apiPut, apiDelete, apiPatch } from '@/lib/api';
+import { ConfigGroupsManager } from '@/components/ConfigGroupsManager';
 import { useFeature } from '@/context/FeatureFlagContext';
 import { Avatar } from '@/components/ui/Avatar';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -1276,7 +1277,28 @@ function BranchSchedulePanel({ schedule }) {
   const [saving, setSaving]    = useState(false);
   const [confirmDel, setConfirmDel] = useState(null);
 
+  // "Same as…" / "Apply to branches": copy an effective schedule (a branch's override, else the
+  // organisation default) onto other branches. Snapshot copy — each target keeps its own override.
+  const [copySource,  setCopySource]  = useState('org'); // 'org' | branchId
+  const [copyTargets, setCopyTargets] = useState([]);
+  const [copying,     setCopying]     = useState(false);
+  const [copyConfirm, setCopyConfirm] = useState(false);
+
   const overrideMap = Object.fromEntries((overrides || []).map(o => [String(o.branch_id), o]));
+
+  async function handleCopy() {
+    setCopying(true);
+    try {
+      await apiPost('/settings/branch-copy', {
+        from_branch_id: copySource === 'org' ? null : Number(copySource),
+        to_branch_ids:  copyTargets,
+      });
+      toast(`Work schedule applied to ${copyTargets.length} branch${copyTargets.length !== 1 ? 'es' : ''}`, 'success');
+      qc.invalidateQueries({ queryKey: ['branch-schedule-overrides'] });
+      setCopyTargets([]); setCopyConfirm(false);
+    } catch (e) { toast(e.message, 'error'); }
+    finally { setCopying(false); }
+  }
 
   function startEdit(branch) {
     const existing = overrideMap[String(branch.id)];
@@ -1326,75 +1348,8 @@ function BranchSchedulePanel({ schedule }) {
     set('work_days', days.includes(dow) ? days.filter(d => d !== dow) : [...days, dow].sort((a, b) => a - b));
   }
 
-  return (
-    <PanelWrap group="Attendance & Work Rules" label="Branch Work Schedules" icon={GitBranch} accentColor="#10b981">
-      <p className="text-sm text-[#777587] mb-5 max-w-xl">Override the organisation-wide work schedule for specific branches. Employees without a branch, or in branches without an override, use the organisation schedule.</p>
-      {isLoading ? (
-        <div className="loading"><div className="spinner" /> Loading…</div>
-      ) : activeBranches.length === 0 ? (
-        <div className="empty-state">
-          <GitBranch size={40} className="mx-auto mb-2 text-[#c7c4d8]" />
-          <p>No active branches found. Enable branches in Organisation Settings first.</p>
-        </div>
-      ) : (
-        <div className="space-y-3">
-          {activeBranches.map(branch => {
-            const override = overrideMap[String(branch.id)];
-            const isEdit   = editing === branch.id;
-            return (
-              <div key={branch.id} className="border border-[#e7eefe] rounded-xl overflow-hidden">
-                {/* Header row */}
-                <div className="flex items-center justify-between px-4 py-3 bg-[#f9f9ff]">
-                  <div className="flex items-center gap-2.5">
-                    <div className="w-8 h-8 rounded-lg bg-[#f0f3ff] flex items-center justify-center flex-shrink-0">
-                      <GitBranch size={14} className="text-[#3525cd]" />
-                    </div>
-                    <div>
-                      <p className="font-bold text-sm text-[#151c27]">{branch.name}</p>
-                      {override
-                        ? <span className="text-[0.65rem] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full">Custom Override</span>
-                        : <span className="text-[0.65rem] text-[#9ca3af]">Uses organisation default</span>
-                      }
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {!isEdit && (
-                      <button onClick={() => startEdit(branch)}
-                        className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border border-[#c7c4d8] text-[#464555] hover:border-[#3525cd] hover:text-[#3525cd] transition-colors">
-                        <SlidersHorizontal size={12} /> {override ? 'Edit' : 'Set Override'}
-                      </button>
-                    )}
-                    {override && !isEdit && (
-                      <button onClick={() => setConfirmDel(branch)}
-                        className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 transition-colors">
-                        <Trash2 size={12} /> Remove
-                      </button>
-                    )}
-                    {isEdit && (
-                      <button onClick={() => setEditing(null)} className="text-xs text-[#777587] hover:text-[#151c27] px-2 py-1.5">Cancel</button>
-                    )}
-                  </div>
-                </div>
-
-                {/* Show current values if override exists and not editing */}
-                {override && !isEdit && (
-                  <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs border-t border-[#f0f3ff]">
-                    {[
-                      ['Start', override.start_time],
-                      ['End', override.end_time],
-                      ['Late after', override.late_threshold],
-                      ['Half day <', `${override.half_day_hours}h`],
-                    ].map(([label, val]) => (
-                      <div key={label}>
-                        <p className="text-[0.62rem] font-black text-[#9ca3af] uppercase tracking-widest">{label}</p>
-                        <p className="font-bold text-[#151c27]">{val}</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-                {/* Edit form */}
-                {isEdit && (
+  // The schedule fields, shared by a branch's own override and by a configuration group.
+  const renderScheduleForm = (onSave, saveLabel, onCancel) => (
                   <div className="px-4 py-4 border-t border-[#f0f3ff] space-y-4">
                     <div className="grid grid-cols-2 gap-3">
                       {[
@@ -1439,14 +1394,165 @@ function BranchSchedulePanel({ schedule }) {
                       </div>
                     </div>
                     <div className="flex gap-2 pt-1">
-                      <button onClick={() => handleSave(branch.id)} disabled={saving}
+                      <button onClick={() => onSave()} disabled={saving}
                         className="btn btn-primary btn-sm">
-                        {saving ? <><span className="spinner w-3.5 h-3.5" /> Saving…</> : <><Save size={13} /> Save Override</>}
+                        {saving ? <><span className="spinner w-3.5 h-3.5" /> Saving…</> : <><Save size={13} /> {saveLabel}</>}
                       </button>
-                      <button onClick={() => setEditing(null)} className="btn btn-outline btn-sm">Cancel</button>
+                      <button onClick={() => onCancel()} className="btn btn-outline btn-sm">Cancel</button>
                     </div>
                   </div>
+  );
+
+  // ── Configuration groups (live shared schedule) ───────────────────────────────────────────
+  const [editingGroup, setEditingGroup] = useState(null);
+  const { data: groups = [] } = useQuery({ queryKey: ['config-groups', 'work_schedule'], queryFn: () => apiGet('/config-groups', { domain: 'work_schedule' }).catch(() => []), staleTime: 30000 });
+  const groupById = Object.fromEntries((groups || []).map(g => [String(g.id), g]));
+
+  async function startGroupEdit(g) {
+    try {
+      const { config } = await apiGet(`/config-groups/${g.id}/config`);
+      const base = config || {};
+      setEditForm({
+        start_time:                   base.start_time                   || '09:00',
+        end_time:                     base.end_time                     || '18:00',
+        late_threshold:               base.late_threshold               || '09:30',
+        early_exit_threshold:         base.early_exit_threshold         || '17:00',
+        half_day_hours:               base.half_day_hours               ?? 4.5,
+        full_day_hours:               base.full_day_hours               ?? 8,
+        work_days:                    parseShiftWorkDays(base.work_days || '1,2,3,4,5'),
+        max_early_leave_count:        base.max_early_leave_count        ?? 3,
+        late_entry_threshold_enabled: base.late_entry_threshold_enabled ?? true,
+        early_exit_threshold_enabled: base.early_exit_threshold_enabled ?? true,
+      });
+      setEditing(null);
+      setEditingGroup(g);
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  async function handleGroupSave() {
+    setSaving(true);
+    try {
+      const r = await apiPut(`/config-groups/${editingGroup.id}/config`, { ...editForm, work_days: editForm.work_days.join(',') });
+      const kept = (r.custom || []).length;
+      toast(`Group “${editingGroup.name}” saved — applied to ${(r.applied || []).length} branch(es)${kept ? `; ${kept} keep a custom override` : ''}`, 'success');
+      qc.invalidateQueries({ queryKey: ['branch-schedule-overrides'] });
+      qc.invalidateQueries({ queryKey: ['config-groups'] });
+      qc.invalidateQueries({ queryKey: ['effective-config'] });
+      setEditingGroup(null);
+    } catch (e) { toast(e.message, 'error'); }
+    finally { setSaving(false); }
+  }
+
+  return (
+    <PanelWrap group="Attendance & Work Rules" label="Branch Work Schedules" icon={GitBranch} accentColor="#10b981">
+      <p className="text-sm text-[#777587] mb-5 max-w-xl">Override the organisation-wide work schedule for specific branches. Employees without a branch, or in branches without an override, use the organisation schedule.</p>
+      <ConfigGroupsManager domain="work_schedule" noun="schedule" onEditGroup={startGroupEdit} editingGroupId={editingGroup?.id} />
+      {editingGroup && (
+        <div className="border border-[#3525cd]/40 rounded-xl overflow-hidden mb-5">
+          <div className="px-4 py-3 bg-[#f0f3ff] text-xs text-[#151c27]">
+            Editing the shared schedule of group <strong>“{editingGroup.name}”</strong> — saving updates every member branch
+            (a branch with its own custom override keeps it).
+          </div>
+          {renderScheduleForm(handleGroupSave, 'Save group schedule', () => setEditingGroup(null))}
+        </div>
+      )}
+      {activeBranches.length > 1 && (
+        <div className="rounded-xl border border-[#e7eefe] bg-[#f9f9ff] p-4 mb-5">
+          <p className="text-xs font-bold text-[#151c27] mb-2">Copy a schedule to branches <span className="font-normal text-[#777587]">(one-time copy — later edits do not propagate; use a group above for a live shared schedule)</span></p>
+          <div className="flex flex-wrap items-center gap-3">
+            <label className="text-xs text-[#464555]">Copy from</label>
+            <select className="form-control !py-1.5 !text-xs w-56" value={copySource} onChange={e => { setCopySource(e.target.value); setCopyTargets(t => t.filter(id => String(id) !== e.target.value)); }}>
+              <option value="org">Organisation default</option>
+              {activeBranches.map(b => <option key={b.id} value={b.id}>{b.name}{overrideMap[String(b.id)] ? ' (custom)' : ' (inherited)'}</option>)}
+            </select>
+            <label className="text-xs text-[#464555]">to</label>
+            {activeBranches.filter(b => String(b.id) !== String(copySource)).map(b => (
+              <label key={b.id} className="flex items-center gap-1.5 text-xs cursor-pointer">
+                <input type="checkbox" checked={copyTargets.includes(Number(b.id))}
+                  onChange={() => setCopyTargets(t => t.includes(Number(b.id)) ? t.filter(x => x !== Number(b.id)) : [...t, Number(b.id)])} />{b.name}
+              </label>
+            ))}
+            <button className="btn btn-outline btn-sm" disabled={!copyTargets.length || copying} onClick={() => setCopyConfirm(true)}>Apply</button>
+          </div>
+          {copyConfirm && (
+            <div className="mt-3 p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900 flex flex-wrap items-center gap-3">
+              <span className="flex-1 min-w-[16rem]">Replace the work schedule of {copyTargets.length} branch{copyTargets.length !== 1 ? 'es' : ''} with {copySource === 'org' ? 'the organisation default' : activeBranches.find(b => String(b.id) === String(copySource))?.name}?</span>
+              <button className="btn btn-ghost btn-sm" onClick={() => setCopyConfirm(false)}>Cancel</button>
+              <button className="btn btn-primary btn-sm" disabled={copying} onClick={handleCopy}>{copying ? 'Applying…' : 'Confirm'}</button>
+            </div>
+          )}
+          <p className="text-[0.7rem] text-[#777587] mt-2">Each branch keeps its own override afterwards; use “Remove override” on a branch to return it to the organisation default.</p>
+        </div>
+      )}
+      {isLoading ? (
+        <div className="loading"><div className="spinner" /> Loading…</div>
+      ) : activeBranches.length === 0 ? (
+        <div className="empty-state">
+          <GitBranch size={40} className="mx-auto mb-2 text-[#c7c4d8]" />
+          <p>No active branches found. Enable branches in Organisation Settings first.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {activeBranches.map(branch => {
+            const override = overrideMap[String(branch.id)];
+            const isGroupRow = !!override && override.group_id != null;   // inherited from a configuration group
+            const custom     = !!override && !isGroupRow;                  // the branch's own override
+            const isEdit   = editing === branch.id;
+            return (
+              <div key={branch.id} className="border border-[#e7eefe] rounded-xl overflow-hidden">
+                {/* Header row */}
+                <div className="flex items-center justify-between px-4 py-3 bg-[#f9f9ff]">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-lg bg-[#f0f3ff] flex items-center justify-center flex-shrink-0">
+                      <GitBranch size={14} className="text-[#3525cd]" />
+                    </div>
+                    <div>
+                      <p className="font-bold text-sm text-[#151c27]">{branch.name}</p>
+                      {custom
+                        ? <span className="text-[0.65rem] font-bold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded-full">Custom Override</span>
+                        : isGroupRow
+                          ? <span className="text-[0.65rem] font-bold text-indigo-700 bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 rounded-full">Group: {groupById[String(override.group_id)]?.name || 'shared'}</span>
+                          : <span className="text-[0.65rem] text-[#9ca3af]">Uses organisation default</span>
+                      }
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {!isEdit && (
+                      <button onClick={() => startEdit(branch)}
+                        className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border border-[#c7c4d8] text-[#464555] hover:border-[#3525cd] hover:text-[#3525cd] transition-colors">
+                        <SlidersHorizontal size={12} /> {custom ? 'Edit' : isGroupRow ? 'Customize' : 'Set Override'}
+                      </button>
+                    )}
+                    {custom && !isEdit && (
+                      <button onClick={() => setConfirmDel(branch)}
+                        className="inline-flex items-center gap-1.5 text-xs font-bold px-3 py-1.5 rounded-lg border border-rose-200 text-rose-600 hover:bg-rose-50 transition-colors">
+                        <Trash2 size={12} /> Remove
+                      </button>
+                    )}
+                    {isEdit && (
+                      <button onClick={() => setEditing(null)} className="text-xs text-[#777587] hover:text-[#151c27] px-2 py-1.5">Cancel</button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Show current values if override exists and not editing */}
+                {override && !isEdit && (
+                  <div className="px-4 py-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs border-t border-[#f0f3ff]">
+                    {[
+                      ['Start', override.start_time],
+                      ['End', override.end_time],
+                      ['Late after', override.late_threshold],
+                      ['Half day <', `${override.half_day_hours}h`],
+                    ].map(([label, val]) => (
+                      <div key={label}>
+                        <p className="text-[0.62rem] font-black text-[#9ca3af] uppercase tracking-widest">{label}</p>
+                        <p className="font-bold text-[#151c27]">{val}</p>
+                      </div>
+                    ))}
+                  </div>
                 )}
+
+                {isEdit && renderScheduleForm(() => handleSave(branch.id), 'Save Override', () => setEditing(null))}
               </div>
             );
           })}
@@ -1456,7 +1562,7 @@ function BranchSchedulePanel({ schedule }) {
         <ConfirmModal
           open
           title={`Remove Override for ${confirmDel.name}`}
-          message={`${confirmDel.name} will revert to the organisation-wide work schedule.`}
+          message={`${confirmDel.name} will drop its custom schedule and use ${groups.find(g => (g.branch_ids || []).map(Number).includes(Number(confirmDel.id))) ? 'its configuration group' : 'the organisation-wide work schedule'}.`}
           confirmLabel="Remove Override"
           danger
           onConfirm={() => handleDelete(confirmDel.id)}

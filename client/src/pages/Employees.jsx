@@ -7,6 +7,7 @@ import { useToast } from '@/context/ToastContext';
 import { useFeature } from '@/context/FeatureFlagContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { useEmployees } from '@/hooks/useEmployees';
 import EmployeeProfileV2 from '@/components/EmployeeProfileV2';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -244,8 +245,9 @@ function EmployeeProfile({ emp, onBack, onEdit }) {
   });
 
   // Leave policies for balance
+  const _bk1 = useBranch().selectedBranchId;
   const { data: leavePolicies = [] } = useQuery({
-    queryKey: ['leave-policies'],
+    queryKey: ['leave-policies', _bk1],
     queryFn:  () => apiGet('/leave-policies'),
     staleTime: 300000,
   });
@@ -2435,15 +2437,8 @@ export default function Employees() {
   // all statuses and the HR team can explicitly filter for inactive/resigned/terminated.
   // Other pages (Calendar, TeamCalendar, etc.) do NOT pass this flag so they
   // automatically get only active+probation employees from the backend.
-  const { data: allEmployees = [], isLoading } = useQuery({
-    queryKey: ['employees', 'all', selectedBranchId],
-    queryFn:  () => apiGet('/employees', { include_inactive: 'true' }),
-    // Do not fire until branch context is fully initialized.
-    // Prevents the window between page load and branch restoration where
-    // selectedBranchId may not yet reflect the correct branch, causing
-    // wrong data to be fetched and cached.
-    enabled:  isBranchContextReady,
-  });
+  // Shared employee list hook (waits for the branch context, branch-keyed, previous branch kept while loading).
+  const { data: allEmployees = [], isLoading } = useEmployees({ includeInactive: true });
 
   useEffect(() => {
     if (viewParam && allEmployees.length > 0) {
@@ -2512,7 +2507,7 @@ export default function Employees() {
     enabled:  !!profileDrawerEmp,
   });
   const { data: drawerPolicies = [] } = useQuery({
-    queryKey: ['leave-policies'],
+    queryKey: ['leave-policies', selectedBranchId],
     queryFn:  () => apiGet('/leave-policies'),
     enabled:  !!profileDrawerEmp,
   });

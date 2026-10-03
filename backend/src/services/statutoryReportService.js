@@ -31,7 +31,7 @@ function toCsv(rows, fields) {
 // ── PF ECR (Electronic Challan cum Return) ────────────────────────────────────
 // EPFO ECR format: member UAN, name, gross, EPF wages, EPS wages,
 //                  employee PF, employer EPF, employer EPS
-async function getPFECR({ organizationId, month, year }) {
+async function getPFECR({ organizationId, month, year, userIds = null }) {
   const oId  = Number(organizationId);
   const mStr = padZ(month);
 
@@ -53,12 +53,13 @@ async function getPFECR({ organizationId, month, year }) {
        FROM payslips ps
        JOIN users u ON u.id = ps.user_id
       WHERE ps.organization_id = $1
+        AND ($4::bigint[] IS NULL OR ps.user_id = ANY($4::bigint[]))
         AND ps.month = $2
         AND ps.year  = $3
         AND ps.status NOT IN ('draft','cancelled')
         AND COALESCE(ps.pf_employee, 0) > 0
       ORDER BY u.name`,
-    [oId, mStr, year]
+    [oId, mStr, year, userIds]
   );
 
   return rows.map(r => {
@@ -98,7 +99,7 @@ const PF_ECR_FIELDS = [
 ];
 
 // ── ESI Return ────────────────────────────────────────────────────────────────
-async function getESIReturn({ organizationId, month, year }) {
+async function getESIReturn({ organizationId, month, year, userIds = null }) {
   const oId  = Number(organizationId);
   const mStr = padZ(month);
 
@@ -113,12 +114,13 @@ async function getESIReturn({ organizationId, month, year }) {
        FROM payslips ps
        JOIN users u ON u.id = ps.user_id
       WHERE ps.organization_id = $1
+        AND ($4::bigint[] IS NULL OR ps.user_id = ANY($4::bigint[]))
         AND ps.month = $2
         AND ps.year  = $3
         AND ps.status NOT IN ('draft','cancelled')
         AND COALESCE(ps.esi_employee, 0) > 0
       ORDER BY u.name`,
-    [oId, mStr, year]
+    [oId, mStr, year, userIds]
   );
 
   return rows.map(r => ({
@@ -143,7 +145,7 @@ const ESI_FIELDS = [
 ];
 
 // ── PT Challan ────────────────────────────────────────────────────────────────
-async function getPTChallan({ organizationId, month, year }) {
+async function getPTChallan({ organizationId, month, year, userIds = null }) {
   const oId  = Number(organizationId);
   const mStr = padZ(month);
 
@@ -157,12 +159,13 @@ async function getPTChallan({ organizationId, month, year }) {
        FROM payslips ps
        JOIN users u ON u.id = ps.user_id
       WHERE ps.organization_id = $1
+        AND ($4::bigint[] IS NULL OR ps.user_id = ANY($4::bigint[]))
         AND ps.month = $2
         AND ps.year  = $3
         AND ps.status NOT IN ('draft','cancelled')
         AND COALESCE(ps.professional_tax, 0) > 0
       ORDER BY u.name`,
-    [oId, mStr, year]
+    [oId, mStr, year, userIds]
   );
 
   const total = rows.reduce((s, r) => s + Number(r.pt_amount || 0), 0);
@@ -179,7 +182,7 @@ async function getPTChallan({ organizationId, month, year }) {
 }
 
 // ── TDS Challan (24Q) ─────────────────────────────────────────────────────────
-async function getTDSChallan({ organizationId, month, year }) {
+async function getTDSChallan({ organizationId, month, year, userIds = null }) {
   const oId  = Number(organizationId);
   const mStr = padZ(month);
 
@@ -196,12 +199,13 @@ async function getTDSChallan({ organizationId, month, year }) {
        FROM payslips ps
        JOIN users u ON u.id = ps.user_id
       WHERE ps.organization_id = $1
+        AND ($4::bigint[] IS NULL OR ps.user_id = ANY($4::bigint[]))
         AND ps.month = $2
         AND ps.year  = $3
         AND ps.status NOT IN ('draft','cancelled')
         AND COALESCE(ps.tds, 0) > 0
       ORDER BY u.name`,
-    [oId, mStr, year]
+    [oId, mStr, year, userIds]
   );
 
   const total = rows.reduce((s, r) => s + Number(r.monthly_tds || 0), 0);
@@ -221,7 +225,7 @@ async function getTDSChallan({ organizationId, month, year }) {
 }
 
 // ── Form 16 Dataset (annual, per employee) ────────────────────────────────────
-async function getForm16Dataset({ organizationId, financialYear }) {
+async function getForm16Dataset({ organizationId, financialYear, userIds = null }) {
   const oId = Number(organizationId);
   // FY e.g. '2024-25' → April 2024 – March 2025
   const [startY, endYStr] = financialYear.split('-');
@@ -247,6 +251,7 @@ async function getForm16Dataset({ organizationId, financialYear }) {
        FROM payslips ps
        JOIN users u ON u.id = ps.user_id
       WHERE ps.organization_id = $1
+        AND ($4::bigint[] IS NULL OR ps.user_id = ANY($4::bigint[]))
         AND ps.status NOT IN ('draft','cancelled')
         AND (
               (ps.year = $2 AND ps.month::int >= 4) OR
@@ -254,7 +259,7 @@ async function getForm16Dataset({ organizationId, financialYear }) {
             )
       GROUP BY u.id, u.employee_id, u.name, u.pan_number, u.department, u.position
       ORDER BY u.name`,
-    [oId, startYear, endYear]
+    [oId, startYear, endYear, userIds]
   );
 
   return rows.map(r => ({
@@ -277,7 +282,7 @@ async function getForm16Dataset({ organizationId, financialYear }) {
 }
 
 // ── Compliance Summary (for dashboard) ───────────────────────────────────────
-async function getComplianceSummary({ organizationId, month, year }) {
+async function getComplianceSummary({ organizationId, month, year, userIds = null }) {
   const oId  = Number(organizationId);
   const mStr = padZ(month);
 
@@ -295,9 +300,10 @@ async function getComplianceSummary({ organizationId, month, year }) {
          COUNT(*) FILTER (WHERE ps.tds > 0) AS tds_count
        FROM payslips ps
       WHERE ps.organization_id = $1
+        AND ($4::bigint[] IS NULL OR ps.user_id = ANY($4::bigint[]))
         AND ps.month = $2 AND ps.year = $3
         AND ps.status NOT IN ('draft','cancelled')`,
-    [oId, mStr, year]
+    [oId, mStr, year, userIds]
   );
 
   const { rows: pendingReturns } = await pool.query(

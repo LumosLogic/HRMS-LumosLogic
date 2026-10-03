@@ -1,12 +1,27 @@
 const express    = require('express');
 const router     = express.Router();
+const { sameId } = require('../../utils/ids');
 const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const cloudinary = require('cloudinary').v2;
 const multer     = require('multer');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee, getFilterState } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee, getFilterState, canModifyBranchRecord } = require('../../utils/branchFilter');
+
+/**
+ * Admin authorization for an EXISTING document (employee document → the owner's branch;
+ * shared document (visibility 'all') → org-wide needs all-branch access, branch-targeted needs
+ * that branch). Self-owned documents are always allowed.
+ */
+async function canAdminAccessDoc(req, doc) {
+  if (!doc) return false;
+  if (Number(doc.user_id) === Number(req.user.id)) return true;
+  if (req.user.role === 'root_admin') return true;
+  if (doc.visibility === 'all' && doc.branch_id !== undefined) return canModifyBranchRecord(req.branchContext, doc.branch_id);
+  return canAdminAccessUser(req.branchContext, doc.user_id, req.user.organization_id);
+}
+const DOC_DENY = { error: "You do not have access to this document's branch." };
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -304,7 +319,7 @@ router.post('/upload', auth, hasPermission('documents', 'upload'), withBranchCon
 });
 
 // PATCH /api/documents/:id/shares — update visibility and shared recipients (admin only)
-router.patch('/:id/shares', auth, hasPermission('documents', 'manage'), async (req, res) => {
+router.patch('/:id/shares', auth, hasPermission('documents', 'manage'), withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
     const oId = req.user.organization_id;
@@ -312,6 +327,17 @@ router.patch('/:id/shares', auth, hasPermission('documents', 'manage'), async (r
 
     if (!['self', 'all', 'specific', 'admin_only'].includes(visibility))
       return res.status(400).json({ error: 'Invalid visibility value' });
+    {
+      const { data: d0 } = await db.from('employee_documents').select('id, user_id, visibility, branch_id').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
+      if (!d0) return res.status(404).json({ error: 'Document not found' });
+      if (!await canAdminAccessDoc(req, d0)) return res.status(403).json(DOC_DENY);
+      // Shares may only target employees inside the caller's scope.
+      if (visibility === 'specific' && Array.isArray(shared_with) && shared_with.length) {
+        const { assertUsersAccessible } = require('../../utils/branchFilter');
+        const acc = await assertUsersAccessible(req.branchContext, shared_with.map(Number), oId);
+        if (!acc.ok) return res.status(403).json({ error: 'One or more share targets are outside your branch access.' });
+      }
+    }
 
     const { error: upErr } = await db.from('employee_documents')
       .update({ visibility })
@@ -337,12 +363,17 @@ router.patch('/:id/shares', auth, hasPermission('documents', 'manage'), async (r
 });
 
 // PATCH /api/documents/:id/status — admin only
-router.patch('/:id/status', auth, hasPermission('documents', 'manage'), async (req, res) => {
+router.patch('/:id/status', auth, hasPermission('documents', 'manage'), withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
     const { status } = req.body;
     if (!['pending_review', 'verified', 'rejected'].includes(status))
       return res.status(400).json({ error: 'Invalid status' });
+    {
+      const { data: d0 } = await db.from('employee_documents').select('id, user_id, visibility, branch_id').eq('id', req.params.id).eq('organization_id', req.user.organization_id).maybeSingle();
+      if (!d0) return res.status(404).json({ error: 'Document not found' });
+      if (!await canAdminAccessDoc(req, d0)) return res.status(403).json(DOC_DENY);
+    }
     const { data, error } = await db.from('employee_documents')
       .update({ status })
       .eq('id', req.params.id)
@@ -354,7 +385,7 @@ router.patch('/:id/status', auth, hasPermission('documents', 'manage'), async (r
 });
 
 // PATCH /api/documents/:id — edit metadata, visibility/shares, and optionally replace the file
-router.patch('/:id', auth, upload.single('file'), async (req, res) => {
+router.patch('/:id', auth, withBranchContext, upload.single('file'), async (req, res) => {
   try {
     const oId = req.user.organization_id;
 
@@ -362,8 +393,9 @@ router.patch('/:id', auth, upload.single('file'), async (req, res) => {
       .select('*').eq('id', req.params.id).eq('organization_id', oId).single();
     if (!doc) return res.status(404).json({ error: 'Document not found' });
 
-    if (!isAdmin(req.user.role) && doc.user_id !== req.user.id)
+    if (!isAdmin(req.user.role) && !sameId(doc.user_id, req.user.id))
       return res.status(403).json({ error: 'Forbidden' });
+    if (isAdmin(req.user.role) && !await canAdminAccessDoc(req, doc)) return res.status(403).json(DOC_DENY);
 
     const { name, category, expiry_date, visibility, shared_with, targetUserId } = req.body;
 
@@ -452,7 +484,7 @@ router.patch('/:id', auth, upload.single('file'), async (req, res) => {
 });
 
 // POST /api/documents/:id/request-delete — HR admin requests Root Admin to delete a document
-router.post('/:id/request-delete', auth, async (req, res) => {
+router.post('/:id/request-delete', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
 
@@ -463,11 +495,12 @@ router.post('/:id/request-delete', auth, async (req, res) => {
       return res.status(400).json({ error: 'Root Admin can delete directly. Use the delete action instead.' });
 
     const { data: doc } = await db.from('employee_documents')
-      .select('id, name, category')
+      .select('id, name, category, user_id, visibility, branch_id')
       .eq('id', req.params.id)
       .eq('organization_id', oId)
       .single();
     if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (!await canAdminAccessDoc(req, doc)) return res.status(403).json(DOC_DENY);
 
     const { reason } = req.body;
     if (!reason?.trim())
@@ -616,12 +649,13 @@ router.patch('/delete-requests/:id/action', auth, async (req, res) => {
 });
 
 // DELETE /api/documents/:id — only root_admin can delete shared docs (with mandatory reason)
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { data: doc } = await db.from('employee_documents')
       .select('*').eq('id', req.params.id).eq('organization_id', oId).single();
     if (!doc) return res.status(404).json({ error: 'Document not found' });
+    if (isAdmin(req.user.role) && !await canAdminAccessDoc(req, doc)) return res.status(403).json(DOC_DENY);
 
     // HR Admin can delete org-wide shared documents (visibility='all'); employee personal docs need Root Admin (BUG-015)
     if (isAdmin(req.user.role) && req.user.role !== 'root_admin') {
@@ -631,7 +665,7 @@ router.delete('/:id', auth, async (req, res) => {
     }
 
     // Non-admins can only delete their own (no UI, kept for API compatibility)
-    if (!isAdmin(req.user.role) && doc.user_id !== req.user.id)
+    if (!isAdmin(req.user.role) && !sameId(doc.user_id, req.user.id))
       return res.status(403).json({ error: 'Forbidden' });
 
     const { reason } = req.body;

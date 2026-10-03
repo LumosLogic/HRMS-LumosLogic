@@ -176,12 +176,16 @@ function getBranchJoinSQLFilter(state, paramOffset = 0, userAlias = 'u') {
  */
 async function canAdminAccessUser(branchContext, userId, oId) {
   const state = getFilterState(branchContext);
-  if (state.type === 'all')  return true;
   if (state.type === 'none') return false;
+  const uid = Number(userId);
+  if (!Number.isInteger(uid) || uid <= 0) return false;
   const { rows } = await pool.query(
     'SELECT branch_id FROM users WHERE id = $1 AND organization_id = $2 LIMIT 1',
-    [userId, oId]
+    [uid, oId]
   );
+  // The target must exist in the caller's org in every state — foreign IDs are rejected.
+  if (!rows.length) return false;
+  if (state.type === 'all') return true;
   // Normalise to Number: pg returns BIGINT columns as strings; branchIds are Numbers.
   const bid = rows[0]?.branch_id != null ? Number(rows[0].branch_id) : null;
   if (state.type === 'specific') return bid === Number(state.branchId);
@@ -251,7 +255,65 @@ async function getAdminsForEmployee(employeeId, orgId) {
   }
 }
 
+/**
+ * Batch variant of canAdminAccessUser: validates many target user IDs with ONE query.
+ * Returns { ok: true, ids } when every ID is a user in the caller's org and (for scoped
+ * callers) inside their branch scope; otherwise { ok: false, badIds }.
+ */
+async function assertUsersAccessible(branchContext, userIds, oId) {
+  const ids = [...new Set((userIds || []).map(Number))];
+  if (!ids.length) return { ok: true, ids };
+  const invalid = ids.filter(n => !Number.isInteger(n) || n <= 0);
+  if (invalid.length) return { ok: false, badIds: invalid };
+  const state = getFilterState(branchContext);
+  if (state.type === 'none') return { ok: false, badIds: ids };
+  const params = [oId, ids];
+  let clause = '';
+  if (state.type === 'specific') { params.push(state.branchId);  clause = 'AND branch_id = $3'; }
+  if (state.type === 'multi')    { params.push(state.branchIds); clause = 'AND branch_id = ANY($3::bigint[])'; }
+  const { rows } = await pool.query(
+    `SELECT id FROM users WHERE organization_id = $1 AND id = ANY($2::bigint[]) ${clause}`, params);
+  const found = new Set(rows.map(r => Number(r.id)));
+  const badIds = ids.filter(n => !found.has(n));
+  return badIds.length ? { ok: false, badIds } : { ok: true, ids };
+}
+
+/**
+ * Resolves the branch_id a NEW branch-scoped record (holiday, shift, leave policy, asset,
+ * custom role …) may be written with.
+ *   selected branch                  → that branch
+ *   no selection + all-branch access → null (organisation-wide record)
+ *   no selection + limited HR        → rejected: "no selection" must never produce org-wide data
+ * Returns { ok: true, branchId } or { ok: false, status, error }.
+ */
+function resolveWriteBranch(branchContext) {
+  const state = getFilterState(branchContext);
+  if (state.type === 'specific') return { ok: true, branchId: Number(state.branchId) };
+  if (state.type === 'all')      return { ok: true, branchId: null };
+  return { ok: false, status: 403, error: 'Select a branch before creating or changing branch-specific data.' };
+}
+
+/**
+ * May the caller modify an EXISTING record whose branch_id is `recordBranchId`?
+ *   org-wide (NULL) record → only callers with all-branch access (state 'all')
+ *   branch record          → that branch must be in the caller's scope
+ */
+function canModifyBranchRecord(branchContext, recordBranchId) {
+  if (branchContext?.hasAllBranches) return true;           // root / all-branch grant
+  if (recordBranchId == null) return false;                   // org-wide record: all-branch callers only
+  const rb = Number(recordBranchId);
+  const state = getFilterState(branchContext);
+  if (state.type === 'specific') return Number(state.branchId) === rb;
+  if (state.type === 'multi')    return state.branchIds.map(Number).includes(rb);
+  return false;
+}
+
 module.exports = {
+  assertUsersAccessible,
+  resolveWriteBranch,
+  canModifyBranchRecord,
+  // re-exported so modules importing it from here (doc_requirements) get the real function
+  validateBranchAccess: (...a) => require('../services/branchService').validateBranchAccess(...a),
   getFilterState,
   resolveEmployeeIds,
   getBranchUserSQLFilter,

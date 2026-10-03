@@ -28,7 +28,16 @@ const { hasPermission } = require('../../middleware/permissions');
 const { orgId } = require('../../utils/helpers');
 const { clearUserCache, clearOrgCache } = require('../../services/permissionService');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { getFilterState } = require('../../utils/branchFilter');
+const { getFilterState, canAdminAccessUser, resolveWriteBranch } = require('../../utils/branchFilter');
+const { resolvePermissions } = require('../../services/permissionService');
+
+// A branch-scoped custom role (roles.branch_id) may only be held by employees of that branch.
+async function branchScopedRoleMismatch(pool, roleIds, targetBranchId, oId) {
+  const { rows } = await pool.query(
+    `SELECT id, branch_id FROM roles
+      WHERE id = ANY($1::bigint[]) AND org_id = $2 AND branch_id IS NOT NULL`, [roleIds, oId]);
+  return rows.find(r => targetBranchId == null || Number(r.branch_id) !== Number(targetBranchId)) || null;
+}
 
 // ─── Validation helpers ───────────────────────────────────────────────────────
 
@@ -177,7 +186,7 @@ router.get('/user/:userId', auth, hasPermission('roles', 'view'), async (req, re
 
 // ─── 3. PUT /api/roles/user/:userId — replace all roles for a user ────────────
 // MUST be before PUT /:id to avoid Express shadowing this route.
-router.put('/user/:userId', auth, hasPermission('roles', 'manage'), async (req, res) => {
+router.put('/user/:userId', auth, hasPermission('roles', 'manage'), withBranchContext, async (req, res) => {
   try {
     const oId    = orgId(req);
     const userId = parseId(req.params.userId);
@@ -193,11 +202,18 @@ router.put('/user/:userId', auth, hasPermission('roles', 'manage'), async (req, 
     // Ensure the target user exists in this org
     const { data: targetUser } = await db
       .from('users')
-      .select('id, name')
+      .select('id, name, role, branch_id')
       .eq('id', userId)
       .eq('organization_id', oId)
       .maybeSingle();
     if (!targetUser) return res.status(404).json({ error: 'User not found in this organization' });
+    // Non-root callers: target must be in their branch scope and must be a plain employee account.
+    if (req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, userId, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+      if (targetUser.role !== 'employee')
+        return res.status(403).json({ error: 'Only a Root Admin can change roles of admin accounts.' });
+    }
 
     // BUG_243: Ensure all provided roles belong to this org.
     // Use a fetch instead of count-only so it works reliably across all adapter paths.
@@ -211,6 +227,12 @@ router.put('/user/:userId', auth, hasPermission('roles', 'manage'), async (req, 
       if (!orgRolesErr && orgRoles !== null && orgRoles.length !== safeRoleIds.length) {
         return res.status(400).json({ error: 'One or more roles do not belong to this organization' });
       }
+    }
+
+    // Branch-scoped roles can only go to employees of that branch.
+    if (safeRoleIds.length > 0) {
+      const bad = await branchScopedRoleMismatch(pool, safeRoleIds, targetUser.branch_id, oId);
+      if (bad) return res.status(400).json({ error: "A branch-specific role can only be assigned to employees of that branch." });
     }
 
     // DEEP-005: Only a Root Admin may assign the root_admin system role.
@@ -228,6 +250,16 @@ router.put('/user/:userId', auth, hasPermission('roles', 'manage'), async (req, 
       );
       if (rootRoleRows.length > 0) {
         return res.status(403).json({ error: 'Only a Root Admin can assign the Root Admin role.' });
+      }
+      // hr_admin is admin-level too: promoting an employee to HR Admin is a Root Admin action.
+      const { rows: hrRoleRows } = await pool.query(
+        `SELECT 1 FROM roles
+          WHERE id = ANY($1::bigint[]) AND org_id = $2 AND is_system_role = true AND slug = 'hr_admin'
+          LIMIT 1`,
+        [safeRoleIds, oId]
+      );
+      if (hrRoleRows.length > 0) {
+        return res.status(403).json({ error: 'Only a Root Admin can assign the HR Admin role.' });
       }
     }
 
@@ -315,6 +347,9 @@ router.post('/', auth, hasPermission('roles', 'manage'), withBranchContext, asyn
       return res.status(400).json({ error: 'Role name must be 50 characters or fewer' });
     }
 
+    const roleBranch = resolveWriteBranch(req.branchContext);
+    if (!roleBranch.ok) return res.status(roleBranch.status).json({ error: roleBranch.error });
+
     const slug = slugify(trimmedName) + '_' + Date.now();
 
     const { data, error } = await db
@@ -327,7 +362,7 @@ router.post('/', auth, hasPermission('roles', 'manage'), withBranchContext, asyn
         is_system_role: false,
         created_by:     req.user.id,
         // BUG-117: scope custom roles to the currently selected branch
-        branch_id:      req.branchContext?.selectedBranchId || null,
+        branch_id:      roleBranch.branchId,
       })
       .select()
       .single();
@@ -545,7 +580,7 @@ router.get('/:id/permissions', auth, hasPermission('roles', 'view'), async (req,
 });
 
 // ─── 9. PUT /api/roles/:id/permissions — replace permission set for a role ────
-router.put('/:id/permissions', auth, hasPermission('roles', 'manage'), async (req, res) => {
+router.put('/:id/permissions', auth, hasPermission('roles', 'manage'), withBranchContext, async (req, res) => {
   try {
     const oId    = orgId(req);
     const roleId = parseId(req.params.id);
@@ -567,6 +602,20 @@ router.put('/:id/permissions', auth, hasPermission('roles', 'manage'), async (re
       .maybeSingle();
 
     if (!role) return res.status(404).json({ error: 'Role not found' });
+
+    // No privilege escalation: a non-root caller may only ADD permissions they hold themselves.
+    if (req.user.role !== 'root_admin') {
+      const mine = new Set(await resolvePermissions(req.user.id, oId));
+      const { rows: curRows } = await pool.query('SELECT permission_id FROM role_permissions WHERE role_id = $1', [roleId]);
+      const cur = new Set(curRows.map(r => Number(r.permission_id)));
+      const added = safeIds.filter(id => !cur.has(Number(id)));
+      if (added.length) {
+        const { rows: addRows } = await pool.query(
+          'SELECT module_key, action FROM permissions WHERE id = ANY($1::bigint[])', [added]);
+        const denied = addRows.find(r => !mine.has(`${r.module_key}.${r.action}`));
+        if (denied) return res.status(403).json({ error: `You cannot grant a permission you do not hold (${denied.module_key}.${denied.action}).` });
+      }
+    }
 
     // Root Admin role always has all permissions and cannot be restricted
     if (role.slug === 'root_admin') {
@@ -769,7 +818,7 @@ async function syncUserRoleFromRoles(client, userId, oId) {
 }
 
 // ─── 11. POST /api/roles/:id/members — add a user to a role ──────────────────
-router.post('/:id/members', auth, hasPermission('roles', 'manage'), async (req, res) => {
+router.post('/:id/members', auth, hasPermission('roles', 'manage'), withBranchContext, async (req, res) => {
   try {
     const oId    = orgId(req);
     const roleId = parseId(req.params.id);
@@ -781,7 +830,7 @@ router.post('/:id/members', auth, hasPermission('roles', 'manage'), async (req, 
     // Verify role belongs to this org
     const { data: role } = await db
       .from('roles')
-      .select('id, name, slug, is_system_role')
+      .select('id, name, slug, is_system_role, branch_id')
       .eq('id', roleId)
       .eq('org_id', oId)
       .maybeSingle();
@@ -791,7 +840,7 @@ router.post('/:id/members', auth, hasPermission('roles', 'manage'), async (req, 
     // Verify target user belongs to this org
     const { data: user } = await db
       .from('users')
-      .select('id, name, email, role')
+      .select('id, name, email, role, branch_id')
       .eq('id', userId)
       .eq('organization_id', oId)
       .maybeSingle();
@@ -802,6 +851,17 @@ router.post('/:id/members', auth, hasPermission('roles', 'manage'), async (req, 
     if (req.user.role !== 'root_admin' && role.slug === 'root_admin' && role.is_system_role) {
       return res.status(403).json({ error: 'Only a Root Admin can assign the Root Admin role.' });
     }
+    if (req.user.role !== 'root_admin' && role.slug === 'hr_admin' && role.is_system_role) {
+      return res.status(403).json({ error: 'Only a Root Admin can assign the HR Admin role.' });
+    }
+    if (req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, user.id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+      if (user.role !== 'employee')
+        return res.status(403).json({ error: 'Only a Root Admin can change roles of admin accounts.' });
+    }
+    if (role.branch_id != null && Number(role.branch_id) !== Number(user.branch_id))
+      return res.status(400).json({ error: 'A branch-specific role can only be assigned to employees of that branch.' });
 
     const client = await pool.connect();
     try {

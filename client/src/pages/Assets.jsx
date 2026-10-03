@@ -5,6 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useBranch } from '@/context/BranchContext';
 import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { useEmployees } from '@/hooks/useEmployees';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { Avatar } from '@/components/ui/Avatar';
@@ -163,7 +164,7 @@ export default function Assets() {
   const { data: _aData, isLoading } = useQuery({ queryKey: ['assets', filter, selectedBranchId], queryFn: () => apiGet('/assets', filter !== 'all' ? { status: filter } : {}) });
   // Unfiltered list used for client-side duplicate validation in the modal
   const { data: _allAData }         = useQuery({ queryKey: ['assets-all', selectedBranchId], queryFn: () => apiGet('/assets'), staleTime: 30000 });
-  const { data: _eData }            = useQuery({ queryKey: ['employees', 'all', selectedBranchId], queryFn: () => apiGet('/employees'), enabled: isAdmin });
+  const { data: _eData }            = useEmployees({ enabled: isAdmin });
   const assets    = Array.isArray(_aData)    ? _aData    : [];
   const allAssets = Array.isArray(_allAData) ? _allAData : [];
   const employees = Array.isArray(_eData)    ? _eData    : [];

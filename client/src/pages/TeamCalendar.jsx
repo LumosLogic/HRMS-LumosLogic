@@ -309,7 +309,7 @@ export default function TeamCalendar() {
   }
 
   const { data: holidays = [] } = useQuery({
-    queryKey: ['holidays', year],
+    queryKey: ['holidays', year, selectedBranchId],
     queryFn:  () => apiGet('/holidays', { year }),
     staleTime: 300000,
   });

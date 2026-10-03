@@ -126,10 +126,9 @@ router.post('/register-org', rateLimiter(LIMITS.ORG_REGISTER), async (req, res) 
 // ─── Organization Settings: GET ───────────────────────────────────────────────
 router.get('/org/settings', auth, async (req, res) => {
   try {
-    let targetOrgId = orgId(req);
-    if (req.user.role === 'root_admin' && req.query.org_id) {
-      targetOrgId = Number(req.query.org_id);
-    }
+    // Always the authenticated organisation. A root admin of org A must never read org B
+    // (the former ?org_id= override was a cross-tenant read).
+    const targetOrgId = orgId(req);
     const { data, error } = await db.from('organizations')
       .select('id, name, slug, domain, logo_url, google_client_id, google_calendar_id, vapid_public_key, total_annual_leaves, plan, status, created_at')
       .eq('id', targetOrgId).maybeSingle();
@@ -151,7 +150,8 @@ router.put('/org/settings', auth, async (req, res) => {
       total_annual_leaves,
     } = req.body;
 
-    const targetOrgId = org_id ? Number(org_id) : orgId(req);
+    // Always the authenticated organisation — body.org_id is ignored (cross-tenant write otherwise).
+    const targetOrgId = orgId(req);
 
     const update = {};
     if (name)               update.name = name.trim();

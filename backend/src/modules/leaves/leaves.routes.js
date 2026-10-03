@@ -1,9 +1,10 @@
 const express = require('express');
 const router  = express.Router();
+const { sameId } = require('../../utils/ids');
 const { db, pool } = require('../../config/db');
 const { auth, isAdminRole } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
-const { flat, flatOne, orgId, getSettings, getSettingsForUser, isWorkingDay, getRecipients, localDateStr, getOrgContext, toMinutes } = require('../../utils/helpers');
+const { getUserBranchId, holidayAppliesToBranch, flat, flatOne, orgId, getSettings, getSettingsForUser, isWorkingDay, getRecipients, localDateStr, getOrgContext, toMinutes } = require('../../utils/helpers');
 const { sendMail, leaveAppliedHtml, leaveStatusHtml, leaveDeptApprovalHtml, leaveForwardedToRootHtml } = require('../../services/emailService');
 const engine = require('../../services/leaveWorkflowEngine');
 const { withBranchContext } = require('../../middleware/branchContext');
@@ -37,15 +38,15 @@ async function getEffectivePolicies(oId, userId, { leaveType = null, activeOnly 
   } catch { return []; }
 }
 
-async function fetchHolidaySet(oId, startDate, endDate) {
+// Holidays that apply to ONE employee: organisation-wide ones plus their own branch's.
+// (A holiday set for another branch must never reduce this employee's leave days.)
+async function fetchHolidaySet(oId, startDate, endDate, userId = null) {
   try {
-    const { data } = await db
-      .from('holidays')
-      .select('date')
-      .eq('organization_id', oId)
-      .gte('date', startDate)
-      .lte('date', endDate);
-    return new Set((data || []).map(h => h.date));
+    let q = db.from('holidays').select('date, branch_id')
+      .eq('organization_id', oId).gte('date', startDate).lte('date', endDate);
+    const { data } = await q;
+    const branchId = userId ? await getUserBranchId(oId, userId) : null;
+    return new Set((data || []).filter(h => holidayAppliesToBranch(h, branchId)).map(h => h.date));
   } catch { return new Set(); }
 }
 
@@ -247,12 +248,14 @@ router.get('/my-history', auth, async (req, res) => {
 });
 
 // ─── ENH_LEAVES_004: Leave Comments ──────────────────────────────────────────
-router.get('/:id/comments', auth, async (req, res) => {
+router.get('/:id/comments', auth, withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const { data: leave } = await db.from('leaves').select('user_id, organization_id').eq('id', req.params.id).maybeSingle();
-    if (!leave || leave.organization_id !== oId) return res.status(404).json({ error: 'Not found' });
-    if (!isAdminRole(req.user.role) && leave.user_id !== req.user.id) return res.status(403).json({ error: 'Access denied' });
+    if (!leave || !sameId(leave.organization_id, oId)) return res.status(404).json({ error: 'Not found' });
+    if (!isAdminRole(req.user.role) && !sameId(leave.user_id, req.user.id)) return res.status(403).json({ error: 'Access denied' });
+    if (isAdminRole(req.user.role) && !sameId(leave.user_id, req.user.id) && !await canAdminAccessUser(req.branchContext, leave.user_id, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
     const { data, error } = await db.from('leave_comments').select('*').eq('leave_id', req.params.id).order('created_at', { ascending: true });
     if (error) {
       if (error.message.includes('does not exist')) return res.json([]); // table not yet created
@@ -274,14 +277,16 @@ router.get('/:id/comments', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/:id/comments', auth, async (req, res) => {
+router.post('/:id/comments', auth, withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const { comment } = req.body;
     if (!comment?.trim()) return res.status(400).json({ error: 'Comment required' });
     const { data: leave } = await db.from('leaves').select('user_id, organization_id').eq('id', req.params.id).maybeSingle();
-    if (!leave || leave.organization_id !== oId) return res.status(404).json({ error: 'Not found' });
-    if (!isAdminRole(req.user.role) && leave.user_id !== req.user.id) return res.status(403).json({ error: 'Access denied' });
+    if (!leave || !sameId(leave.organization_id, oId)) return res.status(404).json({ error: 'Not found' });
+    if (!isAdminRole(req.user.role) && !sameId(leave.user_id, req.user.id)) return res.status(403).json({ error: 'Access denied' });
+    if (isAdminRole(req.user.role) && !sameId(leave.user_id, req.user.id) && !await canAdminAccessUser(req.branchContext, leave.user_id, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
     const { data, error } = await db.from('leave_comments').insert({
       leave_id: req.params.id, user_id: req.user.id, comment: comment.trim(), organization_id: oId,
     }).select().single();
@@ -332,9 +337,10 @@ router.get('/date-check', auth, async (req, res) => {
       .lte('end_date', `${year}-12-31`);
 
     const { data: orgHolidays } = await db.from('holidays')
-      .select('date').eq('organization_id', orgId(req))
+      .select('date, branch_id').eq('organization_id', orgId(req))
       .like('date', `${year}-%`);
-    const holidaySet = new Set((orgHolidays || []).map(h => h.date));
+    const _myBranch = await getUserBranchId(orgId(req), req.user.id);
+    const holidaySet = new Set((orgHolidays || []).filter(h => holidayAppliesToBranch(h, _myBranch)).map(h => h.date));
 
     const usedByType = {};
     for (const l of approved || []) {
@@ -912,9 +918,12 @@ router.get('/', auth, withBranchContext, async (req, res) => {
 });
 
 // ─── ROUTE: POST / — create leave ─────────────────────────────────────────────
-router.post('/', auth, async (req, res) => {
+router.post('/', auth, withBranchContext, async (req, res) => {
   try {
     const { start_date, end_date, leave_type, reason, user_id, leave_time, half_type } = req.body;
+    if (isAdminRole(req.user.role) && user_id && parseInt(user_id, 10) !== req.user.id &&
+        !await canAdminAccessUser(req.branchContext, parseInt(user_id, 10), orgId(req)))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
     if (!start_date || !end_date) return res.status(400).json({ error: 'Start and end dates required' });
     if (start_date > end_date)    return res.status(400).json({ error: 'Start date must be before end date' });
 
@@ -923,7 +932,7 @@ router.post('/', auth, async (req, res) => {
     const isSubmittedByAdmin = isAdminRole(req.user.role) && user_id && parseInt(user_id) !== req.user.id;
     if (leave_time !== 'wfh' && leave_type !== 'wfh' && !isSubmittedByAdmin) {
       const settings     = await getSettingsForUser(orgId(req), req.user.id);
-      const holidayDates = await fetchHolidaySet(orgId(req), start_date, end_date);
+      const holidayDates = await fetchHolidaySet(orgId(req), start_date, end_date, req.user.id);
       const checkDates   = buildWorkingDates(start_date, end_date, settings, holidayDates);
       if (checkDates.length === 0) {
         const isSingle = start_date === end_date;
@@ -947,7 +956,7 @@ router.post('/', auth, async (req, res) => {
       try {
         const oId        = orgId(req);
         const settings   = await getSettingsForUser(oId, targetUserId);
-        const holidaySet = await fetchHolidaySet(oId, start_date, end_date);
+        const holidaySet = await fetchHolidaySet(oId, start_date, end_date, targetUserId);
         const newDays    = leave_time === 'half' ? 0.5 : buildWorkingDates(start_date, end_date, settings, holidaySet).length;
 
         if (newDays > 0) {
@@ -971,7 +980,7 @@ router.post('/', auth, async (req, res) => {
             let usedDays = 0;
             for (const l of (existingLeaves || [])) {
               if (l.leave_time === 'half') { usedDays += 0.5; continue; }
-              const hs = await fetchHolidaySet(oId, l.start_date, l.end_date);
+              const hs = await fetchHolidaySet(oId, l.start_date, l.end_date, targetUserId);
               usedDays += buildWorkingDates(l.start_date, l.end_date, settings, hs).length;
             }
 
@@ -999,7 +1008,7 @@ router.post('/', auth, async (req, res) => {
     if (isOnBehalf) {
       const settings     = await getSettingsForUser(orgId(req), targetUserId);
       const attStatus    = leave_time === 'half' ? 'half_day' : (leave_time === 'wfh' || leave_type === 'wfh') ? 'wfh' : 'on_leave';
-      const holidayDates = await fetchHolidaySet(orgId(req), start_date, end_date);
+      const holidayDates = await fetchHolidaySet(orgId(req), start_date, end_date, targetUserId);
       const workDates    = buildWorkingDates(start_date, end_date, settings, holidayDates);
       const approvedAt   = new Date().toISOString();
 
@@ -1149,11 +1158,13 @@ router.post('/', auth, async (req, res) => {
 });
 
 // ─── ROUTE: PUT /:id — edit leave ─────────────────────────────────────────────
-router.put('/:id', auth, async (req, res) => {
+router.put('/:id', auth, withBranchContext, async (req, res) => {
   try {
     const { data: leave } = await db.from('leaves').select('*').eq('id', req.params.id).eq('organization_id', orgId(req)).maybeSingle();
     if (!leave) return res.status(404).json({ error: 'Leave not found' });
-    if (!isAdminRole(req.user.role) && leave.user_id !== req.user.id) return res.status(403).json({ error: 'Not authorized' });
+    if (!isAdminRole(req.user.role) && !sameId(leave.user_id, req.user.id)) return res.status(403).json({ error: 'Not authorized' });
+    if (isAdminRole(req.user.role) && !sameId(leave.user_id, req.user.id) && !await canAdminAccessUser(req.branchContext, leave.user_id, orgId(req)))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
     if (['approved','rejected'].includes(leave.status) && !isAdminRole(req.user.role)) {
       return res.status(400).json({ error: 'Cannot edit an approved or rejected leave' });
     }
@@ -1241,7 +1252,7 @@ router.put('/:id/approve', auth, withBranchContext, async (req, res) => {
       if (!nextInfo) {
         // ── Final level approved — create attendance + mark approved ────────
         const settings     = await getSettingsForUser(oId, leave.user_id);
-        const holidayDates = await fetchHolidaySet(oId, leave.start_date, leave.end_date);
+        const holidayDates = await fetchHolidaySet(oId, leave.start_date, leave.end_date, leave.user_id);
         const workDates    = buildWorkingDates(leave.start_date, leave.end_date, settings, holidayDates);
         const attStatus    = leave.leave_time === 'half' ? 'half_day'
           : (leave.leave_time === 'wfh' || leave.leave_type === 'wfh') ? 'wfh'
@@ -1387,7 +1398,7 @@ router.put('/:id/approve', auth, withBranchContext, async (req, res) => {
     }
 
     const settings     = await getSettingsForUser(oId, leave.user_id);
-    const holidayDates = await fetchHolidaySet(oId, leave.start_date, leave.end_date);
+    const holidayDates = await fetchHolidaySet(oId, leave.start_date, leave.end_date, leave.user_id);
     const workDates    = buildWorkingDates(leave.start_date, leave.end_date, settings, holidayDates);
     const attStatus    = leave.leave_time === 'half' ? 'half_day'
       : (leave.leave_time === 'wfh' || leave.leave_type === 'wfh') ? 'wfh'
@@ -1502,7 +1513,7 @@ router.put('/:id/reject', auth, withBranchContext, async (req, res) => {
     let workDates = [];
     if (leave.status === 'approved') {
       const settings     = await getSettingsForUser(oId, leave.user_id);
-      const holidayDates = await fetchHolidaySet(oId, leave.start_date, leave.end_date);
+      const holidayDates = await fetchHolidaySet(oId, leave.start_date, leave.end_date, leave.user_id);
       workDates = buildWorkingDates(leave.start_date, leave.end_date, settings, holidayDates);
     }
 
@@ -1550,7 +1561,7 @@ router.post('/:id/withdraw', auth, async (req, res) => {
     const { data: leave } = await db.from('leaves')
       .select('*').eq('id', req.params.id).eq('organization_id', orgId(req)).maybeSingle();
     if (!leave) return res.status(404).json({ error: 'Leave not found' });
-    if (leave.user_id !== req.user.id) return res.status(403).json({ error: 'Not authorized' });
+    if (!sameId(leave.user_id, req.user.id)) return res.status(403).json({ error: 'Not authorized' });
     if (!['pending_approval','pending','pending_dept','pending_root'].includes(leave.status)) {
       return res.status(400).json({ error: 'Can only withdraw leaves that are still pending' });
     }
@@ -1574,7 +1585,7 @@ router.post('/:id/withdraw', auth, async (req, res) => {
 router.put('/:id/revert', auth, withBranchContext, async (req, res) => {
   const { data: leave } = await db.from('leaves').select('*').eq('id', req.params.id).eq('organization_id', orgId(req)).maybeSingle();
   if (!leave) return res.status(404).json({ error: 'Leave not found' });
-  if (!isAdminRole(req.user.role) && leave.user_id !== req.user.id) return res.status(403).json({ error: 'Not authorized' });
+  if (!isAdminRole(req.user.role) && !sameId(leave.user_id, req.user.id)) return res.status(403).json({ error: 'Not authorized' });
   if (leave.status !== 'approved') return res.status(400).json({ error: 'Only approved leaves can be reverted' });
   // Branch isolation: admin must have access to the leave owner's branch.
   if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
@@ -1583,7 +1594,7 @@ router.put('/:id/revert', auth, withBranchContext, async (req, res) => {
   }
 
   const settings     = await getSettingsForUser(orgId(req), leave.user_id);
-  const holidayDates = await fetchHolidaySet(orgId(req), leave.start_date, leave.end_date);
+  const holidayDates = await fetchHolidaySet(orgId(req), leave.start_date, leave.end_date, leave.user_id);
   const workDates    = buildWorkingDates(leave.start_date, leave.end_date, settings, holidayDates);
 
   const client = await pool.connect();
@@ -1657,7 +1668,7 @@ router.get('/override-preview', auth, async (req, res) => {
       if (leave.leave_time === 'half') {
         totalDays += 0.5;
       } else {
-        const holidays = await fetchHolidaySet(oId, leave.start_date, leave.end_date);
+        const holidays = await fetchHolidaySet(oId, leave.start_date, leave.end_date, leave.user_id);
         totalDays += buildWorkingDates(leave.start_date, leave.end_date, settings, holidays).length;
       }
     }
@@ -1720,7 +1731,7 @@ router.post('/admin-override-attendance', auth, withBranchContext, async (req, r
       if (leave.leave_time === 'half') {
         totalDaysRestored += 0.5;
       } else {
-        const holidays = await fetchHolidaySet(oId, leave.start_date, leave.end_date);
+        const holidays = await fetchHolidaySet(oId, leave.start_date, leave.end_date, leave.user_id);
         totalDaysRestored += buildWorkingDates(leave.start_date, leave.end_date, settings, holidays).length;
       }
     }
@@ -1803,7 +1814,7 @@ router.post('/admin-override-attendance', auth, withBranchContext, async (req, r
 router.delete('/:id', auth, withBranchContext, async (req, res) => {
   const { data: leave } = await db.from('leaves').select('*').eq('id', req.params.id).eq('organization_id', orgId(req)).maybeSingle();
   if (!leave) return res.status(404).json({ error: 'Leave not found' });
-  if (!isAdminRole(req.user.role) && leave.user_id !== req.user.id) return res.status(403).json({ error: 'Not authorized' });
+  if (!isAdminRole(req.user.role) && !sameId(leave.user_id, req.user.id)) return res.status(403).json({ error: 'Not authorized' });
   if (leave.status === 'approved' && !isAdminRole(req.user.role)) return res.status(400).json({ error: 'Cannot cancel approved leave' });
   // Branch isolation: admin must have access to the leave owner's branch.
   if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
@@ -1814,7 +1825,7 @@ router.delete('/:id', auth, withBranchContext, async (req, res) => {
   let workDates = [];
   if (leave.status === 'approved') {
     const settings     = await getSettingsForUser(orgId(req), leave.user_id);
-    const holidayDates = await fetchHolidaySet(orgId(req), leave.start_date, leave.end_date);
+    const holidayDates = await fetchHolidaySet(orgId(req), leave.start_date, leave.end_date, leave.user_id);
     workDates = buildWorkingDates(leave.start_date, leave.end_date, settings, holidayDates);
   }
 
@@ -1866,12 +1877,12 @@ router.post('/:id/department-approve', auth, async (req, res) => {
     if (empDeptId) {
       const { data: dept } = await db.from('departments')
         .select('id, head_user_id, name').eq('id', empDeptId).eq('organization_id', oId).maybeSingle();
-      if (dept?.head_user_id === req.user.id) { isAuthorized = true; approverLabel = dept.name + ' Head'; }
+      if (sameId(dept?.head_user_id, req.user.id)) { isAuthorized = true; approverLabel = dept.name + ' Head'; }
     }
     if (!isAuthorized) {
       const { data: empUser } = await db.from('users')
         .select('reporting_to').eq('id', leave.user_id).eq('organization_id', oId).maybeSingle();
-      if (empUser?.reporting_to === req.user.id) { isAuthorized = true; approverLabel = 'Reporting Manager'; }
+      if (sameId(empUser?.reporting_to, req.user.id)) { isAuthorized = true; approverLabel = 'Reporting Manager'; }
     }
     if (!isAuthorized) return res.status(403).json({ error: 'You are not authorized to forward this leave.' });
 
@@ -1931,7 +1942,7 @@ router.post('/:id/final-approve', auth, hasPermission('leaves', 'approve'), with
     }
 
     const settings     = await getSettingsForUser(oId, leave.user_id);
-    const holidayDates = await fetchHolidaySet(oId, leave.start_date, leave.end_date);
+    const holidayDates = await fetchHolidaySet(oId, leave.start_date, leave.end_date, leave.user_id);
     const workDates    = buildWorkingDates(leave.start_date, leave.end_date, settings, holidayDates);
     const attStatus    = leave.leave_time === 'half' ? 'half_day'
       : (leave.leave_time === 'wfh' || leave.leave_type === 'wfh') ? 'wfh'
@@ -2026,7 +2037,7 @@ router.post('/:id/final-reject', auth, hasPermission('leaves', 'reject'), withBr
 });
 
 // ─── ROUTE: GET /:id/history ──────────────────────────────────────────────────
-router.get('/:id/history', auth, async (req, res) => {
+router.get('/:id/history', auth, withBranchContext, async (req, res) => {
   try {
     const oId     = orgId(req);
     const leaveId = parseInt(req.params.id, 10);
@@ -2035,15 +2046,17 @@ router.get('/:id/history', auth, async (req, res) => {
     const { data: leave } = await db.from('leaves')
       .select('id, user_id').eq('id', leaveId).eq('organization_id', oId).maybeSingle();
     if (!leave) return res.status(404).json({ error: 'Leave not found' });
+    if (isAdminRole(req.user.role) && !sameId(leave.user_id, req.user.id) && !await canAdminAccessUser(req.branchContext, leave.user_id, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
 
-    if (!isAdminRole(req.user.role) && leave.user_id !== req.user.id) {
+    if (!isAdminRole(req.user.role) && !sameId(leave.user_id, req.user.id)) {
       const { data: employee } = await db.from('users')
         .select('department_id').eq('id', leave.user_id).eq('organization_id', oId).maybeSingle();
       let isDeptHead = false;
       if (employee?.department_id) {
         const { data: dept } = await db.from('departments')
           .select('head_user_id').eq('id', employee.department_id).eq('organization_id', oId).maybeSingle();
-        isDeptHead = dept?.head_user_id === req.user.id;
+        isDeptHead = sameId(dept?.head_user_id, req.user.id);
       }
       if (!isDeptHead) return res.status(403).json({ error: 'Not authorized' });
     }

@@ -578,8 +578,10 @@ async function fetchAllData(oId, uId, month, year) {
       `SELECT date::text, name
          FROM holidays
         WHERE organization_id = $1
-          AND date >= $2 AND date <= $3`,
-      [oId, start, end]
+          AND date >= $2 AND date <= $3
+          AND (branch_id IS NULL
+               OR branch_id = (SELECT u.branch_id FROM users u WHERE u.id = $4 AND u.organization_id = $1))`,
+      [oId, start, end, uId]
     ),
 
     // Work schedule — try both column naming conventions across DB versions.

@@ -5,7 +5,7 @@ const { auth }   = require('../../middleware/auth');
 const cloudinary = require('cloudinary').v2;
 const multer     = require('multer');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { getFilterState, validateBranchAccess, resolveEmployeeIds, getAdminsForEmployee } = require('../../utils/branchFilter');
+const { getFilterState, validateBranchAccess, resolveEmployeeIds, getAdminsForEmployee, canAdminAccessUser, assertUsersAccessible } = require('../../utils/branchFilter');
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -278,17 +278,21 @@ router.get('/my-activity', auth, async (req, res) => {
 // employee picker empty. This endpoint intentionally omits branch filtering because
 // branch scope is already enforced through assigned_branch_ids[] on the requirement.
 // Security: still scoped to the authenticated org. Admin-only.
-router.get('/employees', auth, async (req, res) => {
+router.get('/employees', auth, withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
     const oId = req.user.organization_id;
-    const { data, error } = await db
+    const scopeIds = await resolveEmployeeIds(req.branchContext, oId); // null = org-wide
+    if (scopeIds !== null && scopeIds.length === 0) return res.json([]);
+    let q = db
       .from('users')
       .select('id, name, email, department, position, avatar_color, employee_status')
       .eq('organization_id', oId)
       .eq('role', 'employee')
       .not('employee_status', 'in', ['inactive', 'resigned', 'terminated'])
       .order('name');
+    if (scopeIds !== null) q = q.in('id', scopeIds);
+    const { data, error } = await q;
     if (error) throw error;
     res.json(data || []);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -372,7 +376,7 @@ router.post('/', auth, async (req, res) => {
 });
 
 // PATCH /api/doc-requirements/submissions/:id/review — HR review action
-router.patch('/submissions/:id/review', auth, async (req, res) => {
+router.patch('/submissions/:id/review', auth, withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
     const oId = req.user.organization_id;
@@ -393,6 +397,8 @@ router.patch('/submissions/:id/review', auth, async (req, res) => {
       .eq('organization_id', oId)
       .single();
     if (!sub) return res.status(404).json({ error: 'Submission not found' });
+    if (sub.user_id && !await canAdminAccessUser(req.branchContext, sub.user_id, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
 
     const updates = {
       status:      action,
@@ -472,7 +478,7 @@ router.patch('/submissions/:id/review', auth, async (req, res) => {
 // employee_ids = null/[] → clears employee targeting (org-wide).
 // branch_ids   = null/[] → clears branch targeting (org-wide).
 // Both can be set independently.
-router.post('/:id/assign', auth, async (req, res) => {
+router.post('/:id/assign', auth, withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
     const oId = req.user.organization_id;
@@ -481,6 +487,10 @@ router.post('/:id/assign', auth, async (req, res) => {
     const assignedEmployeeIds = (Array.isArray(employee_ids) && employee_ids.length > 0)
       ? employee_ids.map(Number)
       : null;
+    if (assignedEmployeeIds) {
+      const acc = await assertUsersAccessible(req.branchContext, assignedEmployeeIds, oId);
+      if (!acc.ok) return res.status(403).json({ error: 'One or more employees are outside your organisation or branch access.' });
+    }
 
     // Validate and resolve branch IDs
     let assignedBranchIds = null;
@@ -681,7 +691,7 @@ router.post('/:id/submit', auth, upload.single('file'), async (req, res) => {
 
 // GET /api/doc-requirements/for-employee/:userId
 // Admin: fetch active requirements applicable to a specific employee + that employee's submission status
-router.get('/for-employee/:userId', auth, async (req, res) => {
+router.get('/for-employee/:userId', auth, withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
     const oId   = req.user.organization_id;
@@ -692,6 +702,8 @@ router.get('/for-employee/:userId', auth, async (req, res) => {
       .select('id, organization_id, branch_id')
       .eq('id', empId).eq('organization_id', oId).maybeSingle();
     if (!emp) return res.status(404).json({ error: 'Employee not found' });
+    if (!await canAdminAccessUser(req.branchContext, empId, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
 
     const { data: requirements, error } = await db
       .from('document_requirements')
@@ -727,7 +739,7 @@ router.get('/for-employee/:userId', auth, async (req, res) => {
 
 // POST /api/doc-requirements/:id/submit-for/:userId
 // Admin uploads a document on behalf of a specific employee
-router.post('/:id/submit-for/:userId', auth, upload.single('file'), async (req, res) => {
+router.post('/:id/submit-for/:userId', auth, withBranchContext, upload.single('file'), async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Forbidden' });
     const oId   = req.user.organization_id;
@@ -739,6 +751,8 @@ router.post('/:id/submit-for/:userId', auth, upload.single('file'), async (req, 
       .select('id, name, organization_id, branch_id')
       .eq('id', empId).eq('organization_id', oId).maybeSingle();
     if (!emp) return res.status(404).json({ error: 'Employee not found' });
+    if (!await canAdminAccessUser(req.branchContext, empId, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
 
     if (!req.file) return res.status(400).json({ error: 'No file provided' });
     if (!ALLOWED_MIMES.includes(req.file.mimetype))

@@ -1,5 +1,6 @@
 const express    = require('express');
 const router     = express.Router();
+const { sameId } = require('../../utils/ids');
 const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
@@ -74,7 +75,7 @@ function validateExpenseAmount(amount) {
 
 // POST /api/expenses — any authenticated user can submit their own expense claim.
 // Admins can submit on behalf of another user by passing user_id in the body.
-router.post('/', auth, async (req, res) => {
+router.post('/', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { title, category, amount, expense_date, description, receipt_url, receipt_filename, merchant_name, receipt_number, user_id } = req.body;
@@ -89,6 +90,8 @@ router.post('/', auth, async (req, res) => {
       const { data: targetUser } = await db.from('users')
         .select('id').eq('id', parseInt(user_id)).eq('organization_id', oId).maybeSingle();
       if (!targetUser) return res.status(400).json({ error: 'Employee not found in your organization' });
+      if (!sameId(targetUser.id, req.user.id) && !await canAdminAccessUser(req.branchContext, targetUser.id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
       targetUserId = targetUser.id;
     }
 
@@ -222,7 +225,7 @@ router.put('/:id/manager-approve', auth, async (req, res) => {
       .select('user_id, title, amount, status, manager_id')
       .eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
     if (!exp) return res.status(404).json({ error: 'Expense not found' });
-    if (exp.manager_id !== req.user.id)
+    if (!sameId(exp.manager_id, req.user.id))
       return res.status(403).json({ error: 'You are not the assigned approver for this expense' });
     if (exp.status !== 'pending')
       return res.status(400).json({ error: 'This expense has already been reviewed' });
@@ -291,8 +294,8 @@ router.put('/:id', auth, withBranchContext, async (req, res) => {
     const oId = req.user.organization_id;
     const { data: exp } = await db.from('expenses')
       .select('user_id, status').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
-    if (!exp || (exp.user_id !== req.user.id && !isAdmin(req.user.role))) return res.status(403).json({ error: 'Forbidden' });
-    if (isAdmin(req.user.role) && exp.user_id !== req.user.id &&
+    if (!exp || (!sameId(exp.user_id, req.user.id) && !isAdmin(req.user.role))) return res.status(403).json({ error: 'Forbidden' });
+    if (isAdmin(req.user.role) && !sameId(exp.user_id, req.user.id) &&
         !await canAdminAccessUser(req.branchContext, exp.user_id, oId))
       return res.status(403).json({ error: "You do not have access to this employee's branch" });
     if (exp.status !== 'pending' && !isAdmin(req.user.role)) return res.status(400).json({ error: 'Cannot edit a reviewed expense' });
@@ -318,8 +321,8 @@ router.delete('/:id', auth, withBranchContext, async (req, res) => {
     const oId = req.user.organization_id;
     const { data: exp } = await db.from('expenses')
       .select('user_id, status').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
-    if (!exp || (exp.user_id !== req.user.id && !isAdmin(req.user.role))) return res.status(403).json({ error: 'Forbidden' });
-    if (isAdmin(req.user.role) && exp.user_id !== req.user.id &&
+    if (!exp || (!sameId(exp.user_id, req.user.id) && !isAdmin(req.user.role))) return res.status(403).json({ error: 'Forbidden' });
+    if (isAdmin(req.user.role) && !sameId(exp.user_id, req.user.id) &&
         !await canAdminAccessUser(req.branchContext, exp.user_id, oId))
       return res.status(403).json({ error: "You do not have access to this employee's branch" });
     if (exp.status !== 'pending') return res.status(400).json({ error: 'Cannot delete a reviewed expense' });

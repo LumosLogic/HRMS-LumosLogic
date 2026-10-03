@@ -771,27 +771,27 @@ export default function Dashboard() {
   })() : null;
 
   const { data: analytics } = useQuery({
-    queryKey: ['analytics'],
+    queryKey: ['analytics', selectedBranchId],
     queryFn: () => apiGet('/analytics').catch(() => null),
     enabled: isAdmin,
     staleTime: 5 * 60 * 1000,
   });
 
   const { data: announcements } = useQuery({
-    queryKey: ['announcements-dash'],
+    queryKey: ['announcements-dash', selectedBranchId],
     queryFn: () => apiGet('/announcements').catch(() => []),
     staleTime: 5 * 60 * 1000,
   });
 
   // HR Work Items — onboarding in-progress + exit clearances pending
   const { data: onboardingOverview = [] } = useQuery({
-    queryKey: ['onboarding-overview-dash'],
+    queryKey: ['onboarding-overview-dash', selectedBranchId],
     queryFn:  () => apiGet('/onboarding/overview').catch(() => []),
     enabled:  isAdmin,
     staleTime: 3 * 60 * 1000,
   });
   const { data: exitRequestsDash = [] } = useQuery({
-    queryKey: ['exit-requests-dash'],
+    queryKey: ['exit-requests-dash', selectedBranchId],
     queryFn:  () => apiGet('/exit').catch(() => []),
     enabled:  isAdmin,
     staleTime: 3 * 60 * 1000,

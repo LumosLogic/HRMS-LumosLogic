@@ -15,6 +15,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
+import { useEmployees } from '@/hooks/useEmployees';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { Avatar } from '@/components/ui/Avatar';
 import { fmtDate } from '@/lib/utils';
@@ -403,7 +404,8 @@ function UploadSharedDocPanel({ allEmployees, colleagues, isEmployee, onCancel, 
       const token = localStorage.getItem('lt_token');
       // BUG-122/123: include the selected branch so the backend scopes this
       // shared document to the branch it was uploaded from.
-      const branchId = localStorage.getItem('lt_selected_branch');
+      const _storedBranch = localStorage.getItem('lt_selected_branch');
+      const branchId = /^\d+$/.test(_storedBranch || '') ? _storedBranch : null; // 'all' = no branch
       const fd = new FormData();
       fd.append('file', pendingFile);
       fd.append('name', form.name.trim());
@@ -589,10 +591,7 @@ function SharedDocumentsTab({ onUploadClick }) {
     queryFn:  () => apiGet('/documents'),
   });
 
-  const { data: allEmployees = [] } = useQuery({
-    queryKey: ['employees-list-docs', selectedBranchId],
-    queryFn:  async () => { const all = await apiGet('/employees'); return all.filter(e => e.role === 'employee'); },
-  });
+  const { data: allEmployees = [] } = useEmployees({ onlyEmployees: true });
 
   const { data: colleagues = [] } = useQuery({
     queryKey: ['doc-colleagues', selectedBranchId],
@@ -1392,8 +1391,9 @@ function EmployeeRequirementsTab() {
   // Bug-119: use the scoped org-wide endpoint instead of /employees (which applies
   // branch filtering and can make the picker empty). Branch scope for the requirement
   // is enforced through assigned_branch_ids[], not the employee list itself.
+  const _bk1 = useBranch().selectedBranchId;
   const { data: allEmployees = [] } = useQuery({
-    queryKey: ['doc-requirement-employees'],
+    queryKey: ['doc-requirement-employees', selectedBranchId],
     queryFn:  () => apiGet('/doc-requirements/employees'),
   });
 
@@ -1722,8 +1722,9 @@ function VerificationQueueTab() {
   const [sortCol,      setSortCol]      = useState('uploaded_at'); // Bug-089: sortable columns
   const [sortDir,      setSortDir]      = useState('desc');
 
+  const _bk2 = useBranch().selectedBranchId;
   const { data: allSubs = [], isLoading } = useQuery({
-    queryKey: ['verification-queue'],
+    queryKey: ['verification-queue', _bk2],
     queryFn:  () => apiGet('/doc-requirements/verification-queue'),
   });
 
@@ -1900,8 +1901,9 @@ function VerificationQueueTab() {
 
 // ── Admin: Analytics Tab ─────────────────────────────────────────────────────
 function AnalyticsTab() {
+  const _bk3 = useBranch().selectedBranchId;
   const { data: a, isLoading } = useQuery({
-    queryKey: ['doc-analytics'],
+    queryKey: ['doc-analytics', _bk3],
     queryFn:  () => apiGet('/doc-requirements/analytics'),
     staleTime: 60000,
   });
@@ -2218,10 +2220,7 @@ function AdminDocumentsPage() {
   const [showUpload, setShowUpload]       = useState(false);
   const [showCreateReq, setShowCreateReq] = useState(false);
 
-  const { data: allEmployees = [] } = useQuery({
-    queryKey: ['employees-list-docs', selectedBranchId],
-    queryFn:  async () => { const all = await apiGet('/employees'); return all.filter(e => e.role === 'employee'); },
-  });
+  const { data: allEmployees = [] } = useEmployees({ onlyEmployees: true });
 
   // Pending delete request count badge for Root Admin
   const { data: pendingDelReqs = [] } = useQuery({

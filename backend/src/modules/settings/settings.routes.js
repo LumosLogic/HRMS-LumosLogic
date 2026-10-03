@@ -5,6 +5,7 @@ const { pool }     = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { orgId } = require('../../utils/helpers');
+const groupSvc = require('../../services/configGroupService');
 
 function isRootAdmin(role) { return role === 'root_admin'; }
 
@@ -216,14 +217,23 @@ router.get('/branch/:branchId', auth, async (req, res) => {
       db.from('work_schedule').select('*').eq('organization_id', oId).maybeSingle(),
     ]);
 
+    // A row tagged with group_id is INHERITED from a configuration group, not a custom override.
+    const row = overrideRes.data || null;
+    const inherited = !!(row && row.group_id != null);
+    let group = null;
+    if (inherited || (await groupSvc.groupsAvailable())) {
+      try { group = await groupSvc.getBranchGroup(pool, oId, 'work_schedule', branchId); } catch { group = null; }
+    }
     res.json({
       branch_id:    branchId,
       branch_name:  branch.name,
-      has_override: !!overrideRes.data,
-      override:     overrideRes.data  || null,
+      has_override: !!row && !inherited,           // custom override only
+      inherited_from_group: inherited ? group : null,
+      group,                                        // the group this branch belongs to (if any)
+      override:     row,
       org_default:  orgRes.data       || null,
-      // effective = override if present, else org default
-      effective:    overrideRes.data  || orgRes.data || null,
+      // effective = branch row (custom or group-inherited) if present, else org default
+      effective:    row || orgRes.data || null,
     });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -263,6 +273,9 @@ router.put('/branch/:branchId', auth, hasPermission('settings', 'manage'), async
       ...(early_exit_threshold_enabled  !== undefined && { early_exit_threshold_enabled:  early_exit_threshold_enabled  ?? true }),
     };
 
+    const groupsOn = await groupSvc.groupsAvailable();
+    if (groupsOn) fields.group_id = null; // custom override: no longer owned by a group
+
     const { data: existing } = await db.from('branch_work_schedule')
       .select('id').eq('organization_id', oId).eq('branch_id', branchId).maybeSingle();
 
@@ -300,10 +313,72 @@ router.delete('/branch/:branchId', auth, hasPermission('settings', 'manage'), as
     const branchId = parseInt(req.params.branchId, 10);
     if (!branchId) return res.status(400).json({ error: 'Invalid branchId' });
 
-    const { error } = await db.from('branch_work_schedule')
-      .delete().eq('organization_id', oId).eq('branch_id', branchId);
+    const groupsOn = await groupSvc.groupsAvailable();
+    // Only the CUSTOM override is removed; a group-inherited row is owned by its group.
+    let q = db.from('branch_work_schedule').delete().eq('organization_id', oId).eq('branch_id', branchId);
+    if (groupsOn) q = q.is('group_id', null);
+    const { error } = await q;
     if (error) throw new Error(error.message);
-    res.json({ ok: true, message: 'Branch override removed. Branch will now use the organisation-wide schedule.' });
+    let fallback = 'the organisation-wide schedule';
+    if (groupsOn) {
+      const r = await groupSvc.propagateBranch(pool, oId, 'work_schedule', branchId); // re-inherit the group, if any
+      if (r === 'applied') fallback = 'its configuration group';
+    }
+    res.json({ ok: true, message: `Branch override removed. Branch will now use ${fallback}.` });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/settings/branch-copy — "Same as Branch X" / "Apply to selected branches".
+// Copies the EFFECTIVE work schedule of a source (a branch's override, else the org default when
+// from_branch_id is null/has no override) onto each target branch as that branch's own override.
+// Snapshot copy; a target can later be reset to inherited with DELETE /settings/branch/:branchId.
+const WORK_SCHEDULE_FIELDS = [
+  'start_time', 'end_time', 'late_threshold', 'early_exit_threshold', 'half_day_hours', 'work_days',
+  'full_day_hours', 'max_early_leave_count', 'late_entry_threshold_enabled', 'early_exit_threshold_enabled',
+];
+router.post('/branch-copy', auth, hasPermission('settings', 'manage'), async (req, res) => {
+  if (!isRootAdmin(req.user.role)) return res.status(403).json({ error: 'Root admin only' });
+  try {
+    const oId = orgId(req);
+    const { from_branch_id, to_branch_ids } = req.body || {};
+    if (!Array.isArray(to_branch_ids) || !to_branch_ids.length)
+      return res.status(400).json({ error: 'to_branch_ids is required' });
+    const targets = [...new Set(to_branch_ids.map(Number))];
+    const source = from_branch_id == null ? null : Number(from_branch_id);
+    if (targets.some(n => !Number.isInteger(n) || n <= 0) || (source !== null && (!Number.isInteger(source) || source <= 0)))
+      return res.status(400).json({ error: 'Invalid branch id' });
+    if (source !== null && targets.includes(source))
+      return res.status(400).json({ error: 'The source branch cannot also be a target.' });
+
+    // Every branch referenced must belong to this org.
+    const ids = source === null ? targets : [...targets, source];
+    const { rows: brs } = await pool.query('SELECT id FROM branches WHERE org_id = $1 AND id = ANY($2::bigint[])', [oId, ids]);
+    if (brs.length !== new Set(ids).size) return res.status(404).json({ error: 'Branch not found in this organisation' });
+
+    let src = null;
+    if (source !== null) {
+      const { data } = await db.from('branch_work_schedule').select('*').eq('organization_id', oId).eq('branch_id', source).maybeSingle();
+      src = data || null;
+    }
+    if (!src) {
+      const { data } = await db.from('work_schedule').select('*').eq('organization_id', oId).maybeSingle();
+      src = data || null;
+    }
+    if (!src) return res.status(404).json({ error: 'Source has no work schedule to copy.' });
+
+    const values = {};
+    for (const k of WORK_SCHEDULE_FIELDS) if (src[k] !== undefined) values[k] = src[k];
+    const out = [];
+    for (const branchId of targets) {
+      const { data: existing } = await db.from('branch_work_schedule').select('id').eq('organization_id', oId).eq('branch_id', branchId).maybeSingle();
+      const row = { ...values, organization_id: oId, branch_id: branchId, updated_at: new Date().toISOString(), ...(await groupSvc.groupsAvailable() && { group_id: null }) };
+      const r = existing
+        ? await db.from('branch_work_schedule').update(row).eq('id', existing.id).select().single()
+        : await db.from('branch_work_schedule').insert(row).select().single();
+      if (r.error) throw new Error(r.error.message);
+      out.push(r.data);
+    }
+    res.json({ ok: true, copied_to: targets, schedules: out });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

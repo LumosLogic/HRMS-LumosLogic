@@ -203,6 +203,7 @@ app.use('/api/onboarding',     onboardingRouter);
 app.use('/api/offboarding',    offboardingRouter);
 app.use('/api/exit',           exitRouter);
 app.use('/api/branches',       branchesRouter);
+app.use('/api/config-groups',   require('./modules/config-groups/configGroups.routes'));
 app.use('/api/biometric',      biometricRouter);
 
 // ── Phase 1: RBAC routes ──────────────────────────────────────────────────────
@@ -214,6 +215,8 @@ const statutoryRouter = require('./modules/statutory/statutory.routes');
 app.use('/api/statutory', statutoryRouter);
 
 // ── Employee Profile V2 routes ────────────────────────────────────────────────
+// Central target-employee guard (org + branch) for every /api/profile/:id/* route.
+app.use('/api/profile/:id',    require('./middleware/profileGuard'));
 app.use('/api/profile',        profileOverview);
 app.use('/api/profile',        profilePersonal);
 app.use('/api/profile',        profileProfessional);

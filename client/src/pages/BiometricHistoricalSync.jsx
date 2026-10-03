@@ -6,6 +6,7 @@ import {
   FileText, Copy, XCircle, ChevronDown, BarChart2, Info,
 } from 'lucide-react';
 import { apiGet, apiPost } from '@/lib/api';
+import { useBranch } from '@/context/BranchContext';
 import { useToast } from '@/context/ToastContext';
 
 // ── Step IDs ──────────────────────────────────────────────────────────────────
@@ -158,8 +159,9 @@ export default function BiometricHistoricalSync() {
   const [searchParams] = useSearchParams();
 
   // Devices
+  const _bk1 = useBranch().selectedBranchId;
   const { data: devices = [] } = useQuery({
-    queryKey: ['biometric-devices'],
+    queryKey: ['biometric-devices', _bk1],
     queryFn:  () => apiGet('/biometric/devices'),
     staleTime: 2 * 60 * 1000,
   });

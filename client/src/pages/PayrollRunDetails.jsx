@@ -122,7 +122,8 @@ export default function PayrollRunDetails() {
 
   async function downloadBankFile(format) {
     const token    = localStorage.getItem('lt_token');
-    const branchId = localStorage.getItem('lt_selected_branch');
+    const _storedBranch = localStorage.getItem('lt_selected_branch');
+    const branchId = /^\d+$/.test(_storedBranch || '') ? _storedBranch : null; // 'all' = no branch
     try {
       const res = await fetch(`/api/payroll/bank-file/${id}?format=${format}`, {
         headers: {

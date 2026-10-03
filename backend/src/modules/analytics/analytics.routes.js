@@ -173,11 +173,14 @@ router.get('/leave-balance', auth, async (req, res) => {
       .lte('end_date',   `${year}-12-31`);
 
     // Fetch actual holidays for this org and year
-    const { data: orgHolidays, count: totalHolidays } = await db.from('holidays')
-      .select('date', { count: 'exact' })
+    const { data: _allHols } = await db.from('holidays')
+      .select('date, branch_id')
       .eq('organization_id', orgId(req))
       .like('date', `${year}-%`);
-    const holidaySet = new Set((orgHolidays || []).map(h => h.date));
+    const _empBranch = await require('../../utils/helpers').getUserBranchId(orgId(req), userId);
+    const orgHolidays = (_allHols || []).filter(h => h.branch_id == null || (_empBranch != null && Number(h.branch_id) === _empBranch));
+    const totalHolidays = orgHolidays.length;
+    const holidaySet = new Set(orgHolidays.map(h => h.date));
 
     // Fetch total annual leave quota from org settings (HIGH-01: remove hardcoded 18)
     const { data: orgData } = await db.from('organizations')

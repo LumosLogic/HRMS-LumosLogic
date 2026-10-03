@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { Plus, Pencil, Trash2, CalendarDays, Globe, Star, PartyPopper, ChevronLeft, ChevronRight, Copy, LayoutGrid, List, History } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
+import { useBranch } from '@/context/BranchContext';
+import { BranchTargetPicker, useBranchTarget } from '@/components/BranchTargetPicker';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -66,12 +68,13 @@ function HolidayModal({ open, onClose, holiday }) {
   const toast  = useToast();
   const qc     = useQueryClient();
   const isEdit = !!holiday;
+  const bt = useBranchTarget(); // which branches the new holiday applies to (create only)
   const [form, setForm] = useState(() => isEdit
     ? { name: holiday.name, date: holiday.date, type: holiday.type || 'public', description: holiday.description || '', specific_msg: holiday.specific_msg || '' }
     : { name: '', date: '', type: 'public', description: '', specific_msg: '' });
 
   const mut = useMutation({
-    mutationFn: () => isEdit ? apiPut(`/holidays/${holiday.id}`, form) : apiPost('/holidays', form),
+    mutationFn: () => isEdit ? apiPut(`/holidays/${holiday.id}`, form) : apiPost('/holidays', { ...form, ...bt.payload }),
     onSuccess: () => { toast(isEdit ? 'Holiday updated!' : 'Holiday added!', 'success'); qc.invalidateQueries({ queryKey: ['holidays'] }); onClose(); },
     onError: e => toast(e.message, 'error'),
   });
@@ -83,7 +86,7 @@ function HolidayModal({ open, onClose, holiday }) {
       footer={
         <div className="flex justify-end gap-3">
           <button className="btn btn-outline" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={() => mut.mutate()} disabled={mut.isPending || !form.name || !form.date}>
+          <button className="btn btn-primary" onClick={() => mut.mutate()} disabled={mut.isPending || !form.name || !form.date || (!isEdit && !bt.valid)}>
             {mut.isPending ? <><span className="spinner w-4 h-4" />Saving…</> : isEdit ? 'Save Changes' : 'Add Holiday'}
           </button>
         </div>
@@ -110,6 +113,7 @@ function HolidayModal({ open, onClose, holiday }) {
             ))}
           </div>
         </div>
+        {!isEdit && <BranchTargetPicker value={bt.value} onChange={bt.setValue} label="Applies to" orgWideLabel="All branches (organisation-wide holiday)" />}
         <div>
           <label className="form-label">Description</label>
           <input className="form-control" placeholder="Short description…" value={form.description} onChange={e => set('description', e.target.value)} />
@@ -162,11 +166,12 @@ export default function HolidaysPage() {
     }
   }, []);
 
-  const { data: _hData, isLoading } = useQuery({ queryKey: ['holidays', year], queryFn: () => apiGet('/holidays', { year }) });
+  const { selectedBranchId } = useBranch();
+  const { data: _hData, isLoading } = useQuery({ queryKey: ['holidays', year, selectedBranchId], queryFn: () => apiGet('/holidays', { year }), placeholderData: keepPreviousData });
   const holidays = Array.isArray(_hData) ? _hData : [];
 
   // EHN_Holidays_002: fetch prev-year count for copy confirmation
-  const { data: prevYearData = [] } = useQuery({ queryKey: ['holidays', year - 1], queryFn: () => apiGet('/holidays', { year: year - 1 }), enabled: copyConfirm });
+  const { data: prevYearData = [] } = useQuery({ queryKey: ['holidays', year - 1, selectedBranchId], queryFn: () => apiGet('/holidays', { year: year - 1 }), enabled: copyConfirm });
 
   const delMut = useMutation({
     mutationFn: id => apiDelete(`/holidays/${id}`),

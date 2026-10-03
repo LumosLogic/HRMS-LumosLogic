@@ -1,8 +1,13 @@
 const express    = require('express');
 const router     = express.Router();
+const { sameId } = require('../../utils/ids');
 const { db } = require('../../config/db');
 const { auth }   = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
+const { withBranchContext } = require('../../middleware/branchContext');
+const { getFilterState } = require('../../utils/branchFilter');
+const { validateBranchIdList } = require('../../services/branchService');
+const { parseBranchIds, filterUsersByBranchTargets, announcementVisibleToViewer } = require('../../utils/announcementTargeting');
 const { sendMail, announcementHtml } = require('../../services/emailService');
 const { getOrgContext } = require('../../utils/helpers');
 const cloudinary = require('cloudinary').v2;
@@ -19,19 +24,15 @@ const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
-// For root_admin, allow overriding the org via ?org_id= (GET) or body.org_id (POST)
-function resolveOrgId(req, { fromQuery = false } = {}) {
-  if (req.user.role === 'root_admin') {
-    const override = fromQuery ? req.query.org_id : req.body?.org_id;
-    if (override) return parseInt(override, 10);
-  }
+// The organisation is ALWAYS the authenticated one (JWT). A client-supplied org_id is ignored.
+function resolveOrgId(req) {
   return req.user.organization_id;
 }
 
 // GET /api/announcements
-router.get('/', auth, async (req, res) => {
+router.get('/', auth, withBranchContext, async (req, res) => {
   try {
-    const oId = resolveOrgId(req, { fromQuery: true });
+    const oId = resolveOrgId(req);
     const today = new Date().toISOString().split('T')[0];
     let q = db.from('announcements').select('*').eq('organization_id', oId)
       .order('pinned', { ascending: false }).order('created_at', { ascending: false });
@@ -44,7 +45,7 @@ router.get('/', auth, async (req, res) => {
     const { data, error } = await q;
     if (error) throw error;
 
-    const rows = data || [];
+    const rows = (data || []).filter(r => announcementVisibleToViewer(r, req.branchContext, req.user.id));
     if (rows.length === 0) return res.json([]);
 
     const nowIso = new Date().toISOString();
@@ -124,7 +125,7 @@ router.post('/upload', auth, hasPermission('announcements', 'create'), upload.si
 });
 
 // POST /api/announcements
-router.post('/', auth, hasPermission('announcements', 'create'), async (req, res) => {
+router.post('/', auth, hasPermission('announcements', 'create'), withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = resolveOrgId(req);
@@ -146,6 +147,21 @@ router.post('/', auth, hasPermission('announcements', 'create'), async (req, res
     // BUG_085: map 'admins' (old frontend value) to 'hr' to satisfy DB CHECK constraint
     const safeAudience = (target_audience === 'admins') ? 'hr' : (target_audience || 'all');
 
+    // Branch targeting: explicit branch_ids (validated), else the selected branch. Organisation-wide
+    // (no branch_ids) is reserved for callers with all-branch access.
+    let targetBranchIds = [];
+    if (Array.isArray(req.body.branch_ids) && req.body.branch_ids.length > 0) {
+      const v = await validateBranchIdList(req.user.id, oId, req.user.role, req.body.branch_ids);
+      if (!v.ok) return res.status(403).json({ error: v.error });
+      targetBranchIds = v.ids;
+    } else if (req.body.org_wide !== true) {
+      const st = getFilterState(req.branchContext);
+      if (st.type === 'specific') targetBranchIds = [Number(st.branchId)];
+      else if (st.type !== 'all') return res.status(403).json({ error: 'Select a branch to target this announcement.' });
+    }
+    if (!targetBranchIds.length && !req.branchContext?.hasAllBranches)
+      return res.status(403).json({ error: 'Only users with all-branch access can post organisation-wide announcements.' });
+
     const payload = {
       title: title.trim(), content,
       type: type || 'general',
@@ -160,6 +176,7 @@ router.post('/', auth, hasPermission('announcements', 'create'), async (req, res
     if (file_url !== undefined) payload.file_url = file_url;
     if (file_name !== undefined) payload.file_name = file_name;
     if (file_type !== undefined) payload.file_type = file_type;
+    if (targetBranchIds.length) payload.branch_ids = targetBranchIds; // needs announcements_branch_targeting migration
 
     const { data, error } = await db.from('announcements')
       .insert(payload)
@@ -173,7 +190,9 @@ router.post('/', auth, hasPermission('announcements', 'create'), async (req, res
       return res.json(data);
     }
 
-    const { data: users } = await db.from('users').select('id, email, name, role').eq('organization_id', oId);
+    const { data: allUsers } = await db.from('users').select('id, email, name, role, branch_id').eq('organization_id', oId);
+    // In-app + email recipients follow the same branch targeting rule as visibility.
+    const users = await filterUsersByBranchTargets(oId, allUsers || [], targetBranchIds, req.user.id);
     if (users?.length) {
       // In-app notifications — filtered by target_audience so HR-only announcements
       // do not appear in employee notification bells, and vice-versa.
@@ -233,7 +252,7 @@ router.put('/:id', auth, hasPermission('announcements', 'manage'), async (req, r
         .eq('organization_id', req.user.organization_id)
         .maybeSingle();
       if (!existing) return res.status(404).json({ error: 'Announcement not found' });
-      if (existing.created_by === null || existing.created_by !== req.user.id) {
+      if (existing.created_by === null || !sameId(existing.created_by, req.user.id)) {
         return res.status(403).json({ error: 'You can only edit announcements you created' });
       }
     }
@@ -274,7 +293,7 @@ router.delete('/:id', auth, hasPermission('announcements', 'manage'), async (req
     // Ownership check: non-root-admins can only delete their own announcements.
     // Legacy NULL creator announcements are root-admin-only.
     if (req.user.role !== 'root_admin') {
-      if (ann.created_by === null || ann.created_by !== req.user.id) {
+      if (ann.created_by === null || !sameId(ann.created_by, req.user.id)) {
         return res.status(403).json({ error: 'You can only delete announcements you created' });
       }
     }

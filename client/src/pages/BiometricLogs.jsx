@@ -151,12 +151,12 @@ export default function BiometricLogs() {
   });
 
   const { data: _devices } = useQuery({
-    queryKey: ['biometric-devices'],
+    queryKey: ['biometric-devices', selectedBranchId],
     queryFn:  () => apiGet('/biometric/devices'),
   });
 
   const { data: _empList = [] } = useQuery({
-    queryKey: ['employees-for-bio-logs'],
+    queryKey: ['employees-for-bio-logs', selectedBranchId],
     queryFn:  () => apiGet('/reports/employees'),
     staleTime: 300000,
   });

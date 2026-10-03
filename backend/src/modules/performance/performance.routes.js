@@ -1,5 +1,6 @@
 const express = require('express');
 const router  = express.Router();
+const { sameId } = require('../../utils/ids');
 const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
@@ -16,6 +17,14 @@ cloudinary.config({
 const perfUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024 } });
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
+
+// Goal-derived records (attachments, comments) follow the goal owner's branch.
+// Returns true when the caller may act on a goal owned by `goalUserId`.
+async function canAccessGoalOwner(req, goalUserId) {
+  if (sameId(goalUserId, req.user.id)) return true;
+  if (!isAdmin(req.user.role)) return false;
+  return canAdminAccessUser(req.branchContext, goalUserId, req.user.organization_id);
+}
 
 // ─── Goals ────────────────────────────────────────────────────────────────────
 router.get('/goals', auth, withBranchContext, async (req, res) => {
@@ -53,7 +62,7 @@ router.get('/goals', auth, withBranchContext, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/goals', auth, hasPermission('performance', 'create'), async (req, res) => {
+router.post('/goals', auth, hasPermission('performance', 'create'), withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { title, description, category, target_date, review_cycle, user_id, progress } = req.body;
@@ -65,7 +74,9 @@ router.post('/goals', auth, hasPermission('performance', 'create'), async (req, 
       const today = new Date(); today.setHours(0, 0, 0, 0);
       if (new Date(target_date) < today) return res.status(400).json({ error: 'Target date cannot be in the past.' });
     }
-    const targetUserId = isAdmin(req.user.role) && user_id ? user_id : req.user.id;
+    const targetUserId = isAdmin(req.user.role) && user_id ? parseInt(user_id, 10) : req.user.id;
+    if (targetUserId !== req.user.id && !await canAdminAccessUser(req.branchContext, targetUserId, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
     const cycle = review_cycle || String(new Date().getFullYear());
     // Duplicate check: same title + category for same user in same cycle
     const { data: existing } = await db.from('performance_goals')
@@ -97,7 +108,7 @@ router.put('/goals/:id', auth, withBranchContext, async (req, res) => {
       .select('user_id, status').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
     if (!goal) return res.status(404).json({ error: 'Goal not found' });
 
-    if (!isAdmin(req.user.role) && goal.user_id !== req.user.id) {
+    if (!isAdmin(req.user.role) && !sameId(goal.user_id, req.user.id)) {
       return res.status(403).json({ error: 'Access denied' });
     }
 
@@ -146,7 +157,7 @@ router.delete('/goals/:id', auth, withBranchContext, async (req, res) => {
     const { data: goal } = await db.from('performance_goals')
       .select('user_id').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
     if (!goal) return res.status(404).json({ error: 'Goal not found' });
-    if (!isAdmin(req.user.role) && goal.user_id !== req.user.id) {
+    if (!isAdmin(req.user.role) && !sameId(goal.user_id, req.user.id)) {
       return res.status(403).json({ error: 'You can only delete your own goals.' });
     }
     // Branch isolation: admin must have access to the goal owner's branch.
@@ -284,12 +295,12 @@ router.post('/goals/bulk', auth, hasPermission('performance', 'create'), withBra
 });
 
 // ─── ENH_PERF_001: Goal Attachments ──────────────────────────────────────────
-router.get('/goals/:id/attachments', auth, async (req, res) => {
+router.get('/goals/:id/attachments', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { data: goal } = await db.from('performance_goals').select('user_id').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
     if (!goal) return res.status(404).json({ error: 'Goal not found' });
-    if (!isAdmin(req.user.role) && goal.user_id !== req.user.id) return res.status(403).json({ error: 'Access denied' });
+    if (!await canAccessGoalOwner(req, goal.user_id)) return res.status(403).json({ error: 'Access denied' });
     const { data, error } = await db.from('goal_attachments').select('*').eq('goal_id', req.params.id).order('created_at', { ascending: false });
     if (error) throw error;
     res.json(data || []);
@@ -297,14 +308,14 @@ router.get('/goals/:id/attachments', auth, async (req, res) => {
 });
 
 // ─── BUG_239: Upload a goal attachment (admin/manager only) ──────────────────
-router.post('/goals/:id/attachments', auth, perfUpload.single('file'), async (req, res) => {
+router.post('/goals/:id/attachments', auth, withBranchContext, perfUpload.single('file'), async (req, res) => {
   try {
     const oId = req.user.organization_id;
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const { data: goal } = await db.from('performance_goals')
       .select('user_id').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
     if (!goal) return res.status(404).json({ error: 'Goal not found' });
-    if (!isAdmin(req.user.role) && goal.user_id !== req.user.id)
+    if (!await canAccessGoalOwner(req, goal.user_id))
       return res.status(403).json({ error: 'Access denied' });
 
     const result = await new Promise((resolve, reject) => {
@@ -329,12 +340,12 @@ router.post('/goals/:id/attachments', auth, perfUpload.single('file'), async (re
 });
 
 // ─── ENH_PERF_002: Goal Comments / Manager Feedback ──────────────────────────
-router.get('/goals/:id/comments', auth, async (req, res) => {
+router.get('/goals/:id/comments', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { data: goal } = await db.from('performance_goals').select('user_id').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
     if (!goal) return res.status(404).json({ error: 'Goal not found' });
-    if (!isAdmin(req.user.role) && goal.user_id !== req.user.id) return res.status(403).json({ error: 'Access denied' });
+    if (!await canAccessGoalOwner(req, goal.user_id)) return res.status(403).json({ error: 'Access denied' });
     const { data, error } = await db.from('goal_comments').select('*').eq('goal_id', req.params.id).order('created_at', { ascending: true });
     if (error) throw error;
     const rows = data || [];
@@ -347,7 +358,7 @@ router.get('/goals/:id/comments', auth, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/goals/:id/comments', auth, async (req, res) => {
+router.post('/goals/:id/comments', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Only managers can add comments' });
@@ -355,6 +366,7 @@ router.post('/goals/:id/comments', auth, async (req, res) => {
     if (!comment?.trim()) return res.status(400).json({ error: 'Comment is required' });
     const { data: goal } = await db.from('performance_goals').select('user_id').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
     if (!goal) return res.status(404).json({ error: 'Goal not found' });
+    if (!await canAccessGoalOwner(req, goal.user_id)) return res.status(403).json({ error: 'Access denied' });
     const { data, error } = await db.from('goal_comments').insert({
       goal_id: req.params.id, organization_id: oId, reviewer_id: req.user.id, comment: comment.trim(),
     }).select().single();

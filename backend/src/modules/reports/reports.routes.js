@@ -5,7 +5,7 @@ const { auth, adminOnly } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { getOrgPolicy } = require('../../utils/orgPolicy');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds, getFilterState, getBranchUserSQLFilter } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, getFilterState, getBranchUserSQLFilter, canAdminAccessUser } = require('../../utils/branchFilter');
 
 const CSV_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const CSV_BOM = '﻿'; // UTF-8 BOM — tells Excel to interpret as UTF-8
@@ -64,14 +64,14 @@ function nowIST() {
 function todayIST() { return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date()); }
 
 // GET /api/reports/attendance?year=&month=&userId=&format=csv
-router.get('/attendance', auth, withBranchContext, async (req, res) => {
+router.get('/attendance', auth, adminOnly, withBranchContext, async (req, res) => {
   try {
     const oId    = req.user.organization_id;
     const policy = await getOrgPolicy(oId);
     const { year, month, userId, format } = req.query;
     const today = todayIST();
     let q = db.from('attendance')
-      .select('*, users(name, department, position, device_enrollment_id)')
+      .select('*, users(name, department, position, device_enrollment_id, branch_id)')
       .eq('organization_id', oId)
       .lte('date', today)          // never surface future attendance records
       .order('date', { ascending: false });
@@ -82,7 +82,9 @@ router.get('/attendance', auth, withBranchContext, async (req, res) => {
       q = q.gte('date', `${year}-01-01`).lte('date', `${year}-12-31`);
     }
     if (userId) {
-      q = q.eq('user_id', userId);
+      if (!await canAdminAccessUser(req.branchContext, parseInt(userId, 10), oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+      q = q.eq('user_id', parseInt(userId, 10));
     } else {
       // Apply branch filter when no specific employee is requested
       const empIds = await resolveEmployeeIds(req.branchContext, oId);
@@ -100,7 +102,7 @@ router.get('/attendance', auth, withBranchContext, async (req, res) => {
     // for dates that were incorrectly marked absent before the holiday was configured.
     const holidayMap = new Map();
     try {
-      let hq = db.from('holidays').select('date, name, type').eq('organization_id', oId);
+      let hq = db.from('holidays').select('date, name, type, branch_id').eq('organization_id', oId);
       if (year && month) {
         hq = hq.gte('date', `${year}-${String(month).padStart(2,'0')}-01`)
                .lte('date', `${year}-${String(month).padStart(2,'0')}-31`);
@@ -108,7 +110,11 @@ router.get('/attendance', auth, withBranchContext, async (req, res) => {
         hq = hq.gte('date', `${year}-01-01`).lte('date', `${year}-12-31`);
       }
       const { data: hols } = await hq;
-      for (const h of hols || []) holidayMap.set(h.date, h);
+      for (const h of hols || []) {
+        const k = h.date;
+        if (!holidayMap.has(k)) holidayMap.set(k, []);
+        holidayMap.get(k).push(h);
+      }
     } catch { /* non-critical — degrade gracefully */ }
 
     // Build a shift weekoff map using DOW-COVERAGE approach.
@@ -238,7 +244,7 @@ router.get('/attendance', auth, withBranchContext, async (req, res) => {
       }
 
       // Override 'absent' with 'holiday' if this date is a configured company holiday
-      const holidayInfo = holidayMap.get(r.date);
+      const holidayInfo = (holidayMap.get(r.date) || []).find(h => h.branch_id == null || (r.users?.branch_id != null && Number(h.branch_id) === Number(r.users.branch_id)));
       // Override 'absent' → 'off_day' for shift-assigned weekoffs OR payroll weekends.
       // Payroll weekends (e.g. sat_sun policy) serve as a fallback when no shift rows
       // exist for the period — ensuring the report matches the 0-LOP payroll outcome.
@@ -310,7 +316,7 @@ router.get('/attendance', auth, withBranchContext, async (req, res) => {
 });
 
 // GET /api/reports/leaves?year=&month=&format=csv
-router.get('/leaves', auth, withBranchContext, async (req, res) => {
+router.get('/leaves', auth, adminOnly, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { year, month, format, status } = req.query;
@@ -371,7 +377,7 @@ router.get('/leaves', auth, withBranchContext, async (req, res) => {
 });
 
 // GET /api/reports/headcount — summary stats (role-scoped, branch-scoped)
-router.get('/headcount', auth, withBranchContext, async (req, res) => {
+router.get('/headcount', auth, adminOnly, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     // root_admin sees HR admins + employees; HR admin sees employees only

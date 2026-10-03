@@ -1,5 +1,10 @@
 const getToken    = () => localStorage.getItem('lt_token');
-const getBranchId = () => localStorage.getItem('lt_selected_branch'); // null = All Branches
+// Only a concrete numeric branch is ever sent. 'all' (explicit All Branches) and absent both mean
+// "no X-Branch-Id header" — the server decides what that means for the caller's role.
+const getBranchId = () => {
+  const v = localStorage.getItem('lt_selected_branch');
+  return v && /^\d+$/.test(v) ? v : null;
+};
 
 async function apiFetch(method, endpoint, body = null) {
   const token    = getToken();
@@ -27,6 +32,12 @@ async function apiFetch(method, endpoint, body = null) {
   }
 
   if (res.status === 403) {
+    // The server rejected the selected branch (revoked / deactivated / not accessible): forget it and
+    // let BranchContext re-select a valid one instead of every call failing.
+    if (data.code === 'BRANCH_FORBIDDEN') {
+      try { localStorage.removeItem('lt_selected_branch'); } catch { /* ignore */ }
+      window.dispatchEvent(new CustomEvent('branch:forbidden'));
+    }
     throw new Error(data.error || 'You don\'t have permission to perform this action');
   }
 

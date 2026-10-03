@@ -7,7 +7,8 @@ import BranchSetupWizard from '@/components/BranchSetupWizard';
 
 export const BranchContext = createContext(null);
 
-const STORAGE_KEY = 'lt_selected_branch'; // stores branch id as string, or absent = All Branches
+const STORAGE_KEY = 'lt_selected_branch'; // branch id as string | 'all' (explicit All Branches) | absent (never chosen)
+const ALL = 'all';
 
 export function BranchProvider({ children }) {
   const { user, token } = useAuth();
@@ -26,7 +27,7 @@ export function BranchProvider({ children }) {
   // Restore selected branch from localStorage
   const [selectedBranchId, setSelectedBranchIdState] = useState(() => {
     const stored = localStorage.getItem(STORAGE_KEY);
-    return stored ? Number(stored) : null;
+    return stored && stored !== ALL && Number.isFinite(Number(stored)) ? Number(stored) : null;
   });
 
   // ── Pre-fetch ref (Issue 5: startup parallelization) ────────────────────────
@@ -104,7 +105,19 @@ export function BranchProvider({ children }) {
 
       const stored = localStorage.getItem(STORAGE_KEY);
       const activeBranches = branches.filter(b => b.is_active !== false);
-      if (stored) {
+      if (stored === ALL) {
+        // Explicit All Branches is only valid for callers with all-branch access.
+        if (data.hasAllBranches || data.isRootAdmin) {
+          setSelectedBranchIdState(null);
+        } else if (activeBranches[0]) {
+          const numId = Number(activeBranches[0].id);
+          setSelectedBranchIdState(numId);
+          localStorage.setItem(STORAGE_KEY, String(numId));
+        } else {
+          localStorage.removeItem(STORAGE_KEY);
+          setSelectedBranchIdState(null);
+        }
+      } else if (stored) {
         const storedId     = Number(stored);
         const storedBranch = branches.find(b => Number(b.id) === storedId);
         if (!storedBranch) {
@@ -180,12 +193,17 @@ export function BranchProvider({ children }) {
     // Always store as Number so === comparisons against b.id (also Number) are safe.
     const numId = branchId != null ? Number(branchId) : null;
     setSelectedBranchIdState(numId);
-    if (numId == null) {
-      localStorage.removeItem(STORAGE_KEY);
-    } else {
-      localStorage.setItem(STORAGE_KEY, String(numId));
-    }
+    // null = explicit "All Branches" (kept as a sentinel so a reload does not auto-select a branch)
+    localStorage.setItem(STORAGE_KEY, numId == null ? ALL : String(numId));
   }, []);
+
+  // The server refused the stored branch (api.js already cleared it): re-sync the accessible list,
+  // which re-selects a valid branch.
+  useEffect(() => {
+    function onForbidden() { setSelectedBranchIdState(null); reloadBranches(); }
+    window.addEventListener('branch:forbidden', onForbidden);
+    return () => window.removeEventListener('branch:forbidden', onForbidden);
+  }, [reloadBranches]);
 
   // Sync branch selection when another tab switches branches (same user) or
   // when another tab's login clears lt_selected_branch (user change is handled
@@ -193,7 +211,7 @@ export function BranchProvider({ children }) {
   useEffect(() => {
     function onStorageChange(e) {
       if (e.key !== STORAGE_KEY) return;
-      const newId = e.newValue ? Number(e.newValue) : null;
+      const newId = e.newValue && e.newValue !== ALL ? Number(e.newValue) : null;
       setSelectedBranchIdState(newId);
     }
     window.addEventListener('storage', onStorageChange);

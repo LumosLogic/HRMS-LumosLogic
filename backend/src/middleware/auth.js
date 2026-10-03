@@ -39,6 +39,8 @@ const ALLOWED_ORIGINS = [
 ];
 
 async function auth(req, res, next) {
+  // Idempotent: a router-level guard (e.g. /api/profile/:id) may already have authenticated.
+  if (req._authed && req.user) return next();
   const token = req.headers.authorization?.split(' ')[1] || req.query.token;
   if (!token) return res.status(401).json({ error: 'Unauthorized' });
   try {
@@ -91,6 +93,7 @@ async function auth(req, res, next) {
     }
 
     req.user = decoded;
+    req._authed = true;
     next();
   }
   catch { return res.status(401).json({ error: 'Invalid token' }); }

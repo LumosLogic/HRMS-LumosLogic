@@ -6,6 +6,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { useEmployees } from '@/hooks/useEmployees';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { Avatar } from '@/components/ui/Avatar';
@@ -389,7 +390,7 @@ export default function Performance() {
 
   const { data: _goalsData,   isLoading: gLoad } = useQuery({ queryKey: ['perf-goals',   cycle, selectedBranchId], queryFn: () => apiGet('/performance/goals',   { cycle }) });
   const { data: _reviewsData, isLoading: rLoad } = useQuery({ queryKey: ['perf-reviews', cycle, selectedBranchId], queryFn: () => apiGet('/performance/reviews', { cycle }) });
-  const { data: _empData }                       = useQuery({ queryKey: ['employees', 'all', selectedBranchId],    queryFn: () => apiGet('/employees'), enabled: isAdmin });
+  const { data: _empData }                       = useEmployees({ enabled: isAdmin });
   const goals     = Array.isArray(_goalsData)   ? _goalsData   : [];
   const reviews   = Array.isArray(_reviewsData) ? _reviewsData : [];
   const employees = Array.isArray(_empData)     ? _empData     : [];

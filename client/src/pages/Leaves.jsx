@@ -6,6 +6,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { useEmployees } from '@/hooks/useEmployees';
 import { Avatar } from '@/components/ui/Avatar';
 import { DateInput } from '@/components/ui/DateInput';
 import { StatusBadge, LeaveTypeBadge } from '@/components/ui/Badge';
@@ -88,17 +89,11 @@ export default function Leaves() {
   }, [highlightId, leaves.length]);
 
   const { data: policies = [] } = useQuery({
-    queryKey: ['leave-policies'],
+    queryKey: ['leave-policies', selectedBranchId],
     queryFn: () => apiGet('/leave-policies'),
   });
 
-  const { data: employees = [] } = useQuery({
-    queryKey: ['employees-list', selectedBranchId],
-    queryFn: async () => {
-      const all = await apiGet('/employees');
-      return all.filter(e => e.role === 'employee');
-    },
-  });
+  const { data: employees = [] } = useEmployees({ lite: true, onlyEmployees: true });
 
   // ── Feature: Leave balances for card display ─────────────────────────────────
   const uniqueUserIds = useMemo(() => [...new Set(leaves.map(l => l.user_id))], [leaves]);
@@ -847,13 +842,14 @@ export function ApplyLeaveModal({ employees, isAdmin, allLeaves, policies, onClo
 
   // Fetch holidays for current year and next year
   const currentYear = new Date().getFullYear();
+  const _bk1 = useBranch().selectedBranchId;
   const { data: holidaysThisYear = [] } = useQuery({
-    queryKey: ['holidays', currentYear],
+    queryKey: ['holidays', currentYear, _bk1],
     queryFn: () => apiGet(`/holidays?year=${currentYear}`),
     staleTime: 1000 * 60 * 60, // 1 hour
   });
   const { data: holidaysNextYear = [] } = useQuery({
-    queryKey: ['holidays', currentYear + 1],
+    queryKey: ['holidays', currentYear + 1, _bk1],
     queryFn: () => apiGet(`/holidays?year=${currentYear + 1}`),
     staleTime: 1000 * 60 * 60,
   });

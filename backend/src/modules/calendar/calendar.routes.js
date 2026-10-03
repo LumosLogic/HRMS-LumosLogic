@@ -7,44 +7,27 @@ const gcal = require('../../services/googleCalendar');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { resolveEmployeeIds } = require('../../utils/branchFilter');
 
-// ─── Holidays CRUD ────────────────────────────────────────────────────────────
-router.get('/holidays', auth, async (req, res) => {
-  const { data } = await db.from('holidays').select('*').eq('organization_id', orgId(req)).order('date');
-  res.json(data || []);
-});
-
-router.post('/holidays', auth, adminOnly, async (req, res) => {
+// ─── Holidays (legacy path) ───────────────────────────────────────────────────
+// The holiday API of record is /api/holidays (branch-aware, permission-gated). This legacy
+// read now applies the same branch visibility; the unscoped write endpoints are retired.
+router.get('/holidays', auth, withBranchContext, async (req, res) => {
   try {
-    const { name, date, type, description, specific_msg } = req.body;
-    if (!name || !date) return res.status(400).json({ error: 'Name and date required' });
-    const { data, error } = await db.from('holidays').insert({ name, date, type: type||'public', description: description||'', specific_msg: specific_msg||null, organization_id: orgId(req) }).select().single();
-    if (error) throw new Error(error.message);
-    const gcalId = await gcal.createHolidayEvent(data);
-    if (gcalId) await db.from('holidays').update({ google_event_id: gcalId }).eq('id', data.id);
-    res.json({ ...data, google_event_id: gcalId || null });
+    const { applyHolidayVisibility } = require('../holidays/holidays.routes');
+    const { getFilterState } = require('../../utils/branchFilter');
+    let q = db.from('holidays').select('*').eq('organization_id', orgId(req)).order('date');
+    q = applyHolidayVisibility(q, getFilterState(req.branchContext));
+    const { data } = await q;
+    res.json(data || []);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/holidays/:id', auth, adminOnly, async (req, res) => {
-  try {
-    const { name, date, type, description, specific_msg } = req.body;
-    const { data: existing } = await db.from('holidays').select('google_event_id').eq('id', req.params.id).maybeSingle();
-    const { data } = await db.from('holidays').update({ name, date, type, description, specific_msg: specific_msg||null }).eq('id', req.params.id).select().single();
-    if (existing?.google_event_id) gcal.updateHolidayEvent(existing.google_event_id, data);
-    res.json(data);
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
+const retiredHolidayWrite = (req, res) =>
+  res.status(410).json({ error: 'Moved: manage holidays through /api/holidays (branch-aware).' });
+router.post('/holidays', auth, adminOnly, retiredHolidayWrite);
+router.put('/holidays/:id', auth, adminOnly, retiredHolidayWrite);
+router.delete('/holidays/:id', auth, adminOnly, retiredHolidayWrite);
 
-router.delete('/holidays/:id', auth, adminOnly, async (req, res) => {
-  try {
-    const { data: existing } = await db.from('holidays').select('google_event_id').eq('id', req.params.id).maybeSingle();
-    if (existing?.google_event_id) gcal.deleteHolidayEvent(existing.google_event_id);
-    await db.from('holidays').delete().eq('id', req.params.id);
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-// ─── Events CRUD ──────────────────────────────────────────────────────────────
+// ─── Events CRUD (organisation-wide) ─────────────────────────────────────────
 router.get('/events', auth, async (req, res) => {
   const { data } = await db.from('events').select('*').eq('organization_id', orgId(req)).order('date');
   res.json(data || []);
@@ -57,7 +40,7 @@ router.post('/events', auth, adminOnly, async (req, res) => {
     const { data, error } = await db.from('events').insert({ title, date, end_date: end_date||null, description: description||'', created_by: req.user.id, organization_id: orgId(req) }).select().single();
     if (error) throw new Error(error.message);
     const gcalId = await gcal.createCompanyEvent(data);
-    if (gcalId) await db.from('events').update({ google_event_id: gcalId }).eq('id', data.id);
+    if (gcalId) await db.from('events').update({ google_event_id: gcalId }).eq('id', data.id).eq('organization_id', orgId(req));
     res.json({ ...data, google_event_id: gcalId || null });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -65,8 +48,9 @@ router.post('/events', auth, adminOnly, async (req, res) => {
 router.put('/events/:id', auth, adminOnly, async (req, res) => {
   try {
     const { title, date, end_date, description } = req.body;
-    const { data: existing } = await db.from('events').select('google_event_id').eq('id', req.params.id).maybeSingle();
-    const { data } = await db.from('events').update({ title, date, end_date: end_date||null, description }).eq('id', req.params.id).select().single();
+    const { data: existing } = await db.from('events').select('google_event_id').eq('id', req.params.id).eq('organization_id', orgId(req)).maybeSingle();
+    if (!existing) return res.status(404).json({ error: 'Event not found' });
+    const { data } = await db.from('events').update({ title, date, end_date: end_date||null, description }).eq('id', req.params.id).eq('organization_id', orgId(req)).select().single();
     if (existing?.google_event_id) gcal.updateCompanyEvent(existing.google_event_id, data);
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -74,9 +58,10 @@ router.put('/events/:id', auth, adminOnly, async (req, res) => {
 
 router.delete('/events/:id', auth, adminOnly, async (req, res) => {
   try {
-    const { data: existing } = await db.from('events').select('google_event_id').eq('id', req.params.id).maybeSingle();
+    const { data: existing } = await db.from('events').select('google_event_id').eq('id', req.params.id).eq('organization_id', orgId(req)).maybeSingle();
+    if (!existing) return res.status(404).json({ error: 'Event not found' });
     if (existing?.google_event_id) gcal.deleteCompanyEvent(existing.google_event_id);
-    await db.from('events').delete().eq('id', req.params.id);
+    await db.from('events').delete().eq('id', req.params.id).eq('organization_id', orgId(req));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

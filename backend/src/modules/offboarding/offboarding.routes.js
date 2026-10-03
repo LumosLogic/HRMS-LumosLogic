@@ -1,11 +1,12 @@
 const express = require('express');
 const router  = express.Router();
+const { sameId } = require('../../utils/ids');
 const { db, pool } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { orgId } = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
 const { initOffboarding } = require('./offboardingService');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
@@ -116,7 +117,7 @@ router.get('/overview', auth, withBranchContext, hasPermission('exit', 'manage')
 });
 
 // PUT /api/offboarding/:id/complete — mark a task complete or incomplete
-router.put('/:id/complete', auth, async (req, res) => {
+router.put('/:id/complete', auth, withBranchContext, async (req, res) => {
   try {
     const oId       = orgId(req);
     const { completed } = req.body;
@@ -131,9 +132,11 @@ router.put('/:id/complete', auth, async (req, res) => {
 
     if (fetchErr || !task) return res.status(404).json({ error: 'Task not found' });
 
+    if (isAdmin(req.user.role) && !sameId(task.user_id, req.user.id) && !await canAdminAccessUser(req.branchContext, task.user_id, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
     // Employees can only complete tasks assigned to them
     if (!isAdmin(req.user.role)) {
-      if (task.user_id !== req.user.id) return res.status(403).json({ error: 'Access denied' });
+      if (!sameId(task.user_id, req.user.id)) return res.status(403).json({ error: 'Access denied' });
       if (task.assigned_to !== 'employee') return res.status(403).json({ error: 'Only HR can complete this task' });
     }
 

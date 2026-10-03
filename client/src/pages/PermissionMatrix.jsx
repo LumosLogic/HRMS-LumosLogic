@@ -1,3 +1,4 @@
+const _bk1 = useBranch().selectedBranchId;
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
@@ -7,6 +8,7 @@ import {
   UserPlus, X, Search, Pencil, ArrowRightLeft,
 } from 'lucide-react';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { useBranch } from '@/context/BranchContext';
 import { cn } from '@/lib/utils';
 import { useFeature } from '@/context/FeatureFlagContext';
 
@@ -400,8 +402,9 @@ function MembersPanel({ members = [], roleId, onRefetch }) {
   const [movingId, setMovingId]     = useState(null);
 
   // All roles for the "Move to" dropdown
+  const _bk2 = useBranch().selectedBranchId;
   const { data: allRoles = [] } = useQuery({
-    queryKey: ['roles'],
+    queryKey: ['roles', _bk2],
     queryFn:  () => apiGet('/roles'),
     staleTime: 60000,
   });
@@ -630,6 +633,7 @@ export default function PermissionMatrix() {
   });
 
   // Fetch all available permissions (grouped by module)
+  const _bk3 = useBranch().selectedBranchId;
   const { data: modulesRaw = [], isLoading: permsLoading, isError: permsError } = useQuery({
     queryKey: ['all-permissions'],
     queryFn: () => apiGet('/permissions'),

@@ -144,8 +144,16 @@ async function runAutoMarkAbsent() {
 
       // Find employees with a holiday today
       const { data: holidays } = await db.from('holidays')
-        .select('id').eq('organization_id', oId).eq('date', today).limit(1);
-      if (holidays?.length) continue; // org-wide holiday, skip absent marking
+        .select('id, branch_id').eq('organization_id', oId).eq('date', today);
+      if ((holidays || []).some(h => h.branch_id == null)) continue; // org-wide holiday, skip absent marking
+      // Branch-specific holidays exempt only that branch's employees.
+      const holidayBranchIds = new Set((holidays || []).map(h => Number(h.branch_id)));
+      let holidayEmpIds = new Set();
+      if (holidayBranchIds.size) {
+        const { data: hbEmps } = await db.from('users').select('id, branch_id')
+          .eq('organization_id', oId).in('id', empIds);
+        holidayEmpIds = new Set((hbEmps || []).filter(e => holidayBranchIds.has(Number(e.branch_id))).map(e => e.id));
+      }
 
       // Find employees whose shift says today is a day-off (must NOT be marked absent).
       // DOW-coverage: aggregate all DOWs from all shift assignments (±31 days).
@@ -179,7 +187,7 @@ async function runAutoMarkAbsent() {
 
       // Mark absent: employees not checked in, not on leave, and not on a shift day-off
       const absentIds = empIds.filter(id =>
-        !checkedInIds.has(id) && !onLeaveIds.has(id) && !shiftOffIds.has(id)
+        !checkedInIds.has(id) && !onLeaveIds.has(id) && !shiftOffIds.has(id) && !holidayEmpIds.has(id)
       );
       if (!absentIds.length) continue;
 
@@ -353,7 +361,7 @@ async function runScheduledAnnouncementPublisher() {
   try {
     const nowIso = new Date().toISOString();
     const { data: due } = await db.from('announcements')
-      .select('id, organization_id, title, content, target_audience, published_notified')
+      .select('*')
       .not('scheduled_at', 'is', null)
       .lte('scheduled_at', nowIso);
     if (!due?.length) return;
@@ -362,7 +370,8 @@ async function runScheduledAnnouncementPublisher() {
       if (ann.published_notified) continue; // already fanned out
       const oId = ann.organization_id;
       const audience = ann.target_audience || 'all';
-      const { data: users } = await db.from('users').select('id, role').eq('organization_id', oId);
+      const { data: allUsers } = await db.from('users').select('id, role, branch_id').eq('organization_id', oId);
+      const users = await require('./announcementTargeting').filterUsersByBranchTargets(oId, allUsers || [], ann.branch_ids, ann.created_by);
       const notifRecipients = (users || []).filter(u => {
         if (audience === 'employees') return u.role === 'employee';
         if (audience === 'hr')        return u.role === 'admin' || u.role === 'root_admin';

@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { useBranch } from '@/context/BranchContext';
+import { BranchTargetPicker, useBranchTarget } from '@/components/BranchTargetPicker';
 import { useLocation } from 'react-router-dom';
 import { Plus, Pencil, Trash2, Megaphone, MessageSquare, Pin, AlertTriangle, Info, PartyPopper, Bell, Paperclip, Upload, X, FileText, Download, ExternalLink, Copy, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
@@ -24,6 +26,7 @@ function AnnouncementModal({ open, onClose, ann, duplicate, orgId, pinnedCount =
   const qc     = useQueryClient();
   const fileRef = useRef(null);
   const isEdit = !!ann;
+  const bt = useBranchTarget(); // branch audience (create only)
   const source  = ann || duplicate; // for pre-filling (edit or duplicate)
   const [uploading, setUploading] = useState(false);
   const [form, setForm] = useState(() => source
@@ -33,8 +36,8 @@ function AnnouncementModal({ open, onClose, ann, duplicate, orgId, pinnedCount =
   const mut = useMutation({
     mutationFn: () => isEdit
       ? apiPut(`/announcements/${ann.id}`, form)
-      : apiPost('/announcements', { ...form, ...(orgId ? { org_id: orgId } : {}) }),
-    onSuccess: () => { toast(isEdit ? 'Updated!' : 'Announcement posted!', 'success'); qc.invalidateQueries({ queryKey: ['announcements'] }); qc.invalidateQueries({ queryKey: ['announcements', orgId ?? null] }); onClose(); },
+      : apiPost('/announcements', { ...form, ...bt.payload }),
+    onSuccess: () => { toast(isEdit ? 'Updated!' : 'Announcement posted!', 'success'); qc.invalidateQueries({ queryKey: ['announcements'] });  onClose(); },
     onError: e => toast(e.message, 'error'),
   });
 
@@ -92,7 +95,7 @@ function AnnouncementModal({ open, onClose, ann, duplicate, orgId, pinnedCount =
       footer={
         <div className="flex justify-end gap-3">
           <button className="btn btn-outline" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={() => { if (validate()) mut.mutate(); }} disabled={mut.isPending || uploading || isOverLimit}>
+          <button className="btn btn-primary" onClick={() => { if (validate()) mut.mutate(); }} disabled={mut.isPending || uploading || isOverLimit || (!isEdit && !bt.valid)}>
             {mut.isPending ? <><span className="spinner w-4 h-4" />Saving…</> : isEdit ? 'Save Changes' : 'Post Announcement'}
           </button>
         </div>
@@ -151,6 +154,8 @@ function AnnouncementModal({ open, onClose, ann, duplicate, orgId, pinnedCount =
             </button>
           )}
         </div>
+
+        {!isEdit && <BranchTargetPicker value={bt.value} onChange={bt.setValue} label="Audience branches" />}
 
         <div className="grid grid-cols-2 gap-4">
           <div>
@@ -242,17 +247,19 @@ export default function AnnouncementsPage() {
     return h ? parseInt(h, 10) : null;
   }, [location.search]);
 
-  const activeOrgId = null;
+  const { selectedBranchId } = useBranch();
 
   const { data: _annData, isLoading } = useQuery({
-    queryKey: ['announcements', activeOrgId],
-    queryFn:  () => apiGet('/announcements', activeOrgId ? { org_id: activeOrgId } : {}),
+    // Announcements can be branch-targeted, so the visible set depends on the selected branch.
+    queryKey: ['announcements', selectedBranchId],
+    queryFn:  () => apiGet('/announcements'),
+    placeholderData: keepPreviousData,
   });
   const announcements = Array.isArray(_annData) ? _annData : [];
 
   const delMut = useMutation({
     mutationFn: id => apiDelete(`/announcements/${id}`),
-    onSuccess: () => { toast('Announcement deleted', 'warning'); qc.invalidateQueries({ queryKey: ['announcements'] }); qc.invalidateQueries({ queryKey: ['announcements', activeOrgId] }); },
+    onSuccess: () => { toast('Announcement deleted', 'warning'); qc.invalidateQueries({ queryKey: ['announcements'] });  },
     onError: e => toast(e.message, 'error'),
   });
 
@@ -332,10 +339,10 @@ export default function AnnouncementsPage() {
         </div>
       )}
 
-      {addOpen        && <AnnouncementModal open onClose={() => setAddOpen(false)} orgId={activeOrgId} pinnedCount={pinned.length} maxPinned={MAX_PINNED} />}
-      {editAnn        && <AnnouncementModal open onClose={() => setEditAnn(null)} ann={editAnn} orgId={activeOrgId} pinnedCount={pinned.length} maxPinned={MAX_PINNED} />}
+      {addOpen        && <AnnouncementModal open onClose={() => setAddOpen(false)} pinnedCount={pinned.length} maxPinned={MAX_PINNED} />}
+      {editAnn        && <AnnouncementModal open onClose={() => setEditAnn(null)} ann={editAnn} pinnedCount={pinned.length} maxPinned={MAX_PINNED} />}
       {/* EHN_ANN_007: Duplicate — open modal pre-filled with source data but not as "edit" */}
-      {duplicateAnn   && <AnnouncementModal open onClose={() => setDuplicateAnn(null)} orgId={activeOrgId} duplicate={duplicateAnn} pinnedCount={pinned.length} maxPinned={MAX_PINNED} />}
+      {duplicateAnn   && <AnnouncementModal open onClose={() => setDuplicateAnn(null)} duplicate={duplicateAnn} pinnedCount={pinned.length} maxPinned={MAX_PINNED} />}
       <ConfirmModal open={!!confirmDel} title="Delete Announcement" message={`Delete "${confirmDel?.name}"?`}
         confirmLabel="Delete" onConfirm={() => { delMut.mutate(confirmDel.id); setConfirmDel(null); }} onCancel={() => setConfirmDel(null)} />
 

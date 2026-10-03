@@ -74,7 +74,7 @@ export default function BiometricSettings() {
 
   // ── Auto-sync config ──────────────────────────────────────────────────────────
   const { data: syncCfg, isLoading: cfgLoading } = useQuery({
-    queryKey: ['biometric-auto-sync-config', selectedBranchId],
+    queryKey: ['biometric-auto-sync-config'],
     queryFn:  () => apiGet('/biometric/auto-sync/config'),
   });
 

@@ -20,6 +20,7 @@ const FEATURE_ROUTE_MAP = {
   '/push':                  'push_notifications',
   '/biometric':             'biometric',
   '/branches':              'branches',
+  '/config-groups':         'branches',
 };
 
 async function isFeatureEnabled(organizationId, featureKey) {

@@ -30,6 +30,7 @@
  */
 
 const { pool }                                = require('../config/db');
+const { isBranchFeatureEnabled }              = require('./branchService');
 const { generatePayrollRun, GenerationError } = require('./payrollGenerationService');
 const { sendPayslipsBatch }                   = require('./payrollEmailService');
 const {
@@ -255,11 +256,151 @@ async function recoverStaleRuns() {
 // ACTION HANDLERS
 // ═════════════════════════════════════════════════════════════════════════════
 
+// ═════════════════════════════════════════════════
+// BRANCH-AWARE GENERATION
+// ═════════════════════════════════════════════════
+//
+// Branch feature OFF (or no active branch)  → one ORGANISATION-WIDE run, exactly as before.
+// Branch feature ON  (≥1 active branch)     → one run PER ACTIVE BRANCH, scoped to that branch's employees.
+//                                             An organisation-wide run is never created here: it would
+//                                             overlap (duplicate payslips for) the branch runs.
+
+let _branchSchedCols = { value: null, exp: 0 };
+/** payroll_scheduler_runs.branch_id (and the per-branch unique index) exist → branch runs are supported. */
+async function branchSchedulerRunsSupported() {
+  if (_branchSchedCols.value !== null && _branchSchedCols.exp > Date.now()) return _branchSchedCols.value;
+  let value = false;
+  try {
+    const { rows } = await pool.query(
+      `SELECT
+         (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema()
+            AND table_name IN ('payroll_scheduler_runs', 'payroll_runs') AND column_name = 'branch_id')::int AS cols`);
+    value = rows[0].cols === 2;
+  } catch { value = false; }
+  _branchSchedCols = { value, exp: Date.now() + 60 * 1000 };
+  return value;
+}
+
+/** Active branch ids when this org runs payroll per branch; null when it runs one org-wide run. */
+async function getBranchRunTargets(orgId) {
+  try {
+    if (!(await isBranchFeatureEnabled(orgId))) return null;
+    const { rows } = await pool.query('SELECT id FROM branches WHERE org_id = $1 AND is_active = TRUE ORDER BY id', [orgId]);
+    if (!rows.length) return null;
+    if (!(await branchSchedulerRunsSupported())) return null;
+    return rows.map(r => Number(r.id));
+  } catch { return null; }
+}
+
+/** Employees that exist in the org but belong to NO branch — a branch-scoped payroll would skip them. */
+async function countUnassignedEmployees(orgId) {
+  try {
+    const { rows } = await pool.query(
+      `SELECT COUNT(*)::int AS c FROM users
+        WHERE organization_id = $1 AND role = 'employee' AND branch_id IS NULL
+          AND (employee_status IS NULL OR employee_status NOT IN ('inactive','resigned','terminated'))`, [orgId]);
+    return rows[0].c;
+  } catch { return 0; }
+}
+
+/**
+ * Generates ONE branch's payroll run. Safe to call repeatedly:
+ *   - payroll_scheduler_runs (UNIQUE per org+branch+period) is the distributed mutex
+ *   - an existing org-wide run for the period blocks branch generation (no overlap)
+ *   - generatePayrollRun itself refuses a second run for the same branch+period (PAYROLL_EXISTS)
+ * Returns { branchId, status: 'generated'|'skipped'|'failed', runId?, reason? }.
+ */
+async function generateBranchRun({ orgId, branchId, month, year, triggeredBy = 'scheduler', actorId = null, actorName = null, force = false }) {
+  // Overlap guard: an org-wide (branch_id NULL) run for this period already covers this branch's employees.
+  const { rows: orgWide } = await pool.query(
+    `SELECT id FROM payroll_runs
+      WHERE organization_id = $1 AND branch_id IS NULL AND month = $2 AND year = $3
+        AND status NOT IN ('failed', 'cancelled') LIMIT 1`, [orgId, month, year]);
+  if (orgWide.length) return { branchId, status: 'skipped', reason: 'An organisation-wide payroll run already exists for this period.' };
+
+  let schedulerRunId = null;
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO payroll_scheduler_runs
+         (organization_id, branch_id, run_date, pay_month, pay_year, status, triggered_by, triggered_actor)
+       VALUES ($1, $2, CURRENT_DATE, $3, $4, 'running', $5, $6)
+       ON CONFLICT (organization_id, branch_id, pay_month, pay_year) WHERE branch_id IS NOT NULL DO UPDATE
+          SET status = 'running', triggered_by = EXCLUDED.triggered_by, triggered_actor = EXCLUDED.triggered_actor,
+              run_date = CURRENT_DATE, created_at = NOW(), completed_at = NULL, error_message = NULL, payroll_run_id = NULL
+        WHERE $7::boolean AND payroll_scheduler_runs.status <> 'running'
+       RETURNING id`,
+      [orgId, branchId, month, year, triggeredBy, actorName || (actorId != null ? String(actorId) : null), triggeredBy === 'manual']);
+    if (!rows.length) return { branchId, status: 'skipped', reason: 'Already generated or in progress for this period.' };
+    schedulerRunId = rows[0].id;
+  } catch (err) {
+    if (err.code === '23505') return { branchId, status: 'skipped', reason: 'Already generated or in progress for this period.' };
+    throw err;
+  }
+
+  try {
+    const { rows: emps } = await pool.query(
+      `SELECT id FROM users WHERE organization_id = $1 AND branch_id = $2 AND role = 'employee'`, [orgId, branchId]);
+    if (!emps.length) {
+      await pool.query(`UPDATE payroll_scheduler_runs SET status = 'skipped', error_message = 'No employees in branch', completed_at = NOW() WHERE id = $1`, [schedulerRunId]);
+      return { branchId, status: 'skipped', reason: 'No employees in this branch.' };
+    }
+    const result = await generatePayrollRun({
+      organizationId: orgId, month, year,
+      generatedBy: actorId,                       // null for the scheduler
+      notes: triggeredBy === 'manual' ? `Manually triggered by ${actorName || actorId}` : 'Auto-generated by payroll scheduler',
+      force, ip: null,
+      employeeIds: emps.map(e => Number(e.id)),
+      branchId,
+    });
+    await pool.query(
+      `UPDATE payroll_scheduler_runs SET status = $1, payroll_run_id = $2, completed_at = NOW() WHERE id = $3`,
+      [result.status === 'failed' ? 'failed' : 'completed', result.runId, schedulerRunId]);
+    notifyPayrollComplete(orgId, result.runId, result, month, year).catch(() => {});
+    return { branchId, status: 'generated', runId: result.runId, result };
+  } catch (err) {
+    const isSkip = err instanceof GenerationError && err.code === 'PAYROLL_EXISTS';
+    await pool.query(
+      `UPDATE payroll_scheduler_runs SET status = $1, error_message = $2, completed_at = NOW() WHERE id = $3`,
+      [isSkip ? 'skipped' : 'failed', (err.message || '').substring(0, 500), schedulerRunId]).catch(() => {});
+    if (!isSkip) {
+      console.error(`[Scheduler] Branch ${branchId} gen failed org ${orgId} ${month}/${year}:`, err.message);
+      notifyPayrollFailed(orgId, `Branch ${branchId}: ${err.message}`, month, year).catch(() => {});
+    }
+    return { branchId, status: isSkip ? 'skipped' : 'failed', reason: err.message };
+  }
+}
+
+/** Branch-enabled organisations: one run per active branch. */
+async function handleBranchGeneration(orgId, branchIds, { payMonth, payYear }) {
+  console.log(`[Scheduler] Org ${orgId} — generating ${payMonth}/${payYear} per branch (${branchIds.length} branch(es))`);
+  const unassigned = await countUnassignedEmployees(orgId);
+  if (unassigned > 0) {
+    const msg = `${unassigned} active employee(s) have no branch and are NOT included in any branch payroll run. Assign them to a branch.`;
+    console.warn(`[Scheduler] Org ${orgId}: ${msg}`);
+    notifyPayrollFailed(orgId, msg, payMonth, payYear).catch(() => {});
+  }
+  const results = [];
+  for (const branchId of branchIds) {
+    results.push(await generateBranchRun({ orgId, branchId, month: payMonth, year: payYear }).catch(err => ({ branchId, status: 'failed', reason: err.message })));
+  }
+  return results;
+}
+
+/**
+ * Entry point for scheduled generation: routes to the org-wide path (branch feature OFF — behaviour
+ * unchanged) or to one run per branch (branch feature ON).
+ */
+async function handleGeneration(orgId, settings, target) {
+  const branchIds = await getBranchRunTargets(orgId);
+  if (branchIds) return handleBranchGeneration(orgId, branchIds, target);
+  return handleOrgWideGeneration(orgId, settings, target);
+}
+
 /**
  * Attempts to generate payroll for the target period.
  * Uses the payroll_scheduler_runs UNIQUE constraint as a distributed mutex.
  */
-async function handleGeneration(orgId, settings, { payMonth, payYear }) {
+async function handleOrgWideGeneration(orgId, settings, { payMonth, payYear }) {
   let schedulerRunId;
   try {
     const { rows } = await pool.query(
@@ -454,11 +595,37 @@ async function runPayrollScheduler() {
  * the schedule. Still respects the generation service's own guards (locked,
  * future period, etc.) unless force=true.
  */
-async function triggerManual({ organizationId, month, year, force = false, actorId, actorName }) {
+async function triggerManual({ organizationId, month, year, force = false, actorId, actorName, branchId = null }) {
   const orgId = Number(organizationId);
   const m     = Number(month);
   const y     = Number(year);
   const name  = actorName || String(actorId);
+
+  // Branch-enabled organisation: payroll is per branch. `branchId` runs ONE branch (the caller's access to
+  // it is verified by the route); without it, every active branch is run (all-branch callers only —
+  // also enforced by the route). An organisation-wide run is never created here.
+  const branchTargets = await getBranchRunTargets(orgId);
+  if (branchTargets) {
+    const ids = branchId != null ? [Number(branchId)] : branchTargets;
+    if (branchId != null && !branchTargets.includes(Number(branchId))) {
+      throw new GenerationError('Branch not found or inactive', 'INVALID_BRANCH');
+    }
+    const results = [];
+    for (const id of ids) {
+      results.push(await generateBranchRun({ orgId, branchId: id, month: m, year: y, triggeredBy: 'manual', actorId, actorName: name, force }));
+    }
+    const { rows: st } = await pool.query(`SELECT auto_publish, payslip_auto_email FROM payroll_settings WHERE organization_id = $1`, [orgId]).catch(() => ({ rows: [] }));
+    const s = st[0] || {};
+    if (s.auto_publish && results.some(r => r.runId)) await handlePublish(orgId, s).catch(() => {});
+    if (s.payslip_auto_email) {
+      for (const r of results.filter(x => x.runId)) {
+        const emailCheck = await pool.query(
+          `SELECT 1 FROM payroll_email_log WHERE payroll_run_id = $1 AND organization_id = $2 AND status = 'sent' LIMIT 1`, [r.runId, orgId]).catch(() => ({ rows: [] }));
+        if (!emailCheck.rows.length) sendPayslipsBatch({ organizationId: orgId, runId: r.runId, month: m, year: y }).catch(() => {});
+      }
+    }
+    return { branches: results.map(({ result, ...rest }) => rest), status: results.every(r => r.status === 'generated') ? 'completed' : 'partial' };
+  }
 
   let schedulerRunId;
   try {
@@ -572,6 +739,9 @@ module.exports = {
   start,
   runPayrollScheduler,
   triggerManual,
+  generateBranchRun,
+  getBranchRunTargets,
+  handleGeneration,
   // Exported for unit testing
   shouldGenerate,
   shouldPublish,

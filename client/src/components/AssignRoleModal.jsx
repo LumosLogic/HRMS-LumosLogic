@@ -22,6 +22,7 @@ import {
   CheckSquare, Square, Users,
 } from 'lucide-react';
 import { apiGet, apiPut } from '@/lib/api';
+import { useBranch } from '@/context/BranchContext';
 import { cn } from '@/lib/utils';
 
 function initials(name = '') {
@@ -42,8 +43,9 @@ export function AssignRoleModal({ user, onClose, onSaved }) {
   const [dirty, setDirty]             = useState(false);
 
   // Fetch all roles for the org
+  const _bk1 = useBranch().selectedBranchId;
   const { data: allRoles = [], isLoading: rolesLoading } = useQuery({
-    queryKey: ['roles'],
+    queryKey: ['roles', _bk1],
     queryFn: () => apiGet('/roles'),
   });
 

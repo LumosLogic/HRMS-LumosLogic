@@ -5,6 +5,7 @@ import { Plus, Pencil, Trash2, Building2, Users, ChevronRight } from 'lucide-rea
 import { useToast } from '@/context/ToastContext';
 import { useAuth } from '@/context/AuthContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { useEmployees } from '@/hooks/useEmployees';
 import { useBranch } from '@/context/BranchContext';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -97,8 +98,8 @@ export default function Departments() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const { data: _dData, isLoading } = useQuery({ queryKey: ['departments', selectedBranchId], queryFn: () => apiGet('/departments') });
-  const { data: _eData }            = useQuery({ queryKey: ['employees', 'all', selectedBranchId], queryFn: () => apiGet('/employees') });
+  const { data: _dData, isLoading } = useQuery({ queryKey: ['departments'], queryFn: () => apiGet('/departments') });
+  const { data: _eData }            = useEmployees();
   const depts     = Array.isArray(_dData) ? _dData : [];
   const employees = Array.isArray(_eData) ? _eData : [];
 

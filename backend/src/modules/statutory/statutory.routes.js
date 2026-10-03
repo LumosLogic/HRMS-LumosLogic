@@ -12,7 +12,17 @@ const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { orgId }         = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
+
+// Statutory CONFIGURATION is organisation (legal-entity) wide and unchanged. Employee-derived
+// outputs (reports, compliance totals, declaration / proof reviews) follow the employee's branch:
+// a restricted admin only ever sees or reviews employees inside their scope.
+async function scopeEmployees(req, res, next) {
+  try {
+    req._scopeUserIds = await resolveEmployeeIds(req.branchContext, orgId(req)); // null = org-wide
+    next();
+  } catch (err) { res.status(500).json({ error: err.message }); }
+}
 
 const {
   applyStatutoryCalculations,
@@ -327,6 +337,8 @@ router.get('/declarations', auth, withBranchContext, async (req, res) => {
       conds.push(`d.user_id = $${params.length + 1}`);
       params.push(req.user.id);
     } else if (userId) {
+      if (!await canAdminAccessUser(req.branchContext, parseInt(userId, 10), oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
       conds.push(`d.user_id = $${params.length + 1}`);
       params.push(parseInt(userId, 10));
     } else {
@@ -436,11 +448,17 @@ router.post('/declarations', auth, hasPermission('statutory', 'declare'), async 
 });
 
 // PUT /api/statutory/declarations/:id/approve — HR approves
-router.put('/declarations/:id/approve', auth, hasPermission('statutory', 'approve_declarations'), async (req, res) => {
+router.put('/declarations/:id/approve', auth, hasPermission('statutory', 'approve_declarations'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const id  = parseInt(req.params.id, 10);
     const { reviewer_notes } = req.body;
+    {
+      const { rows: d0 } = await pool.query('SELECT user_id FROM statutory_tds_declarations WHERE id = $1 AND organization_id = $2', [id, oId]);
+      if (!d0.length) return res.status(404).json({ error: 'Declaration not found' });
+      if (!await canAdminAccessUser(req.branchContext, d0[0].user_id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
 
     const { rows } = await pool.query(
       `UPDATE statutory_tds_declarations
@@ -460,12 +478,18 @@ router.put('/declarations/:id/approve', auth, hasPermission('statutory', 'approv
 });
 
 // PUT /api/statutory/declarations/:id/reject
-router.put('/declarations/:id/reject', auth, hasPermission('statutory', 'approve_declarations'), async (req, res) => {
+router.put('/declarations/:id/reject', auth, hasPermission('statutory', 'approve_declarations'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const id  = parseInt(req.params.id, 10);
     const { reviewer_notes } = req.body;
     if (!reviewer_notes) return res.status(400).json({ error: 'reviewer_notes required when rejecting' });
+    {
+      const { rows: d0 } = await pool.query('SELECT user_id FROM statutory_tds_declarations WHERE id = $1 AND organization_id = $2', [id, oId]);
+      if (!d0.length) return res.status(404).json({ error: 'Declaration not found' });
+      if (!await canAdminAccessUser(req.branchContext, d0[0].user_id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
 
     const { rows } = await pool.query(
       `UPDATE statutory_tds_declarations
@@ -562,13 +586,19 @@ router.post('/proofs', auth, hasPermission('statutory', 'declare'), async (req, 
 });
 
 // PUT /api/statutory/proofs/:id/review — HR approve/reject
-router.put('/proofs/:id/review', auth, hasPermission('statutory', 'approve_declarations'), async (req, res) => {
+router.put('/proofs/:id/review', auth, hasPermission('statutory', 'approve_declarations'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const id  = parseInt(req.params.id, 10);
     const { status, rejection_reason } = req.body;
     const allowed = ['approved','rejected','needs_reupload'];
     if (!allowed.includes(status)) return res.status(400).json({ error: `status must be one of: ${allowed.join(', ')}` });
+    {
+      const { rows: p0 } = await pool.query('SELECT user_id FROM statutory_investment_proofs WHERE id = $1 AND organization_id = $2 AND deleted_at IS NULL', [id, oId]);
+      if (!p0.length) return res.status(404).json({ error: 'Proof not found' });
+      if (!await canAdminAccessUser(req.branchContext, p0[0].user_id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
 
     const { rows } = await pool.query(
       `UPDATE statutory_investment_proofs
@@ -592,12 +622,12 @@ router.put('/proofs/:id/review', auth, hasPermission('statutory', 'approve_decla
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // GET /api/statutory/compliance-summary?month=&year=
-router.get('/compliance-summary', auth, hasPermission('statutory', 'view'), async (req, res) => {
+router.get('/compliance-summary', auth, hasPermission('statutory', 'view'), withBranchContext, scopeEmployees, async (req, res) => {
   try {
     const oId   = orgId(req);
     const month = parseInt(req.query.month || new Date().getMonth() + 1, 10);
     const year  = parseInt(req.query.year  || new Date().getFullYear(),  10);
-    const data  = await getComplianceSummary({ organizationId: oId, month, year });
+    const data  = await getComplianceSummary({ organizationId: oId, month, year, userIds: req._scopeUserIds ?? null });
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -668,6 +698,7 @@ router.put('/returns/:id/filed', auth, hasPermission('statutory', 'file_returns'
 function rParams(req) {
   return {
     organizationId: orgId(req),
+    userIds: req._scopeUserIds ?? null,
     month: req.query.month ? parseInt(req.query.month, 10) : new Date().getMonth() + 1,
     year:  req.query.year  ? parseInt(req.query.year,  10) : new Date().getFullYear(),
   };
@@ -680,7 +711,7 @@ function sendCSV(res, data, fields, filename) {
 }
 
 // GET /api/statutory/reports/pf-ecr
-router.get('/reports/pf-ecr', auth, hasPermission('statutory', 'view'), async (req, res) => {
+router.get('/reports/pf-ecr', auth, hasPermission('statutory', 'view'), withBranchContext, scopeEmployees, async (req, res) => {
   try {
     const p    = rParams(req);
     const data = await getPFECR(p);
@@ -698,7 +729,7 @@ router.get('/reports/pf-ecr', auth, hasPermission('statutory', 'view'), async (r
 });
 
 // GET /api/statutory/reports/esi
-router.get('/reports/esi', auth, hasPermission('statutory', 'view'), async (req, res) => {
+router.get('/reports/esi', auth, hasPermission('statutory', 'view'), withBranchContext, scopeEmployees, async (req, res) => {
   try {
     const p    = rParams(req);
     const data = await getESIReturn(p);
@@ -716,7 +747,7 @@ router.get('/reports/esi', auth, hasPermission('statutory', 'view'), async (req,
 });
 
 // GET /api/statutory/reports/pt
-router.get('/reports/pt', auth, hasPermission('statutory', 'view'), async (req, res) => {
+router.get('/reports/pt', auth, hasPermission('statutory', 'view'), withBranchContext, scopeEmployees, async (req, res) => {
   try {
     const p    = rParams(req);
     const data = await getPTChallan(p);
@@ -733,7 +764,7 @@ router.get('/reports/pt', auth, hasPermission('statutory', 'view'), async (req, 
 });
 
 // GET /api/statutory/reports/tds
-router.get('/reports/tds', auth, hasPermission('statutory', 'view'), async (req, res) => {
+router.get('/reports/tds', auth, hasPermission('statutory', 'view'), withBranchContext, scopeEmployees, async (req, res) => {
   try {
     const p    = rParams(req);
     const data = await getTDSChallan(p);
@@ -752,11 +783,11 @@ router.get('/reports/tds', auth, hasPermission('statutory', 'view'), async (req,
 });
 
 // GET /api/statutory/reports/form16?fy=2024-25
-router.get('/reports/form16', auth, hasPermission('payroll', 'form16'), async (req, res) => {
+router.get('/reports/form16', auth, hasPermission('payroll', 'form16'), withBranchContext, scopeEmployees, async (req, res) => {
   try {
     const oId = orgId(req);
     const fy  = req.query.fy || getFY(new Date().getMonth() + 1, new Date().getFullYear());
-    const data = await getForm16Dataset({ organizationId: oId, financialYear: fy });
+    const data = await getForm16Dataset({ organizationId: oId, financialYear: fy, userIds: req._scopeUserIds ?? null });
     if (req.query.format === 'csv') {
       const fields = [
         { key: 'employee_id', label: 'Emp ID' }, { key: 'employee_name', label: 'Name' },

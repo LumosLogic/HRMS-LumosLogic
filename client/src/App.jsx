@@ -18,6 +18,14 @@ const Register         = lazy(() => import('@/pages/Register'));
 const ForgotPassword   = lazy(() => import('@/pages/ForgotPassword'));
 const ResetPassword    = lazy(() => import('@/pages/ResetPassword'));
 
+// ── Public legal / support pages (no login required) ──
+const PrivacyPolicy   = lazy(() => import('@/pages/legal/PrivacyPolicy'));
+const TermsOfService  = lazy(() => import('@/pages/legal/TermsOfService'));
+const AccountDeletion = lazy(() => import('@/pages/legal/AccountDeletion'));
+const ContactPage     = lazy(() => import('@/pages/legal/Contact'));
+const SecurityPage    = lazy(() => import('@/pages/legal/Security'));
+const CookiePolicy    = lazy(() => import('@/pages/legal/CookiePolicy'));
+
 // ── HR Admin / Root Admin pages ──
 const Dashboard        = lazy(() => import('@/pages/Dashboard'));
 const Calendar         = lazy(() => import('@/pages/Calendar'));
@@ -209,6 +217,14 @@ function AppRoutes() {
       <Route path="/register"         element={token ? <Navigate to={home} replace /> : <Register />} />
       <Route path="/forgot-password"  element={<ForgotPassword />} />
       <Route path="/reset-password"   element={<ResetPassword />} />
+
+      {/* ── Public legal / support pages (accessible without login) ── */}
+      <Route path="/privacy-policy"   element={<PrivacyPolicy />} />
+      <Route path="/terms-of-service" element={<TermsOfService />} />
+      <Route path="/account-deletion" element={<AccountDeletion />} />
+      <Route path="/contact"          element={<ContactPage />} />
+      <Route path="/security"         element={<SecurityPage />} />
+      <Route path="/cookie-policy"    element={<CookiePolicy />} />
 
       {/* ── HR Admin area (admin + root_admin) ── */}
       <Route element={<HRRoute><AppLayout /></HRRoute>}>

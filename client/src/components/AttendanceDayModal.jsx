@@ -5,6 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut } from '@/lib/api';
+import { useEmployees } from '@/hooks/useEmployees';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -366,14 +367,7 @@ export function AttendanceDayModal({ dateStr, initialTab = 'all', onClose, onRef
     staleTime: 30000,
   });
 
-  const { data: employees = [] } = useQuery({
-    queryKey: ['employees-list', selectedBranchId],
-    queryFn:  async () => {
-      const all = await apiGet('/employees');
-      return all.filter(e => e.role === 'employee');
-    },
-    staleTime: 60000,
-  });
+  const { data: employees = [] } = useEmployees({ lite: true, onlyEmployees: true });
 
   const { data: leaves = [] } = useQuery({
     queryKey: ['leaves-month', year, month, selectedBranchId],

@@ -5,6 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut } from '@/lib/api';
+import { useEmployees } from '@/hooks/useEmployees';
 import { Avatar } from '@/components/ui/Avatar';
 
 const ASSIGNED_CFG = {
@@ -189,7 +190,7 @@ function AdminOnboarding() {
   const [onbFilter,   setOnbFilter]   = useState('all'); // 'all' | 'incomplete' | 'complete' | 'stuck'
 
   const { data: _ovData, isLoading } = useQuery({ queryKey: ['onboarding-overview', selectedBranchId], queryFn: () => apiGet('/onboarding/overview') });
-  const { data: _eData }             = useQuery({ queryKey: ['employees', 'all', selectedBranchId],    queryFn: () => apiGet('/employees') });
+  const { data: _eData }             = useEmployees();
   const overview  = Array.isArray(_ovData) ? _ovData : [];
   const employees = Array.isArray(_eData)  ? _eData  : [];
 

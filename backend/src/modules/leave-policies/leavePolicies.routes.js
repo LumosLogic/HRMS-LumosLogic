@@ -4,7 +4,38 @@ const { db, pool } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { getFilterState } = require('../../utils/branchFilter');
+const { getFilterState, canModifyBranchRecord, resolveWriteBranch } = require('../../utils/branchFilter');
+const { validateBranchIdList } = require('../../services/branchService');
+const groupSvc = require('../../services/configGroupService');
+
+// Policy scope: branch_id NULL = organisation default; branch_id = <id> = branch override
+// (a branch override replaces the org default for that branch's employees).
+const POLICY_FIELDS = [
+  'label', 'annual_quota', 'carry_forward', 'max_carry_forward', 'paid', 'active',
+  'half_day_allowed', 'requires_approval', 'require_document', 'min_notice_days',
+  'max_consecutive_days', 'description',
+];
+
+/**
+ * Target scopes for a write: explicit branch_ids (validated, "apply to selected branches"),
+ * org_wide:true (all-branch callers only), or the caller's selected branch. A restricted HR
+ * with nothing selected is rejected — they must never overwrite the organisation default.
+ */
+async function resolvePolicyTargets(req) {
+  const oId = req.user.organization_id;
+  const body = req.body || {};
+  if (Array.isArray(body.branch_ids) && body.branch_ids.length > 0) {
+    const v = await validateBranchIdList(req.user.id, oId, req.user.role, body.branch_ids);
+    return v.ok ? { targets: v.ids } : { status: 403, error: v.error };
+  }
+  if (body.org_wide === true) {
+    return req.branchContext?.hasAllBranches
+      ? { targets: [null] }
+      : { status: 403, error: 'Only users with all-branch access can change the organisation default.' };
+  }
+  const w = resolveWriteBranch(req.branchContext);
+  return w.ok ? { targets: [w.branchId] } : { status: w.status, error: w.error };
+}
 
 const DEFAULT_POLICIES = [
   { leave_type: 'annual',    label: 'Annual Leave',    annual_quota: 18, carry_forward: true,  max_carry_forward: 5,  paid: true },
@@ -57,8 +88,10 @@ router.post('/', auth, hasPermission('settings', 'manage'), withBranchContext, a
   if (!Array.isArray(policies) || policies.length === 0)
     return res.status(400).json({ error: 'policies array required and must not be empty' });
 
-  const branchState = getFilterState(req.branchContext);
-  const branchId = branchState.type === 'specific' ? branchState.branchId : null;
+  const resolvedScope = await resolvePolicyTargets(req);
+  if (resolvedScope.error) return res.status(resolvedScope.status).json({ error: resolvedScope.error });
+  const targets = resolvedScope.targets;
+  const allInserted = [];
 
   // Guard: detect duplicate leave_type values in the incoming payload before touching the DB.
   const typesSeen = new Set();
@@ -84,6 +117,7 @@ router.post('/', auth, hasPermission('settings', 'manage'), withBranchContext, a
   try {
     await client.query('BEGIN');
 
+    for (const branchId of targets) {
     // BUG_238: snapshot previous policies for the same scope for audit
     const { rows: beforeRows } = await client.query(
       branchId
@@ -173,8 +207,11 @@ router.post('/', auth, hasPermission('settings', 'manage'), withBranchContext, a
       }
     }
 
+    allInserted.push(...inserted);
+    } // end per-target loop
+
     await client.query('COMMIT');
-    res.json(inserted);
+    res.json(allInserted);
   } catch (err) {
     await client.query('ROLLBACK');
     if (err.code === 'LP_NAME_DUP') return res.status(400).json({ error: err.message });
@@ -190,16 +227,27 @@ router.post('/', auth, hasPermission('settings', 'manage'), withBranchContext, a
 });
 
 // PUT /api/leave-policies/:id (admin only)
-router.put('/:id', auth, hasPermission('settings', 'manage'), async (req, res) => {
+router.put('/:id', auth, hasPermission('settings', 'manage'), withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
-    const fields = req.body;
-    delete fields.id; delete fields.organization_id; delete fields.created_at;
+    // Whitelist: scope (branch_id / organization_id) and leave_type are never client-controlled.
+    const fields = {};
+    for (const k of POLICY_FIELDS) if (req.body[k] !== undefined) fields[k] = req.body[k];
+    if (!Object.keys(fields).length) return res.status(400).json({ error: 'No valid fields provided' });
 
     // BUG_238: capture the previous row so we can record per-field changes
     const { data: before } = await db.from('leave_policies')
       .select('*').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
     if (!before) return res.status(404).json({ error: 'Leave policy not found' });
+    if (!canModifyBranchRecord(req.branchContext, before.branch_id))
+      return res.status(403).json({ error: 'You do not have access to modify this leave policy.' });
+    if (before.group_id != null && before.branch_id != null) {
+      // Inherited from a configuration group: editing detaches this branch's whole set from the group
+      // (it becomes the branch's custom override); "Reset to inherited" re-attaches it.
+      await pool.query(
+        'UPDATE leave_policies SET group_id = NULL WHERE organization_id = $1 AND branch_id = $2 AND group_id IS NOT NULL',
+        [oId, before.branch_id]);
+    }
 
     // BUG-132: validate a renamed Leave Name (non-empty, unique within the same scope)
     if (fields.label !== undefined) {
@@ -240,6 +288,79 @@ router.put('/:id', auth, hasPermission('settings', 'manage'), async (req, res) =
 
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// DELETE /api/leave-policies/branch/:branchId — reset a branch to the organisation default
+// (removes that branch's override rows only; the org default is never touched).
+router.delete('/branch/:branchId', auth, hasPermission('settings', 'manage'), withBranchContext, async (req, res) => {
+  try {
+    const oId = req.user.organization_id;
+    const v = await validateBranchIdList(req.user.id, oId, req.user.role, [req.params.branchId]);
+    if (!v.ok) return res.status(403).json({ error: v.error });
+    const groupsOn = await groupSvc.groupsAvailable();
+    // Only the CUSTOM override is removed; group-inherited rows are owned by the group.
+    const { rowCount } = await pool.query(
+      `DELETE FROM leave_policies WHERE organization_id = $1 AND branch_id = $2${groupsOn ? ' AND group_id IS NULL' : ''}`,
+      [oId, v.ids[0]]);
+    let inheritedFromGroup = false;
+    if (groupsOn) inheritedFromGroup = (await groupSvc.propagateBranch(pool, oId, 'leave_policies', v.ids[0])) === 'applied';
+    res.json({ ok: true, removed: rowCount, inherited_from_group: inheritedFromGroup });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/leave-policies/copy — "Same as Branch X": copies the effective policy set of a source
+// (a branch, or the organisation default when from_branch_id is null) onto target branches.
+// Snapshot copy: later edits to the source do not silently change the targets.
+router.post('/copy', auth, hasPermission('settings', 'manage'), withBranchContext, async (req, res) => {
+  const oId = req.user.organization_id;
+  const { from_branch_id, to_branch_ids } = req.body || {};
+  if (!Array.isArray(to_branch_ids) || to_branch_ids.length === 0)
+    return res.status(400).json({ error: 'to_branch_ids is required' });
+  const client = await pool.connect();
+  try {
+    const tv = await validateBranchIdList(req.user.id, oId, req.user.role, to_branch_ids);
+    if (!tv.ok) { return res.status(403).json({ error: tv.error }); }
+    let srcBranch = null;
+    if (from_branch_id != null) {
+      const sv = await validateBranchIdList(req.user.id, oId, req.user.role, [from_branch_id]);
+      if (!sv.ok) { return res.status(403).json({ error: sv.error }); }
+      srcBranch = sv.ids[0];
+    }
+    if (srcBranch != null && tv.ids.includes(srcBranch)) {
+      return res.status(400).json({ error: 'The source branch cannot also be a target.' });
+    }
+    await client.query('BEGIN');
+    // Source rows: the branch's own override, falling back to the org default when it has none.
+    let { rows: src } = await client.query(
+      srcBranch != null
+        ? 'SELECT * FROM leave_policies WHERE organization_id = $1 AND branch_id = $2'
+        : 'SELECT * FROM leave_policies WHERE organization_id = $1 AND branch_id IS NULL',
+      srcBranch != null ? [oId, srcBranch] : [oId]);
+    if (!src.length && srcBranch != null) {
+      ({ rows: src } = await client.query(
+        'SELECT * FROM leave_policies WHERE organization_id = $1 AND branch_id IS NULL', [oId]));
+    }
+    if (!src.length) { await client.query('ROLLBACK'); return res.status(404).json({ error: 'Source has no leave policies to copy.' }); }
+    for (const target of tv.ids) {
+      await client.query('DELETE FROM leave_policies WHERE organization_id = $1 AND branch_id = $2', [oId, target]);
+      for (const p of src) {
+        await client.query(
+          `INSERT INTO leave_policies
+             (organization_id, branch_id, leave_type, label, annual_quota, carry_forward, max_carry_forward,
+              paid, active, half_day_allowed, requires_approval, require_document, min_notice_days,
+              max_consecutive_days, description)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+          [oId, target, p.leave_type, p.label, p.annual_quota, p.carry_forward, p.max_carry_forward,
+           p.paid, p.active, p.half_day_allowed, p.requires_approval, p.require_document, p.min_notice_days,
+           p.max_consecutive_days, p.description]);
+      }
+    }
+    await client.query('COMMIT');
+    res.json({ ok: true, copied_policies: src.length, targets: tv.ids });
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    res.status(500).json({ error: err.message });
+  } finally { client.release(); }
 });
 
 // ─── EHN_LP_001: Leave Policy Audit Log ──────────────────────────────────────

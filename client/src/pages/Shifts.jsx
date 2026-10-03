@@ -8,6 +8,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { useEmployees } from '@/hooks/useEmployees';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { Avatar } from '@/components/ui/Avatar';
@@ -765,18 +766,14 @@ export default function Shifts() {
   );
 
   const { data: _sData, isLoading: sLoad } = useQuery({
-    queryKey: ['shifts'],
+    queryKey: ['shifts', selectedBranchId],
     queryFn:  () => apiGet('/shifts'),
   });
   const { data: _aData, isLoading: aLoad } = useQuery({
     queryKey: ['shift-assign', month, selectedBranchId],
     queryFn:  () => apiGet('/shifts/assignments', { month }),
   });
-  const { data: _eData } = useQuery({
-    queryKey: ['employees', 'all', selectedBranchId],
-    queryFn:  () => apiGet('/employees'),
-    enabled:  isAdmin,
-  });
+  const { data: _eData } = useEmployees({ enabled: isAdmin });
 
   const shifts      = Array.isArray(_sData) ? _sData : [];
   const assignments = Array.isArray(_aData) ? _aData : [];

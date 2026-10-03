@@ -4,7 +4,7 @@ const { db } = require('../../config/db');
 const { pool } = require('../../config/db-pg-adapter');
 const { auth, isAdminRole, rootAdminOnly } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
-const { localDateStr, localTimeStr, flat, orgId, toMinutes, getSettings, getEffectiveWorkSchedule, isWorkingDay } = require('../../utils/helpers');
+const { getUserBranchId, localDateStr, localTimeStr, flat, orgId, toMinutes, getSettings, getEffectiveWorkSchedule, isWorkingDay } = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
 
@@ -432,7 +432,7 @@ router.put('/late-early/:id', auth, hasPermission('attendance', 'edit'), withBra
     const { late_come, late_come_time, early_exit, early_exit_time } = req.body;
 
     const { data: existing, error: fetchErr } = await db.from('attendance')
-      .select('*').eq('id', req.params.id).single();
+      .select('*').eq('id', req.params.id).eq('organization_id', orgId(req)).single();
     if (fetchErr || !existing) return res.status(404).json({ error: 'Record not found' });
 
     // Branch isolation.
@@ -451,7 +451,7 @@ router.put('/late-early/:id', auth, hasPermission('attendance', 'edit'), withBra
     const co = updates.check_out ?? existing.check_out;
     if (ci && co) updates.work_hours = Math.round(Math.max(0, (toMinutes(co) - toMinutes(ci)) / 60) * 100) / 100;
 
-    await db.from('attendance').update(updates).eq('id', req.params.id);
+    await db.from('attendance').update(updates).eq('id', req.params.id).eq('organization_id', orgId(req));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -461,7 +461,7 @@ router.put('/late-early/:id', auth, hasPermission('attendance', 'edit'), withBra
 router.delete('/late-early/:id', auth, hasPermission('attendance', 'edit'), withBranchContext, async (req, res) => {
   try {
     const { data: existing } = await db.from('attendance')
-      .select('*').eq('id', req.params.id).single();
+      .select('*').eq('id', req.params.id).eq('organization_id', orgId(req)).single();
     if (!existing) return res.status(404).json({ error: 'Record not found' });
 
     // Branch isolation.
@@ -472,7 +472,7 @@ router.delete('/late-early/:id', auth, hasPermission('attendance', 'edit'), with
 
     await db.from('attendance')
       .update({ is_late: false, is_early_exit: false, check_in: null, check_out: null })
-      .eq('id', req.params.id);
+      .eq('id', req.params.id).eq('organization_id', orgId(req));
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -543,13 +543,14 @@ router.get('/issues', auth, async (req, res) => {
       db.from('attendance').select('*').eq('user_id', uid).eq('date', today).maybeSingle(),
       db.from('leaves').select('id, leave_time').eq('user_id', uid).eq('organization_id', oId)
         .eq('status', 'approved').lte('start_date', today).gte('end_date', today).maybeSingle(),
-      db.from('holidays').select('id').eq('organization_id', oId).eq('date', today).maybeSingle(),
+      db.from('holidays').select('id, branch_id').eq('organization_id', oId).eq('date', today),
       getActiveShiftConfig(uid, today),
     ]);
 
     const att     = attRes.data;
     const leave   = leaveRes.data;
-    const holiday = holidayRes.data;
+    const _myBranch = await getUserBranchId(oId, uid);
+    const holiday = (holidayRes.data || []).find(h => h.branch_id == null || (_myBranch != null && Number(h.branch_id) === _myBranch));
 
     // If the employee has an approved leave or there is an org holiday, return no issues
     if (leave || holiday) return res.json({ issues: [] });

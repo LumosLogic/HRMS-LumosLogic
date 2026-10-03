@@ -108,8 +108,20 @@ function from(table) {
     // ── OR groups (.or('col.op.val,col.op.val')) ──────────────────────────
     // Each .or() call becomes one (A OR B OR C) block ANDed with the rest.
     // Supabase format: "is_late.eq.true,is_early_exit.eq.true"
+    // Split on commas that are NOT inside parentheses, so  "a.is.null,b.in.(1,2,3)"  keeps the list intact.
+    const splitOrTerms = (str) => {
+      const out = []; let depth = 0, cur = '';
+      for (const ch of str) {
+        if (ch === '(') depth++;
+        if (ch === ')') depth = Math.max(0, depth - 1);
+        if (ch === ',' && depth === 0) { out.push(cur); cur = ''; continue; }
+        cur += ch;
+      }
+      out.push(cur);
+      return out;
+    };
     for (const orStr of state.orFilters) {
-      const orParts = orStr.split(',').map(part => {
+      const orParts = splitOrTerms(orStr).map(part => {
         part = part.trim();
         const firstDot  = part.indexOf('.');
         const colName   = part.substring(0, firstDot);
@@ -117,6 +129,15 @@ function from(table) {
         const secondDot = remainder.indexOf('.');
         const op        = remainder.substring(0, secondDot);
         const valStr    = remainder.substring(secondDot + 1);
+        const colRef    = colName.includes('.') ? colName : `${prefix}"${colName}"`;
+
+        // Supabase list operator:  col.in.(1,2,3)  →  col IN ($n, $n, $n)
+        if (op === 'in') {
+          const items = valStr.replace(/^\(/, '').replace(/\)$/, '').split(',')
+            .map(x => x.trim()).filter(x => x !== '')
+            .map(x => (!isNaN(x) ? Number(x) : x));
+          return items.length ? `${colRef} IN (${items.map(v => addParam(v)).join(', ')})` : 'FALSE';
+        }
 
         // Parse value string to JS primitive
         let val;

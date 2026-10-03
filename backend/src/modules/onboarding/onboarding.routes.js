@@ -1,10 +1,11 @@
 const express = require('express');
 const router  = express.Router();
+const { sameId } = require('../../utils/ids');
 const { db, pool } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds, getAdminsForEmployee } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, getAdminsForEmployee, canAdminAccessUser } = require('../../utils/branchFilter');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
@@ -32,11 +33,13 @@ const DEFAULT_TASKS = [
 ];
 
 // GET /api/onboarding
-router.get('/', auth, async (req, res) => {
+router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { userId } = req.query;
-    const targetId = isAdmin(req.user.role) && userId ? userId : req.user.id;
+    const targetId = isAdmin(req.user.role) && userId ? parseInt(userId, 10) : req.user.id;
+    if (targetId !== req.user.id && !await canAdminAccessUser(req.branchContext, targetId, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
     const { data, error } = await db.from('onboarding_checklists')
       .select('*').eq('user_id', targetId).eq('organization_id', oId).order('order_index');
     if (error) throw error;
@@ -103,10 +106,12 @@ router.get('/overview', auth, withBranchContext, async (req, res) => {
 // POST /api/onboarding/init/:userId
 // Uses SELECT FOR UPDATE on the user row to serialize concurrent init requests.
 // All 16 tasks are inserted inside a single transaction — either all succeed or none.
-router.post('/init/:userId', auth, hasPermission('onboarding', 'manage'), async (req, res) => {
+router.post('/init/:userId', auth, hasPermission('onboarding', 'manage'), withBranchContext, async (req, res) => {
   if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
   const oId = req.user.organization_id;
   const uid = parseInt(req.params.userId);
+  if (!await canAdminAccessUser(req.branchContext, uid, oId))
+    return res.status(403).json({ error: "You do not have access to this employee's branch." });
 
   const client = await pool.connect();
   let inserted;
@@ -167,11 +172,13 @@ router.post('/init/:userId', auth, hasPermission('onboarding', 'manage'), async 
 });
 
 // POST /api/onboarding
-router.post('/', auth, hasPermission('onboarding', 'manage'), async (req, res) => {
+router.post('/', auth, hasPermission('onboarding', 'manage'), withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = req.user.organization_id;
     const { user_id, title, description, due_date, assigned_to, order_index } = req.body;
+    if (!await canAdminAccessUser(req.branchContext, parseInt(user_id, 10), oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
     const { data, error } = await db.from('onboarding_checklists')
       .insert({ user_id, title, description: description || '', due_date: due_date || null, assigned_to: assigned_to || 'employee', order_index: order_index || 99, organization_id: oId })
       .select().single();
@@ -182,7 +189,7 @@ router.post('/', auth, hasPermission('onboarding', 'manage'), async (req, res) =
 
 // PUT /api/onboarding/:id/complete
 // Admins can complete any task; employees can only complete their own 'employee'-assigned tasks.
-router.put('/:id/complete', auth, async (req, res) => {
+router.put('/:id/complete', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { completed } = req.body;
@@ -197,9 +204,11 @@ router.put('/:id/complete', auth, async (req, res) => {
 
     if (fetchErr || !task) return res.status(404).json({ error: 'Task not found' });
 
+    if (isAdmin(req.user.role) && !sameId(task.user_id, req.user.id) && !await canAdminAccessUser(req.branchContext, task.user_id, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
     // Employees: must own the task AND it must be assigned to 'employee'
     if (!isAdmin(req.user.role)) {
-      if (task.user_id !== req.user.id) return res.status(403).json({ error: 'Access denied' });
+      if (!sameId(task.user_id, req.user.id)) return res.status(403).json({ error: 'Access denied' });
       if (task.assigned_to !== 'employee') return res.status(403).json({ error: 'Only HR or manager can complete this task' });
     }
 
@@ -247,10 +256,16 @@ router.put('/:id/complete', auth, async (req, res) => {
 });
 
 // DELETE /api/onboarding/:id
-router.delete('/:id', auth, hasPermission('onboarding', 'manage'), async (req, res) => {
+router.delete('/:id', auth, hasPermission('onboarding', 'manage'), withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = req.user.organization_id;
+    {
+      const { data: t } = await db.from('onboarding_checklists').select('user_id').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
+      if (!t) return res.status(404).json({ error: 'Task not found' });
+      if (!await canAdminAccessUser(req.branchContext, t.user_id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
     const { error } = await db.from('onboarding_checklists').delete().eq('id', req.params.id).eq('organization_id', oId);
     if (error) throw error;
     res.json({ ok: true });

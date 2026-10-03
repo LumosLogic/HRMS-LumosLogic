@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Bell, Mail, Send } from 'lucide-react';
 import { apiGet, apiPost } from '@/lib/api';
+import { useEmployees } from '@/hooks/useEmployees';
 import { useToast } from '@/context/ToastContext';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 
@@ -55,10 +56,7 @@ function RecipientSelect({ value, onChange, employees, label }) {
 export default function Broadcast() {
   const toast = useToast();
 
-  const { data: allUsers = [] } = useQuery({
-    queryKey: ['all-users-broadcast'],
-    queryFn: () => apiGet('/employees'),
-  });
+  const { data: allUsers = [] } = useEmployees({ lite: true });
   // BUG_135/136: exclude both root admins and HR admins — broadcast should reach employees only
   const employees = allUsers.filter(u => u.role !== 'root_admin' && u.role !== 'admin');
 

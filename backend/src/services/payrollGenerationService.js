@@ -352,6 +352,16 @@ async function generatePayrollRun({ organizationId, month, year, generatedBy, no
           { existingRunId: run.id }
         );
       }
+      // A PAID run is final. Without this guard `force` reset it to 'processing', zeroed its totals and
+      // deleted its employee rows (leaving a 'failed' run) even though the payslips stayed locked.
+      if (run.status === 'paid') {
+        await setupClient.query('ROLLBACK');
+        throw new GenerationError(
+          `Payroll ${branchLabel}for ${padZ(m)}/${y} has already been paid and cannot be regenerated.`,
+          'PAYROLL_PAID',
+          { existingRunId: run.id }
+        );
+      }
       if (run.status === 'processing') {
         await setupClient.query('ROLLBACK');
         throw new GenerationError(

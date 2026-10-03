@@ -4,7 +4,11 @@ const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds, getFilterState } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, getFilterState, canAdminAccessUser, canModifyBranchRecord, resolveWriteBranch } = require('../../utils/branchFilter');
+const { validateBranchIdList } = require('../../services/branchService');
+
+// Asset ownership: branch_id NULL = organisation inventory; branch_id = <id> = that branch's asset.
+// An assigned asset is additionally governed by the assignee's branch (users.branch_id).
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
@@ -22,13 +26,13 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       .eq('organization_id', oId)
       .order('created_at', { ascending: false });
 
-    if (userId) {
-      if (isAdmin(req.user.role)) {
-        const empIds = await resolveEmployeeIds(req.branchContext, oId);
-        if (empIds !== null && !empIds.includes(parseInt(userId, 10)))
-          return res.status(403).json({ error: "You do not have access to this employee's branch" });
-      }
-      q = q.eq('assigned_to', userId);
+    if (!isAdmin(req.user.role)) {
+      // Non-admins only ever see assets assigned to themselves — ?userId= is ignored.
+      q = q.eq('assigned_to', req.user.id);
+    } else if (userId) {
+      if (!await canAdminAccessUser(req.branchContext, parseInt(userId, 10), oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch" });
+      q = q.eq('assigned_to', parseInt(userId, 10));
     } else if (isAdmin(req.user.role)) {
       // Branch-filter assigned assets via employee IDs AND filter unassigned assets by branch_id.
       const empIds = await resolveEmployeeIds(req.branchContext, oId);
@@ -55,7 +59,15 @@ router.get('/', auth, withBranchContext, async (req, res) => {
     if (status) q = q.eq('status', status);
     const { data, error } = await q;
     if (error) throw error;
-    res.json(data || []);
+    let rows = data || [];
+    // Unassigned assets are visible only when org-wide (branch NULL) or in the caller's branch scope.
+    if (isAdmin(req.user.role) && !userId && branchState.type !== 'all') {
+      const allowed = new Set(
+        branchState.type === 'specific' ? [Number(branchState.branchId)]
+        : branchState.type === 'multi'  ? branchState.branchIds.map(Number) : []);
+      rows = rows.filter(a => a.assigned_to != null || a.branch_id == null || allowed.has(Number(a.branch_id)));
+    }
+    res.json(rows);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -127,10 +139,19 @@ router.post('/', auth, hasPermission('assets', 'create'), withBranchContext, asy
     const oId = req.user.organization_id;
     const body = sanitiseAssetBody({ ...req.body, organization_id: oId });
     delete body.id; delete body.created_at;
-    // Store branch_id from the selected branch context so assets are branch-scoped
-    if (req.branchContext?.selectedBranchId) {
-      body.branch_id = req.branchContext.selectedBranchId;
+    // Scope: a client-supplied branch_id is validated (org + access); otherwise the selected
+    // branch is used. A restricted HR with no selection is rejected (no NULL-branch bypass).
+    if (body.branch_id) {
+      const v = await validateBranchIdList(req.user.id, oId, req.user.role, [body.branch_id]);
+      if (!v.ok) return res.status(403).json({ error: v.error });
+      body.branch_id = v.ids[0];
+    } else {
+      const w = resolveWriteBranch(req.branchContext);
+      if (!w.ok) return res.status(w.status).json({ error: w.error });
+      body.branch_id = w.branchId;
     }
+    if (body.assigned_to && !await canAdminAccessUser(req.branchContext, parseInt(body.assigned_to, 10), oId))
+      return res.status(403).json({ error: "You do not have access to the selected employee's branch." });
 
     // ── Status validation ─────────────────────────────────────────────────────
     if (body.status && !VALID_STATUSES.includes(body.status)) {
@@ -168,12 +189,36 @@ router.post('/', auth, hasPermission('assets', 'create'), withBranchContext, asy
 });
 
 // PUT /api/assets/:id
-router.put('/:id', auth, hasPermission('assets', 'manage'), async (req, res) => {
+router.put('/:id', auth, hasPermission('assets', 'manage'), withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = req.user.organization_id;
     const body = sanitiseAssetBody({ ...req.body });
     delete body.id; delete body.created_at; delete body.organization_id;
+
+    const { data: cur } = await db.from('assets').select('id, branch_id, assigned_to')
+      .eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
+    if (!cur) return res.status(404).json({ error: 'Asset not found' });
+    // Branch assets: branch must be in scope. Org inventory (NULL branch): all-branch callers, or a
+    // restricted HR only when the asset is/ends up assigned to an employee in their scope.
+    let allowedToEdit = canModifyBranchRecord(req.branchContext, cur.branch_id);
+    if (!allowedToEdit && cur.branch_id == null) {
+      const assignee = body.assigned_to || cur.assigned_to;
+      allowedToEdit = !!assignee && await canAdminAccessUser(req.branchContext, parseInt(assignee, 10), oId);
+    }
+    if (!allowedToEdit) return res.status(403).json({ error: 'You do not have access to modify this asset.' });
+    if (body.assigned_to && !await canAdminAccessUser(req.branchContext, parseInt(body.assigned_to, 10), oId))
+      return res.status(403).json({ error: "You do not have access to the selected employee's branch." });
+    // Moving an asset between branches requires access to the destination branch too.
+    if (body.branch_id !== undefined && String(body.branch_id ?? '') !== String(cur.branch_id ?? '')) {
+      if (body.branch_id) {
+        const v = await validateBranchIdList(req.user.id, oId, req.user.role, [body.branch_id]);
+        if (!v.ok) return res.status(403).json({ error: v.error });
+        body.branch_id = v.ids[0];
+      } else if (!req.branchContext?.hasAllBranches) {
+        return res.status(403).json({ error: 'Only users with all-branch access can make an asset organisation-wide.' });
+      } else { body.branch_id = null; }
+    } else { delete body.branch_id; }
 
     // ── Status validation ─────────────────────────────────────────────────────
     if (body.status && !VALID_STATUSES.includes(body.status)) {
@@ -219,10 +264,17 @@ router.put('/:id', auth, hasPermission('assets', 'manage'), async (req, res) => 
 });
 
 // DELETE /api/assets/:id
-router.delete('/:id', auth, hasPermission('assets', 'manage'), async (req, res) => {
+router.delete('/:id', auth, hasPermission('assets', 'manage'), withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = req.user.organization_id;
+    const { data: cur } = await db.from('assets').select('id, branch_id, assigned_to')
+      .eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
+    if (!cur) return res.status(404).json({ error: 'Asset not found' });
+    let allowedToDelete = canModifyBranchRecord(req.branchContext, cur.branch_id);
+    if (!allowedToDelete && cur.branch_id == null && cur.assigned_to)
+      allowedToDelete = await canAdminAccessUser(req.branchContext, parseInt(cur.assigned_to, 10), oId);
+    if (!allowedToDelete) return res.status(403).json({ error: 'You do not have access to delete this asset.' });
     const { error } = await db.from('assets').delete().eq('id', req.params.id).eq('organization_id', oId);
     if (error) throw error;
     res.json({ ok: true });

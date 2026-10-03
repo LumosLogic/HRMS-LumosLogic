@@ -4,6 +4,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useBranch } from '@/context/BranchContext';
 import { useFeature } from '@/context/FeatureFlagContext';
 import { cn } from '@/lib/utils';
+import { invalidateBranchScoped } from '@/lib/queryScopes';
 
 /**
  * Global branch selector shown in the sidebar for admins with multi-branch access.
@@ -18,6 +19,8 @@ export function BranchSelector() {
     selectedBranch,
     setSelectedBranchId,
     showBranchSelector,
+    hasAllBranches,
+    isRootAdmin,
     isLoading,
   } = useBranch();
 
@@ -34,22 +37,22 @@ export function BranchSelector() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Invalidate ALL active React Query caches when the branch changes so every
-  // mounted page immediately re-fetches with the new X-Branch-Id context.
+  // On a branch change refresh ONLY what depends on the branch (see lib/queryScopes): branch-keyed
+  // queries already refetch under their new key, organisation-level queries stay cached, and
+  // in-flight requests are not restarted. Includes switching to / from "All Branches".
   // Skip the very first render (initial mount — no branch change happened).
   useEffect(() => {
     if (isFirstRender.current) {
       isFirstRender.current = false;
       return;
     }
-    if (selectedBranchId != null) {
-      qc.invalidateQueries();
-    }
+    invalidateBranchScoped(qc);
   }, [selectedBranchId, qc]);
 
   if (!branchesEnabled || !showBranchSelector) return null;
 
-  const displayName = selectedBranch ? selectedBranch.name : 'Select Branch';
+  const canSelectAll = !!(hasAllBranches || isRootAdmin);
+  const displayName = selectedBranch ? selectedBranch.name : (canSelectAll && selectedBranchId == null ? 'All Branches' : 'Select Branch');
 
   return (
     <div ref={ref} className="relative px-3 pb-2">
@@ -75,6 +78,20 @@ export function BranchSelector() {
 
       {open && (
         <div className="absolute left-3 right-3 top-full mt-1 bg-white border border-[#c7c4d8] rounded-xl shadow-lg z-50 py-1 max-h-56 overflow-y-auto">
+          {/* Explicit "All Branches" — only for callers with all-branch access (server enforces it) */}
+          {canSelectAll && (
+            <button
+              onClick={() => { setSelectedBranchId(null); setOpen(false); }}
+              className={cn(
+                'w-full flex items-center gap-2.5 px-3 py-2.5 text-xs font-semibold text-left transition-colors',
+                selectedBranchId == null ? 'text-[#3525cd] bg-[#3525cd]/5' : 'text-[#464555] hover:bg-[#f0f3ff]'
+              )}
+            >
+              <Building2 size={13} className="flex-shrink-0 opacity-60" />
+              <p className="flex-1 truncate">All Branches</p>
+              {selectedBranchId == null && <Check size={12} className="text-[#3525cd] flex-shrink-0" />}
+            </button>
+          )}
               {/* Only active branches are valid working contexts */}
           {accessibleBranches.filter(b => b.is_active !== false).map(branch => {
             // Coerce both sides: BIGINT from PostgreSQL comes as string via node-postgres

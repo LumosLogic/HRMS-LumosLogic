@@ -1,9 +1,15 @@
 const express = require('express');
 const router  = express.Router();
+// Any mutating call here can change who may access what (grants, branches, HR accounts): drop the
+// cached branch-access resolution once the response is sent. (TTL is only the safety net.)
+router.use((req, res, next) => {
+  if (req.method !== 'GET') res.on('finish', () => require('../../services/branchService').clearBranchAccessCache());
+  next();
+});
 const { pool } = require('../../config/db-pg-adapter');
 const { auth, rootAdminOnly } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
-const { getAccessibleBranches } = require('../../services/branchService');
+const { getAccessibleBranches, getUserBranchAccess } = require('../../services/branchService');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
@@ -426,7 +432,18 @@ router.get('/', auth, async (req, res) => {
        ORDER BY b.name`,
       [req.user.organization_id]
     );
-    res.json(result.rows);
+    // Only the branches the caller may access (root / all-branch grant → all). Employees get their own
+    // branch without HR-admin names. Previously every authenticated user received every branch.
+    const access = await getUserBranchAccess(req.user.id, req.user.organization_id, req.user.role);
+    let rows = result.rows;
+    if (!access.hasAllBranches) {
+      const allowed = new Set((access.branchIds || []).map(Number));
+      rows = rows.filter(b => allowed.has(Number(b.id)));
+    }
+    if (req.user.role === 'employee') {
+      rows = rows.map(({ hr_admin_count, hr_admin_names, ...b }) => b);
+    }
+    res.json(rows);
   } catch (err) {
     // Pre-migration fallback: hr_branch_access table may not exist yet
     if (err.message && err.message.includes('does not exist')) {

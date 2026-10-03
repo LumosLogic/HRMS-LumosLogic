@@ -6,6 +6,7 @@ import {
   FileText, IndianRupee, Users, ArrowRight,
 } from 'lucide-react';
 import { apiGet } from '@/lib/api';
+import { useBranch } from '@/context/BranchContext';
 import { MONTHS, cn } from '@/lib/utils';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
@@ -89,8 +90,9 @@ export default function ComplianceDashboard() {
     }
   }
 
+  const _bk1 = useBranch().selectedBranchId;
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: ['compliance-summary', month, year],
+    queryKey: ['compliance-summary', month, year, _bk1],
     queryFn:  () => apiGet('/statutory/compliance-summary', { month, year }),
     retry: false,
   });

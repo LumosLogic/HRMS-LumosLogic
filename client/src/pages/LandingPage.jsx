@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
+import PublicFooter from '@/components/layout/PublicFooter';
 import {
   BarChart2, ClipboardList, Users, ShieldCheck, Bell, Globe,
   CalendarDays, Zap, CheckCircle2, ArrowRight, Menu, X,
@@ -622,68 +623,6 @@ function CTASection() {
   );
 }
 
-// ── Footer ────────────────────────────────────────────────────────────────────
-function Footer() {
-  return (
-    <footer className="bg-[#151c27] text-white py-12">
-      <div className="w-full max-w-[1440px] mx-auto px-6 lg:px-12">
-        <div className="grid md:grid-cols-3 gap-8 mb-10">
-          {/* Brand */}
-          <div>
-            <div className="flex items-center gap-2.5 mb-3">
-              <img src="/LogoWithoutName.svg" alt="HRMS" className="w-9 h-9" />
-              <div>
-                <p className="font-black text-sm tracking-tight">Lumos Logic HRMS</p>
-                <p className="text-xs text-white/40 mt-0.5">Complete HR Management Platform</p>
-              </div>
-            </div>
-            <p className="text-sm text-white/50 leading-relaxed max-w-xs">
-              A full-stack HRMS built for growing organizations — attendance, leaves, payroll, goals, and more in one place.
-            </p>
-          </div>
-
-          {/* Links */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-xs font-black uppercase tracking-widest text-white/30 mb-3">Platform</p>
-              <div className="space-y-2">
-                <a href="#features" className="block text-sm text-white/60 hover:text-white transition-colors">Features</a>
-                <a href="#how-it-works" className="block text-sm text-white/60 hover:text-white transition-colors">How It Works</a>
-                <a href="#stats" className="block text-sm text-white/60 hover:text-white transition-colors">Why Us</a>
-              </div>
-            </div>
-            <div>
-              <p className="text-xs font-black uppercase tracking-widest text-white/30 mb-3">Access</p>
-              <div className="space-y-2">
-                <Link to="/login" className="block text-sm text-white/60 hover:text-white transition-colors">Sign In</Link>
-                <Link to="/register" className="block text-sm text-white/60 hover:text-white transition-colors">Register</Link>
-                <Link to="/platform/login" className="block text-sm text-white/60 hover:text-white transition-colors">Platform Admin</Link>
-              </div>
-            </div>
-          </div>
-
-          {/* Modules quick list */}
-          <div>
-            <p className="text-xs font-black uppercase tracking-widest text-white/30 mb-3">Core Modules</p>
-            <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-              {['Attendance', 'Leave Management', 'Payroll', 'Reports', 'Goals', 'Expenses', 'Documents', 'Biometric'].map(m => (
-                <span key={m} className="text-xs text-white/50 flex items-center gap-1">
-                  <span className="w-1 h-1 rounded-full bg-[#3525cd] flex-shrink-0" />{m}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="border-t border-white/10 pt-6 flex flex-col md:flex-row items-center justify-between gap-4">
-          <p className="text-xs text-white/30">© {new Date().getFullYear()} LumosLogic. All rights reserved.</p>
-          <p className="text-xs text-white/30">Hosted in India · IST Timezone · Enterprise-grade security</p>
-        </div>
-      </div>
-    </footer>
-  );
-}
-
 // ── Page ──────────────────────────────────────────────────────────────────────
 export default function LandingPage() {
   return (
@@ -694,7 +633,7 @@ export default function LandingPage() {
       <HowItWorksSection />
       <StatsSection />
       <CTASection />
-      <Footer />
+      <PublicFooter />
     </div>
   );
 }

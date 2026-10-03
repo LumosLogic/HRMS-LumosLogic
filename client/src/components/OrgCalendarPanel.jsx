@@ -30,6 +30,7 @@ import { useAuth }   from '@/context/AuthContext';
 import { useToast }  from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost }    from '@/lib/api';
+import { useEmployees } from '@/hooks/useEmployees';
 import { Avatar }    from '@/components/ui/Avatar';
 import { StatusBadge, LeaveTypeBadge } from '@/components/ui/Badge';
 import { Modal }     from '@/components/ui/Modal';
@@ -99,16 +100,10 @@ export function OrgCalendarPanel({ initialDate, initialDayModal = null, initialD
     queryFn:  () => apiGet('/leaves', { year, month }),
   });
 
-  const { data: employees = [] } = useQuery({
-    queryKey: ['employees-list', selectedBranchId],
-    queryFn:  async () => {
-      const all = await apiGet('/employees');
-      return all.filter(e => e.role === 'employee');
-    },
-  });
+  const { data: employees = [] } = useEmployees({ lite: true, onlyEmployees: true });
 
   const { data: holidays = [] } = useQuery({
-    queryKey: ['holidays', year],
+    queryKey: ['holidays', year, selectedBranchId],
     queryFn:  () => apiGet('/holidays', { year }),
   });
 

@@ -1,5 +1,11 @@
 const express = require('express');
 const router  = express.Router();
+// Any mutating call here can change who may access what (grants, branches, HR accounts): drop the
+// cached branch-access resolution once the response is sent. (TTL is only the safety net.)
+router.use((req, res, next) => {
+  if (req.method !== 'GET') res.on('finish', () => require('../../services/branchService').clearBranchAccessCache());
+  next();
+});
 const bcrypt   = require('bcryptjs');
 const { db, pool } = require('../../config/db');
 const { auth, adminOnly, rootAdminOnly, unblockUser } = require('../../middleware/auth');
@@ -8,28 +14,23 @@ const { sendMail, welcomeEmployeeHtml } = require('../../services/emailService')
 const { sendPushToUsers } = require('../../services/pushService');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { getFilterState } = require('../../utils/branchFilter');
+const { hasPermissionOrLegacyAdmin } = require('../../middleware/permissions');
+const { resolveBroadcastRecipients } = require('../../utils/broadcastTargeting');
 
 // ─── Root Admin: Send Email to All / One User ─────────────────────────────────
-router.post('/send-email', auth, adminOnly, async (req, res) => {
+// Broadcast is a permission (notifications.broadcast), not just "any admin". Recipients come from the
+// shared resolver (same rule as push): validated target ids / branch_ids / the caller's branch scope.
+router.post('/send-email', auth, hasPermissionOrLegacyAdmin('notifications', 'broadcast'), withBranchContext, async (req, res) => {
   try {
     const { subject, message, target_user_id } = req.body;
     if (!subject?.trim() || !message?.trim()) return res.status(400).json({ error: 'Subject and message required' });
     const oId = orgId(req);
     const { orgName, orgEmail } = await getOrgContext(oId);
 
-    let recipients;
-    if (target_user_id) {
-      const { data: u } = await db.from('users').select('email').eq('id', parseInt(target_user_id)).eq('organization_id', oId).maybeSingle();
-      if (!u) return res.status(404).json({ error: 'User not found in your organization' });
-      recipients = [u.email];
-    } else {
-      // BUG_136: "all employees" must exclude root admins, HR admins, and inactive/resigned/terminated
-      const { data: users } = await db.from('users').select('email')
-        .eq('organization_id', oId)
-        .eq('role', 'employee')
-        .not('employee_status', 'in', ['inactive', 'resigned', 'terminated']);
-      recipients = (users || []).map(u => u.email).filter(Boolean);
-    }
+// BUG_136: the default audience is active EMPLOYEES only (no root/HR admins, no inactive/resigned/terminated).
+    const resolved = await resolveBroadcastRecipients(req, req.body);
+    if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+    const recipients = resolved.users.map(u => u.email).filter(Boolean);
 
     const year = new Date().getFullYear();
     const safeEmail  = (orgEmail  || '').replace(/</g, '&lt;');
@@ -586,6 +587,12 @@ router.post('/hr', auth, rootAdminOnly, async (req, res) => {
     if (!name || !email || !password) return res.status(400).json({ error: 'Name, email, and password are required' });
     const hashed = bcrypt.hashSync(password, 10);
     const oid = orgId(req);
+    // A branch grant may only point at a branch of THIS organisation.
+    if (branch_id) {
+      const bid = parseInt(branch_id, 10);
+      const { rows: br } = await pool.query('SELECT 1 FROM branches WHERE id = $1 AND org_id = $2', [bid, oid]);
+      if (!Number.isInteger(bid) || !br.length) return res.status(400).json({ error: 'Branch not found in your organisation' });
+    }
     const { data, error } = await db.from('users')
       .insert({ name, email: email.toLowerCase(), password: hashed, role: 'admin', department: department||'Human Resources', position: position||'HR Manager', avatar_color: avatar_color||'#3525cd', force_password_change: true, organization_id: oid })
       .select('id, name, email, role, department, position, avatar_color').single();

@@ -6,6 +6,8 @@ const { orgId } = require('../../utils/helpers');
 const { sendPushToUsers } = require('../../services/pushService');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { getFilterState } = require('../../utils/branchFilter');
+const { hasPermissionOrLegacyAdmin } = require('../../middleware/permissions');
+const { resolveBroadcastRecipients } = require('../../utils/broadcastTargeting');
 
 // ─── Push: VAPID status — let frontend know if push is server-configured ─────
 router.get('/vapid-status', auth, (req, res) => {
@@ -40,40 +42,15 @@ router.delete('/unsubscribe', auth, async (req, res) => {
 });
 
 // ─── Push: Send Notification (admin) ─────────────────────────────────────────
-router.post('/send', auth, adminOnly, withBranchContext, async (req, res) => {
+router.post('/send', auth, hasPermissionOrLegacyAdmin('notifications', 'broadcast'), withBranchContext, async (req, res) => {
   try {
     const { title, body, url, target_user_id } = req.body;
     if (!title?.trim() || !body?.trim()) return res.status(400).json({ error: 'Title and body required' });
     const oId = orgId(req);
-    let userIds;
-    if (target_user_id) {
-      const { data: u } = await db.from('users').select('id').eq('id', parseInt(target_user_id)).eq('organization_id', oId).maybeSingle();
-      if (!u) return res.status(404).json({ error: 'User not found' });
-      userIds = [u.id];
-    } else {
-      // Broadcast: respect branch context so preview count matches actual send count
-      const branchState = getFilterState(req.branchContext);
-      if (branchState.type === 'none') {
-        userIds = [];
-      } else {
-        const params = [oId];
-        let branchClause = '';
-        if (branchState.type === 'specific') {
-          params.push(branchState.branchId);
-          branchClause = `AND branch_id = $${params.length}`;
-        } else if (branchState.type === 'multi') {
-          params.push(branchState.branchIds);
-          branchClause = `AND branch_id = ANY($${params.length}::bigint[])`;
-        }
-        const { rows } = await pool.query(
-          `SELECT id FROM users WHERE organization_id = $1 AND role = 'employee'
-           AND (employee_status IS NULL OR employee_status NOT IN ('inactive','resigned','terminated'))
-           ${branchClause}`,
-          params
-        );
-        userIds = rows.map(u => u.id);
-      }
-    }
+    // Same recipient rule as the email broadcast: validated targets / branch_ids / caller scope.
+    const resolved = await resolveBroadcastRecipients(req, req.body);
+    if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
+    const userIds = resolved.users.map(u => u.id);
     if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
       return res.status(503).json({ error: 'Push notifications are not configured. Please set VAPID keys in server settings.' });
     }

@@ -1,93 +1,79 @@
 /**
  * branchContext.js
  *
- * Optional middleware that enriches req with branch context.
- * Must run AFTER auth() middleware (requires req.user).
+ * Enriches req with branch context. Must run AFTER auth() (requires req.user).
  *
- * Reads the requested branch from the X-Branch-Id request header.
- * Validates it belongs to the user's org and is within their access.
+ * Reads the requested branch from the X-Branch-Id request header and validates it
+ * belongs to the user's org and is within their access. An invalid / inaccessible
+ * branch is REJECTED (403, code BRANCH_FORBIDDEN) — it is never silently downgraded
+ * to "no selection", which for root admins would mean All Branches.
  *
  * After withBranchContext:
  *   req.branchContext = {
- *     orgId:               number,
- *     selectedBranchId:    number | null,   // null = "All Branches"
- *     isRootAdmin:         boolean,
- *     hasAllBranches:      boolean,
- *     accessibleBranchIds: number[] | null, // null = all branches in org
+ *     orgId, selectedBranchId (number|null), isRootAdmin, hasAllBranches,
+ *     accessibleBranchIds (number[]|null — null = all branches in org),
  *   }
  *
- * Usage in routes (informational — does not enforce):
- *   router.get('/employees', auth, withBranchContext, handler);
- *   // handler uses req.branchContext.selectedBranchId to filter (null = org-wide)
- *
- * Use requireValidBranch when the branch selection must be valid (not null):
- *   router.get('/endpoint', auth, requireValidBranch, handler);
+ * Idempotent: if a previous middleware already resolved the context for this request
+ * it is reused (no repeated lookups).
  */
 
 const { getUserBranchAccess, validateBranchAccess } = require('../services/branchService');
 
+function parseBranchHeader(req) {
+  const raw = req.headers['x-branch-id'];
+  if (raw === undefined || raw === null || raw === '' || raw === 'all') return { requested: null, invalid: false };
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n <= 0) return { requested: null, invalid: true };
+  return { requested: n, invalid: false };
+}
+
+const FORBIDDEN = { error: 'You do not have access to the requested branch.', code: 'BRANCH_FORBIDDEN' };
+
 async function withBranchContext(req, res, next) {
-  const orgId  = req.user?.organization_id;
-  const userId = req.user?.id;
-  const role   = req.user?.role;
+  try {
+    if (req.branchContext && req.branchContext._resolved) return next();
 
-  if (!orgId || !userId) {
+    const orgId  = req.user?.organization_id;
+    const userId = req.user?.id;
+    const role   = req.user?.role;
+
+    if (!orgId || !userId) {
+      req.branchContext = {
+        orgId: null, selectedBranchId: null, isRootAdmin: false,
+        hasAllBranches: false, accessibleBranchIds: [], _resolved: true,
+      };
+      return next();
+    }
+
+    const { requested, invalid } = parseBranchHeader(req);
+    if (invalid) return res.status(403).json(FORBIDDEN);
+
+    const access = await getUserBranchAccess(userId, orgId, role);
+
+    let selectedBranchId = null;
+    if (requested) {
+      const ok = await validateBranchAccess(userId, orgId, role, requested);
+      if (!ok) return res.status(403).json(FORBIDDEN);
+      selectedBranchId = requested;
+    }
+
     req.branchContext = {
-      orgId: null,
-      selectedBranchId: null,
-      isRootAdmin: false,
-      hasAllBranches: false,
-      accessibleBranchIds: [],
+      orgId,
+      selectedBranchId,
+      isRootAdmin: access.isRootAdmin,
+      hasAllBranches: access.hasAllBranches,
+      accessibleBranchIds: access.branchIds,
+      _resolved: true,
     };
-    return next();
+    next();
+  } catch (err) {
+    console.error('[branchContext] error:', err.message);
+    res.status(500).json({ error: 'Failed to resolve branch context' });
   }
-
-  const rawHeader = req.headers['x-branch-id'];
-  const requestedBranchId = rawHeader ? (parseInt(rawHeader, 10) || null) : null;
-
-  const access = await getUserBranchAccess(userId, orgId, role);
-
-  let selectedBranchId = null;
-
-  if (requestedBranchId) {
-    const isValid = await validateBranchAccess(userId, orgId, role, requestedBranchId);
-    selectedBranchId = isValid ? requestedBranchId : null;
-  }
-
-  req.branchContext = {
-    orgId,
-    selectedBranchId,
-    isRootAdmin: access.isRootAdmin,
-    hasAllBranches: access.hasAllBranches,
-    accessibleBranchIds: access.branchIds,
-  };
-
-  next();
 }
 
-/**
- * Strict variant: rejects with 403 if an invalid/inaccessible branch ID was provided.
- * Only use on routes where branch context must be trustworthy.
- */
-async function requireValidBranch(req, res, next) {
-  const rawHeader = req.headers['x-branch-id'];
-  const requestedBranchId = rawHeader ? (parseInt(rawHeader, 10) || null) : null;
-
-  if (!requestedBranchId) {
-    // No branch requested — acceptable (org-wide)
-    return withBranchContext(req, res, next);
-  }
-
-  const orgId  = req.user?.organization_id;
-  const userId = req.user?.id;
-  const role   = req.user?.role;
-
-  const isValid = await validateBranchAccess(userId, orgId, role, requestedBranchId);
-  if (!isValid) {
-    return res.status(403).json({ error: 'You do not have access to the requested branch.' });
-  }
-
-  return withBranchContext(req, res, next);
-}
+/** Strict variant kept for API compatibility: same behaviour as withBranchContext. */
+const requireValidBranch = withBranchContext;
 
 module.exports = { withBranchContext, requireValidBranch };

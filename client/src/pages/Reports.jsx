@@ -482,7 +482,7 @@ export default function Reports() {
 
   // ── Holidays for the selected year (for full calendar holiday detection) ───────
   const { data: _holData = [] } = useQuery({
-    queryKey: ['holidays-report', year],
+    queryKey: ['holidays-report', year, selectedBranchId],
     queryFn:  () => apiGet('/holidays', { year }),
     staleTime: 300000,
   });

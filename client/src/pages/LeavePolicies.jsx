@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { Save, RefreshCw, Info, Copy, History } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
-import { apiGet, apiPost } from '@/lib/api';
+import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
+import { ConfigGroupsManager } from '@/components/ConfigGroupsManager';
+import { BranchConfigBar } from '@/components/BranchConfigBar';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { Modal } from '@/components/ui/Modal';
 
@@ -72,8 +74,26 @@ export default function LeavePolicies() {
   // EHN_LP_001: History modal
   const [historyModal,  setHistoryModal] = useState(null); // {leave_type, label}
 
-  const { data: _lpData, isLoading } = useQuery({ queryKey: ['leave-policies', selectedBranchId], queryFn: () => apiGet('/leave-policies') });
-  const data = Array.isArray(_lpData) ? _lpData : [];
+  // Group edit mode: the page edits a configuration group's policies instead of the selected branch's.
+  const [editGroup, setEditGroup] = useState(null);
+
+  const { data: _lpData, isLoading: _lpLoading } = useQuery({ queryKey: ['leave-policies', selectedBranchId], queryFn: () => apiGet('/leave-policies'), placeholderData: keepPreviousData });
+  const { data: _grpData, isLoading: _grpLoading } = useQuery({
+    queryKey: ['leave-policies-group', editGroup?.id],
+    queryFn:  () => apiGet(`/config-groups/${editGroup.id}/config`),
+    enabled:  !!editGroup,
+  });
+  // Where the selected branch's effective policies come from: its own override, its group, or the org default.
+  const { data: effective } = useQuery({
+    queryKey: ['effective-config', 'leave_policies', selectedBranchId],
+    queryFn:  () => apiGet('/config-groups/effective', { domain: 'leave_policies', branch_id: selectedBranchId }),
+    enabled:  !!selectedBranchId && !editGroup,
+    retry:    false,
+  });
+  const isLoading = editGroup ? _grpLoading : _lpLoading;
+  const data = editGroup
+    ? (Array.isArray(_grpData?.config) ? _grpData.config : [])
+    : (Array.isArray(_lpData) ? _lpData : []);
 
   useEffect(() => {
     if (data.length) { setPolicies(data); setDirty(false); }
@@ -94,8 +114,29 @@ export default function LeavePolicies() {
   }
 
   const saveMut = useMutation({
-    mutationFn: () => apiPost('/leave-policies', { policies: normalizePolicies(policies) }),
-    onSuccess: () => { toast('Leave policies saved!', 'success'); setDirty(false); setSavedPolicies(policies); qc.invalidateQueries({ queryKey: ['leave-policies'] }); },
+    mutationFn: () => editGroup
+      ? apiPut(`/config-groups/${editGroup.id}/config`, { policies: normalizePolicies(policies) })
+      : apiPost('/leave-policies', { policies: normalizePolicies(policies) }),
+    onSuccess: (r) => {
+      toast(editGroup ? `Group “${editGroup.name}” saved — applied to ${(r?.applied || []).length} branch(es)${(r?.custom || []).length ? `; ${r.custom.length} keep a custom override` : ''}` : 'Leave policies saved!', 'success');
+      setDirty(false); setSavedPolicies(policies);
+      qc.invalidateQueries({ queryKey: ['leave-policies'] });
+      qc.invalidateQueries({ queryKey: ['leave-policies-group'] });
+      qc.invalidateQueries({ queryKey: ['effective-config'] });
+    },
+    onError: e => toast(e.message, 'error'),
+  });
+
+  // Effective-configuration state: a branch has its own override when the rows returned carry its branch_id.
+  const hasBranchOverride = effective ? effective.source === 'branch' : (!!selectedBranchId && data.length > 0 && data[0].branch_id != null && data[0].group_id == null);
+  const copyMut = useMutation({
+    mutationFn: ({ fromBranchId, toBranchIds }) => apiPost('/leave-policies/copy', { from_branch_id: fromBranchId, to_branch_ids: toBranchIds }),
+    onSuccess: () => { toast('Leave policies copied', 'success'); qc.invalidateQueries({ queryKey: ['leave-policies'] }); qc.invalidateQueries({ queryKey: ['effective-config'] }); },
+    onError: e => toast(e.message, 'error'),
+  });
+  const resetMut = useMutation({
+    mutationFn: (branchId) => apiDelete(`/leave-policies/branch/${branchId}`),
+    onSuccess: (r) => { toast(r?.inherited_from_group ? 'Branch reset — now inherits its group' : 'Branch reset to the organisation default', 'success'); qc.invalidateQueries({ queryKey: ['leave-policies'] }); qc.invalidateQueries({ queryKey: ['effective-config'] }); },
     onError: e => toast(e.message, 'error'),
   });
 
@@ -203,6 +244,26 @@ export default function LeavePolicies() {
           Changes apply to new leave requests. Existing approved leaves are not affected.
         </p>
       </div>
+
+      {editGroup && (
+        <div className="card px-4 py-3 mb-4 flex items-center gap-2.5 text-xs bg-indigo-50 border-indigo-200 text-indigo-900">
+          <Info size={14} className="flex-shrink-0" />
+          <p className="flex-1">Editing configuration group <strong>“{editGroup.name}”</strong>. Saving updates every member branch (a branch with its own custom override keeps it).</p>
+          <button className="btn btn-outline btn-sm" onClick={() => { setEditGroup(null); setDirty(false); }}>Back to branch view</button>
+        </div>
+      )}
+
+      <ConfigGroupsManager domain="leave_policies" noun="leave policy" onEditGroup={setEditGroup} editingGroupId={editGroup?.id} />
+
+      {!editGroup && <BranchConfigBar
+        subject="leave policies"
+        source={effective?.source}
+        group={effective?.group}
+        hasOverride={hasBranchOverride}
+        busy={copyMut.isPending || resetMut.isPending || dirty}
+        onCopy={(p) => copyMut.mutate(p)}
+        onReset={(id) => resetMut.mutate(id)}
+      />}
 
       {/* EHN_LP_002: Bulk action bar */}
       {bulkEdit && bulkSelected.size > 0 && (

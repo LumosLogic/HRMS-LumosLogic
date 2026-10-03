@@ -16,6 +16,7 @@ import { useToast } from '@/context/ToastContext';
 import { useFeature } from '@/context/FeatureFlagContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiPatch, apiDelete } from '@/lib/api';
+import { useEmployees } from '@/hooks/useEmployees';
 import { Modal } from '@/components/ui/Modal';
 import { Avatar } from '@/components/ui/Avatar';
 import { StatusBadge } from '@/components/ui/Badge';
@@ -645,12 +646,7 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp, onUnsavedChange }) {
     staleTime: 5 * 60 * 1000,
   });
 
-  const { data: allEmployees = [] } = useQuery({
-    queryKey: ['employees-list', selectedBranchId],
-    queryFn: () => apiGet('/employees'),
-    staleTime: 5 * 60 * 1000,
-    enabled: isAdmin,
-  });
+  const { data: allEmployees = [] } = useEmployees({ lite: true, enabled: isAdmin });
 
   const orgStructMut = useMutation({
     mutationFn: (body) => apiPut(`/profile/${empId}/professional`, body),

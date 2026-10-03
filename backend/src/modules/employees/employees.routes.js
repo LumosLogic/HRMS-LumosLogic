@@ -8,6 +8,17 @@ const { hasPermission } = require('../../middleware/permissions');
 const { orgId, getOrgContext } = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { getFilterState, canAdminAccessUser } = require('../../utils/branchFilter');
+const { validateBranchIdList, clearBranchAccessCache } = require('../../services/branchService');
+
+// Every referenced department must belong to the caller's organisation.
+async function validateDepartmentIds(ids, oId) {
+  const nums = [...new Set((ids || []).map(n => parseInt(n, 10)))];
+  if (nums.some(n => !Number.isInteger(n) || n <= 0)) return { ok: false, error: 'Invalid department id' };
+  if (!nums.length) return { ok: true };
+  const { rows } = await pool.query(
+    'SELECT id FROM departments WHERE organization_id = $1 AND id = ANY($2::bigint[])', [oId, nums]);
+  return rows.length === nums.length ? { ok: true } : { ok: false, error: 'One or more departments do not belong to your organisation' };
+}
 const { sendMail, welcomeEmployeeHtml, preOnboardingRequestHtml, credentialsEmailHtml } = require('../../services/emailService');
 const crypto = require('crypto');
 const { initOnboarding } = require('../onboarding/onboardingService');
@@ -42,16 +53,32 @@ const EMPLOYEE_ADMIN_COLS = EMPLOYEE_PUBLIC_COLS + ', aadhar_no, pan_number, uan
 // the Employees management page itself so HR can explicitly filter for them).
 const INACTIVE_STATUSES = ['inactive', 'resigned', 'terminated'];
 
+// Directory-only columns for non-admin callers (dept heads / custom roles holding
+// employees.view). No salary, statutory or personal-contact data — an extra permission
+// must never expose admin-only information.
+const EMPLOYEE_DIRECTORY_COLS = [
+  'id', 'name', 'email', 'role', 'department', 'position', 'avatar_color', 'employee_id',
+  'joining_date', 'employment_type', 'work_mode', 'employee_status', 'branch_id',
+].join(', ');
+// Lightweight payload for dropdowns / pickers (?lite=1).
+const EMPLOYEE_LITE_COLS = [
+  'id', 'name', 'email', 'role', 'department', 'position', 'avatar_color', 'employee_id',
+  'employee_status', 'branch_id', 'device_enrollment_id',
+].join(', ');
+
 router.get('/', auth, hasPermission('employees', 'view'), withBranchContext, async (req, res) => {
   try {
     // root_admin sees all non-root users (HR admins + employees); others see only employees
     const roleFilter = req.user.role === 'root_admin' ? ['admin', 'employee'] : ['employee'];
-    const cols = isAdminRole(req.user.role) ? EMPLOYEE_ADMIN_COLS : EMPLOYEE_PUBLIC_COLS;
+    const isAdminCaller = isAdminRole(req.user.role);
+    let cols = isAdminCaller ? EMPLOYEE_ADMIN_COLS : EMPLOYEE_DIRECTORY_COLS;
+    if (req.query.lite === '1' || req.query.lite === 'true') {
+      cols = isAdminCaller ? EMPLOYEE_LITE_COLS : EMPLOYEE_DIRECTORY_COLS;
+    }
 
-    // ── Branch filter (admins only; employees always see org-wide list for their own context) ──
-    const branchState = isAdminRole(req.user.role)
-      ? getFilterState(req.branchContext)
-      : { type: 'all' };
+    // ── Branch filter: applies to EVERY caller. Non-admins (dept head / custom role) are
+    // bound to their own branch by getUserBranchAccess — extra permissions never widen it.
+    const branchState = getFilterState(req.branchContext);
 
     // State D: no accessible branches → empty list
     if (branchState.type === 'none') return res.json([]);
@@ -101,10 +128,14 @@ router.get('/', auth, hasPermission('employees', 'view'), withBranchContext, asy
 });
 
 // ─── Employees: Create ────────────────────────────────────────────────────────
-router.post('/', auth, hasPermission('employees', 'create'), async (req, res) => {
+router.post('/', auth, hasPermission('employees', 'create'), withBranchContext, async (req, res) => {
   try {
     const { name, email, role, department, position, avatar_color, date_of_birth } = req.body;
     if (!name || !email) return res.status(400).json({ error: 'Name and email are required' });
+    // Only a root admin may create admin-level accounts (Manage HR Admins / Root Admins).
+    if (req.user.role !== 'root_admin' && role && role !== 'employee') {
+      return res.status(403).json({ error: 'Only root admins can create HR admin or root admin accounts' });
+    }
     // BUG_154: validate email format before uniqueness check
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()))
       return res.status(400).json({ error: 'Please enter a valid Company Email address (e.g. name@company.com).' });
@@ -135,20 +166,46 @@ router.post('/', auth, hasPermission('employees', 'create'), async (req, res) =>
 
     // Auto-assign the only active branch when none is supplied.
     // If the org has 2+ branches the caller must specify one explicitly.
-    let resolvedBranchId = branch_id || null;
-    if (!resolvedBranchId) {
-      try {
-        const sb = await pool.query(
-          `SELECT id FROM branches WHERE org_id = $1 AND is_active = TRUE`,
-          [orgId(req)]
-        );
-        if (sb.rows.length === 1) resolvedBranchId = sb.rows[0].id;
-      } catch (_) {}
+    // Branch rules (only when the org actually has branches — otherwise behaviour is unchanged):
+    //   * the branch must belong to the org AND be inside the caller's access
+    //   * none supplied → the single active branch, else the caller's selected branch,
+    //     else (HR with exactly one accessible branch) that branch; otherwise a branch is required
+    //   * a multi-branch org never gets a silently NULL-branch employee
+    let resolvedBranchId = null;
+    let activeBranchIds = [];
+    try {
+      const sb = await pool.query(
+        `SELECT id FROM branches WHERE org_id = $1 AND is_active = TRUE`, [orgId(req)]);
+      activeBranchIds = sb.rows.map(r => Number(r.id));
+    } catch (_) {}
+    if (branch_id) {
+      const v = await validateBranchIdList(req.user.id, orgId(req), req.user.role, [branch_id]);
+      if (!v.ok) return res.status(403).json({ error: v.error });
+      resolvedBranchId = v.ids[0];
+    } else if (activeBranchIds.length === 1) {
+      resolvedBranchId = activeBranchIds[0];
+    } else if (activeBranchIds.length > 1 && (role || 'employee') === 'employee') {
+      const sel = req.branchContext?.selectedBranchId;
+      const acc = req.branchContext?.accessibleBranchIds;
+      if (sel) resolvedBranchId = Number(sel);
+      else if (Array.isArray(acc) && acc.length === 1) resolvedBranchId = Number(acc[0]);
+      else return res.status(400).json({ error: 'Branch is required for this organisation.' });
+      const v = await validateBranchIdList(req.user.id, orgId(req), req.user.role, [resolvedBranchId]);
+      if (!v.ok) return res.status(403).json({ error: v.error });
     }
 
     // user INSERT + department assignments must be atomic.
     // A user with no department assignments is a valid partial state we must prevent.
     const department_ids = req.body.department_ids;
+    if (Array.isArray(department_ids) && department_ids.length > 0) {
+      const dv = await validateDepartmentIds(department_ids, orgId(req));
+      if (!dv.ok) return res.status(400).json({ error: dv.error });
+    }
+    if (designation_id) {
+      const { rows: dg } = await pool.query(
+        'SELECT 1 FROM designations WHERE id = $1 AND organization_id = $2', [parseInt(designation_id), orgId(req)]);
+      if (!dg.length) return res.status(400).json({ error: 'Designation not found in your organisation' });
+    }
 
     // Resolve the display department name from department_ids[0] so users.department
     // stays in sync with user_departments — same logic as the EDIT handler (M-12).
@@ -290,6 +347,60 @@ router.put('/:id', auth, hasPermission('employees', 'edit'), withBranchContext, 
         return res.status(403).json({ error: "You do not have access to this employee's branch." });
     }
 
+    // Target must exist in this org. Non-root callers may not modify admin-level accounts
+    // (password reset / role change on an HR or root admin would be privilege escalation)
+    // other than their own record.
+    const targetId = parseInt(req.params.id, 10);
+    const { rows: tgtRows } = await pool.query(
+      'SELECT id, role, branch_id FROM users WHERE id = $1 AND organization_id = $2', [targetId, orgId(req)]);
+    if (!tgtRows.length) return res.status(404).json({ error: 'Employee not found in this organisation' });
+    const tgt = tgtRows[0];
+    if (req.user.role !== 'root_admin' && tgt.role !== 'employee' && targetId !== req.user.id) {
+      return res.status(403).json({ error: 'Only root admins can modify HR admin or root admin accounts' });
+    }
+    if (req.user.role !== 'root_admin' && req.body.role !== undefined && req.body.role !== tgt.role) {
+      return res.status(403).json({ error: 'Only root admins can change an account role' });
+    }
+    // Branch changes are explicit: only touched when branch_id is present in the body.
+    const branchProvided = Object.prototype.hasOwnProperty.call(req.body, 'branch_id');
+    let nextBranchId;
+    if (branchProvided) {
+      if (!req.body.branch_id) {
+        const { rows: ab } = await pool.query(
+          'SELECT 1 FROM branches WHERE org_id = $1 AND is_active = TRUE LIMIT 1', [orgId(req)]);
+        if (ab.length && tgt.role === 'employee')
+          return res.status(400).json({ error: 'An employee in a branch-enabled organisation must belong to a branch.' });
+        nextBranchId = null;
+      } else if (String(req.body.branch_id) !== String(tgt.branch_id)) {
+        const v = await validateBranchIdList(req.user.id, orgId(req), req.user.role, [req.body.branch_id]);
+        if (!v.ok) return res.status(403).json({ error: v.error });
+        nextBranchId = v.ids[0];
+      } else {
+        nextBranchId = Number(tgt.branch_id);
+      }
+    }
+    if (Array.isArray(req.body.department_ids) && req.body.department_ids.length > 0) {
+      const dv = await validateDepartmentIds(req.body.department_ids, orgId(req));
+      if (!dv.ok) return res.status(400).json({ error: dv.error });
+    }
+    if (req.body.designation_id) {
+      const { rows: dg } = await pool.query(
+        'SELECT 1 FROM designations WHERE id = $1 AND organization_id = $2', [parseInt(req.body.designation_id), orgId(req)]);
+      if (!dg.length) return res.status(400).json({ error: 'Designation not found in your organisation' });
+    }
+    // A biometric PIN already mapped to someone outside the caller's branch scope cannot be
+    // taken over through an employee edit (ingestion stays branch-neutral; this is management).
+    if (req.body.device_enrollment_id) {
+      const pin = String(req.body.device_enrollment_id).trim();
+      const { rows: mapRows } = await pool.query(
+        'SELECT user_id FROM biometric_employee_map WHERE org_id = $1 AND employee_pin = $2', [orgId(req), pin]);
+      const owner = mapRows[0]?.user_id;
+      if (owner && Number(owner) !== targetId && req.user.role !== 'root_admin') {
+        if (!await canAdminAccessUser(req.branchContext, owner, orgId(req)))
+          return res.status(403).json({ error: 'This biometric PIN is mapped to an employee outside your branch access.' });
+      }
+    }
+
     const {
       name, email, role, department, position, avatar_color, password, date_of_birth, department_ids,
       phone, personal_email, joining_date, employment_type, work_mode, employee_status, ctc, salary_effective_date,
@@ -327,7 +438,6 @@ router.put('/:id', auth, hasPermission('employees', 'edit'), withBranchContext, 
       salary_effective_date: salary_effective_date || null,
       // new HRMS columns
       device_enrollment_id: device_enrollment_id || null,
-      branch_id:            branch_id            || null,
       grade:                grade                || null,
       division:             division             || null,
       sub_division:         sub_division         || null,
@@ -350,6 +460,9 @@ router.put('/:id', auth, hasPermission('employees', 'edit'), withBranchContext, 
       weight:               weight               || null,
     };
     if (password) update.password = bcrypt.hashSync(password, 10);
+    // branch_id is only written when explicitly supplied (validated above) — a partial
+    // update must never erase the employee's branch.
+    if (branchProvided) update.branch_id = nextBranchId;
     // Probation fields — only update if explicitly provided in the request body
     if (probation_applicable !== undefined) update.probation_applicable = probation_applicable;
     if (probation_months     !== undefined) update.probation_months     = parseInt(probation_months) || 0;
@@ -395,11 +508,11 @@ router.put('/:id', auth, hasPermission('employees', 'edit'), withBranchContext, 
     }
 
     // Auto-derive Work Location from branch when branch_id is being set and no explicit location provided.
-    if (branch_id && !location) {
+    if (branchProvided && nextBranchId && !location) {
       try {
         const { rows: brRows } = await pool.query(
           `SELECT location FROM branches WHERE id = $1 AND org_id = $2 LIMIT 1`,
-          [parseInt(branch_id), orgId(req)]
+          [nextBranchId, orgId(req)]
         );
         if (brRows[0]?.location) update.location = brRows[0].location;
       } catch { /* non-fatal — location stays null */ }
@@ -527,6 +640,8 @@ router.put('/:id', auth, hasPermission('employees', 'edit'), withBranchContext, 
       markRoleChanged(empId);
       clearUserCache(String(empId), orgId(req));
     }
+    // The employee's own branch is part of their access model — drop any cached resolution.
+    if (branchProvided) clearBranchAccessCache(empId, orgId(req));
 
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -534,8 +649,13 @@ router.put('/:id', auth, hasPermission('employees', 'edit'), withBranchContext, 
 
 // ─── Employees: Update Statutory Fields ──────────────────────────────────────
 // PUT /api/employees/:id/statutory — admin only, accepts PF/ESI/OT statutory fields
-router.put('/:id/statutory', auth, hasPermission('employees', 'edit'), async (req, res) => {
+router.put('/:id/statutory', auth, hasPermission('employees', 'edit'), withBranchContext, async (req, res) => {
   try {
+    // Same org + branch authorization as the employee edit (PAN / Aadhaar / UAN are sensitive).
+    if (req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, parseInt(req.params.id, 10), orgId(req)))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
     const {
       pf_applicable, pf_no, esi_applicable, esi_no,
       ot_applicable, ot_rate,
@@ -578,7 +698,10 @@ router.delete('/:id', auth, hasPermission('employees', 'delete'), withBranchCont
         return res.status(403).json({ error: "You do not have access to this employee's branch." });
     }
     // Org-scoped pre-fetch prevents reading PII from another org's employee for the audit log
-    const { data: emp } = await db.from('users').select('name, email').eq('id', req.params.id).eq('organization_id', orgId(req)).maybeSingle();
+    const { data: emp } = await db.from('users').select('name, email, role').eq('id', req.params.id).eq('organization_id', orgId(req)).maybeSingle();
+    if (!emp) return res.status(404).json({ error: 'Employee not found in this organisation' });
+    if (req.user.role !== 'root_admin' && emp.role !== 'employee')
+      return res.status(403).json({ error: 'Only root admins can delete HR admin or root admin accounts' });
     await db.from('users').delete().eq('id', req.params.id).eq('organization_id', orgId(req));
     // Log member removed event
     if (emp) {
@@ -591,8 +714,15 @@ router.delete('/:id', auth, hasPermission('employees', 'delete'), withBranchCont
 });
 
 // ─── POST /employees/:id/avatar — admin uploads profile photo for any employee ─
-router.post('/:id/avatar', auth, isAdminRole, upload.single('file'), async (req, res) => {
+// NOTE: isAdminRole(role) is a boolean helper, not middleware — using it as one never called
+// next() and the request hung. Admin check + org/branch authorization are explicit here.
+router.post('/:id/avatar', auth, withBranchContext, upload.single('file'), async (req, res) => {
   try {
+    if (!isAdminRole(req.user.role)) return res.status(403).json({ error: 'Admin access required' });
+    if (req.user.role !== 'root_admin') {
+      if (!await canAdminAccessUser(req.branchContext, parseInt(req.params.id, 10), orgId(req)))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
     if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
     const result = await new Promise((resolve, reject) => {
       cloudinary.uploader.upload_stream(
@@ -660,6 +790,9 @@ router.post('/:id/send-credentials', auth, withBranchContext, async (req, res) =
       .maybeSingle();
 
     if (!emp)        return res.status(404).json({ error: 'Employee not found in your organization' });
+    // Resetting an admin account's password would be an account takeover for non-root callers.
+    if (req.user.role !== 'root_admin' && emp.role !== 'employee')
+      return res.status(403).json({ error: 'Only root admins can send credentials to admin accounts' });
     if (!emp.email)  return res.status(400).json({ error: 'Employee has no email address on record' });
     if (emp.status === 'inactive') return res.status(400).json({ error: 'Cannot send credentials to a deactivated account' });
 

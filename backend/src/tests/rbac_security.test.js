@@ -893,10 +893,29 @@ function announcementOrgScope(userRole, userOrgId) {
       assert.ok(src.includes('apiDelete(`/branches/user-access/${userId}/branch/${branch.id}`)'),
         'Must revoke via the existing endpoint');
     }],
-    ['Only eligible admins are listed (role = admin, root_admin excluded)', () => {
-      const src = readFile('../../../client/src/pages/BranchSelect.jsx');
-      assert.ok(src.includes("filter(u => u.role === 'admin')"),
-        'Eligible HR list must be restricted to role=admin');
+    ['Only eligible admins are listed (role = admin, root_admin excluded) — enforced SERVER-side', () => {
+      // The eligible-HR list moved from a client-side filter to a dedicated server endpoint
+      // (GET /branches/hr-admins). The security property is therefore asserted where it is enforced.
+      const api = readFile('../modules/branches/branches.routes.js');
+      const m = api.match(/router\.get\('\/hr-admins'[\s\S]*?\n\}\);/);
+      assert.ok(m, 'GET /branches/hr-admins must exist');
+      const route = m[0];
+      assert.ok(/rootAdminOnly/.test(route), 'only a Root Admin may list eligible HR admins');
+      assert.ok(/role\s*=\s*'admin'/.test(route), "list must be restricted to role = 'admin' (root_admin and employees excluded)");
+      assert.ok(/organization_id\s*=\s*\$1/.test(route) && /req\.user\.organization_id/.test(route), 'list must be scoped to the caller\'s organisation');
+      assert.ok(/NOT IN \('inactive', 'resigned', 'terminated'\)/.test(route), 'inactive / resigned / terminated users must not be listed');
+      assert.ok(!/password|totp|token/i.test(route.replace(/\/\/.*$/gm, '')), 'must not expose credentials');
+      // The UI must use that endpoint rather than deriving the list from the (branch-filtered) employee list.
+      const ui = readFile('../../../client/src/pages/BranchSelect.jsx');
+      assert.ok(ui.includes("apiGet('/branches/hr-admins')"), 'Manage HR Admins must load eligible admins from the server endpoint');
+      assert.ok(!/apiGet\('\/employees'/.test(ui), 'must not derive eligible admins from the employee list');
+    }],
+    ['Granting branch access to a root_admin is refused server-side (they already have org-wide access)', () => {
+      const api = readFile('../modules/branches/branches.routes.js');
+      const grant = api.slice(api.indexOf("router.post('/user-access'"), api.indexOf("router.delete('/user-access/:userId/branch/:branchId'"));
+      assert.ok(/rootAdminOnly/.test(grant), 'grants are Root Admin only');
+      assert.ok(/role === 'root_admin'/.test(grant) && /Root admins always have org-wide access/.test(grant), 'root_admin target must be rejected');
+      assert.ok(/organization_id = \$2/.test(grant), 'target user must be looked up inside the caller\'s organisation');
     }],
     ['HR admin count + names come from the existing GET /branches payload', () => {
       const src = readFile('../../../client/src/pages/BranchSelect.jsx');

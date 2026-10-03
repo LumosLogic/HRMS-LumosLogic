@@ -5,6 +5,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiDelete } from '@/lib/api';
+import { useEmployees } from '@/hooks/useEmployees';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { Avatar } from '@/components/ui/Avatar';
@@ -109,10 +110,7 @@ export default function BiometricPinMapping() {
     queryKey: ['biometric-map', selectedBranchId],
     queryFn:  () => apiGet('/biometric/employee-map'),
   });
-  const { data: _emps } = useQuery({
-    queryKey: ['employees', 'all', selectedBranchId],
-    queryFn:  () => apiGet('/employees'),
-  });
+  const { data: _emps } = useEmployees();
 
   const mappings  = Array.isArray(_map)  ? _map  : [];
   const employees = Array.isArray(_emps) ? _emps : [];

@@ -1,11 +1,12 @@
 const express = require('express');
 const router  = express.Router();
+const { sameId } = require('../../utils/ids');
 const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { initOffboarding } = require('../offboarding/offboardingService');
 const { withBranchContext } = require('../../middleware/branchContext');
-const { resolveEmployeeIds, getAdminsForEmployee } = require('../../utils/branchFilter');
+const { resolveEmployeeIds, getAdminsForEmployee, canAdminAccessUser } = require('../../utils/branchFilter');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
@@ -52,7 +53,7 @@ router.get('/', auth, withBranchContext, async (req, res) => {
 // POST /api/exit
 // Employees submit their own resignation; admins can submit on behalf of any employee
 // within the SAME organization only.
-router.post('/', auth, async (req, res) => {
+router.post('/', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { resignation_date, reason, notice_period_days, user_id } = req.body;
@@ -67,6 +68,8 @@ router.post('/', auth, async (req, res) => {
       const { data: targetUser } = await db.from('users')
         .select('id, name').eq('id', parseInt(user_id)).eq('organization_id', oId).maybeSingle();
       if (!targetUser) return res.status(400).json({ error: 'Employee not found in your organization.' });
+      if (!sameId(targetUser.id, req.user.id) && !await canAdminAccessUser(req.branchContext, targetUser.id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
       targetUserId = targetUser.id;
       targetName   = targetUser.name;
     }
@@ -124,23 +127,31 @@ router.post('/', auth, async (req, res) => {
 });
 
 // GET /api/exit/:id — fetch a single exit request (for modal detail view)
-router.get('/:id', auth, async (req, res) => {
+router.get('/:id', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { data, error } = await db.from('exit_requests')
       .select('*').eq('id', req.params.id).eq('organization_id', oId).single();
     if (error) return res.status(404).json({ error: 'Exit request not found' });
-    if (!isAdmin(req.user.role) && data.user_id !== req.user.id)
+    if (!isAdmin(req.user.role) && !sameId(data.user_id, req.user.id))
       return res.status(403).json({ error: 'Access denied' });
+    if (isAdmin(req.user.role) && !sameId(data.user_id, req.user.id) && !await canAdminAccessUser(req.branchContext, data.user_id, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // PUT /api/exit/:id
-router.put('/:id', auth, hasPermission('exit', 'manage'), async (req, res) => {
+router.put('/:id', auth, hasPermission('exit', 'manage'), withBranchContext, async (req, res) => {
   try {
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = req.user.organization_id;
+    {
+      const { data: tgt } = await db.from('exit_requests').select('user_id').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
+      if (!tgt) return res.status(404).json({ error: 'Exit request not found' });
+      if (!sameId(tgt.user_id, req.user.id) && !await canAdminAccessUser(req.branchContext, tgt.user_id, oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    }
     // Explicit field whitelist — prevents mass assignment of user_id, reviewed_by, reviewed_at, etc.
     const { resignation_date, reason, notice_period_days, last_working_day, notes, status,
             clearance_it, clearance_hr, clearance_finance, clearance_admin,
@@ -278,7 +289,7 @@ router.put('/:id', auth, hasPermission('exit', 'manage'), async (req, res) => {
 });
 
 // DELETE /api/exit/:id — employee can withdraw their own pending resignation; admin can delete any pending.
-router.delete('/:id', auth, async (req, res) => {
+router.delete('/:id', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { data: req_ } = await db.from('exit_requests')
@@ -286,8 +297,10 @@ router.delete('/:id', auth, async (req, res) => {
     if (!req_) return res.status(404).json({ error: 'Exit request not found' });
 
     // Only the employee who submitted it (or an admin) can withdraw
-    if (!isAdmin(req.user.role) && req_.user_id !== req.user.id)
+    if (!isAdmin(req.user.role) && !sameId(req_.user_id, req.user.id))
       return res.status(403).json({ error: 'Access denied' });
+    if (isAdmin(req.user.role) && !sameId(req_.user_id, req.user.id) && !await canAdminAccessUser(req.branchContext, req_.user_id, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
 
     // Only pending resignations can be withdrawn — approved exits require HR action
     if (req_.status !== 'pending')

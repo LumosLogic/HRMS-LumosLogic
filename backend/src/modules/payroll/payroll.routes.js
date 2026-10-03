@@ -1,12 +1,13 @@
 const express    = require('express');
 const router     = express.Router();
+const { sameId } = require('../../utils/ids');
 const { db, pool } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission, hasAnyPermission } = require('../../middleware/permissions');
 const { orgId } = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { getFilterState, getBranchUserSQLFilter, resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
-const { validateBranchAccess } = require('../../services/branchService');
+const { validateBranchAccess, getUserBranchAccess } = require('../../services/branchService');
 const { calculatePayroll, PayrollError } = require('../../services/payrollEngine');
 const {
   generatePayrollRun,
@@ -62,6 +63,18 @@ function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
  *   'multi'    → null                     (covers multiple branches — stored as org-wide)
  *   'none'     → should never reach here; callers block 'none' before calling this
  */
+/**
+ * In a branch-enabled org every payroll run is a BRANCH run. An organisation-wide ("All Branches")
+ * run would duplicate employees already covered by branch runs, so it is only allowed while the
+ * org has no active branch (branches feature off / not set up — existing behaviour).
+ * Returns an error string, or null when the run may proceed.
+ */
+async function orgWideRunBlocked(branchState, oId) {
+  if (branchState.type !== 'all') return null;
+  const { rows } = await pool.query('SELECT 1 FROM branches WHERE org_id = $1 AND is_active = TRUE LIMIT 1', [oId]);
+  return rows.length ? 'Select a branch to run payroll. Payroll is processed per branch in a branch-enabled organisation.' : null;
+}
+
 function resolveBranchId(branchState) {
   if (branchState.type === 'specific') return branchState.branchId;
   return null;
@@ -90,7 +103,13 @@ function reportBranchIds(branchState) {
  */
 async function assertRunBranchAccess(req, res, run) {
   if (run.branch_id == null) {
-    // Historical / org-wide run — any org admin may access (existing behaviour preserved).
+    // Org-wide run: it covers every branch's employees, so only all-branch callers may act on it.
+    // (Restricted HR could previously verify/approve/lock/pay a run containing other branches.)
+    const access = await getUserBranchAccess(req.user.id, req.user.organization_id, req.user.role);
+    if (!access.hasAllBranches) {
+      res.status(403).json({ error: 'This payroll run covers the whole organisation and needs all-branch access.' });
+      return true;
+    }
     return false;
   }
   const ok = await validateBranchAccess(
@@ -1209,6 +1228,13 @@ router.post('/preview', auth, hasPermission('payroll', 'generate'), withBranchCo
     if (branchState.type === 'none') {
       return res.status(403).json({ error: 'You do not have access to any branch.' });
     }
+    if (branchState.type === 'multi') {
+      return res.status(400).json({ error: 'Select a branch to preview payroll.' });
+    }
+    {
+      const blocked = await orgWideRunBlocked(branchState, oId);
+      if (blocked) return res.status(400).json({ error: blocked });
+    }
 
     let employeeIds = null;
     if (branchState.type !== 'all') {
@@ -1247,6 +1273,13 @@ router.post('/generate', auth, hasPermission('payroll', 'generate'), withBranchC
     const branchState = getFilterState(req.branchContext);
     if (branchState.type === 'none') {
       return res.status(403).json({ error: 'You do not have access to any branch. Payroll generation requires branch access.' });
+    }
+    if (branchState.type === 'multi') {
+      return res.status(400).json({ error: 'Select a branch to generate payroll. A restricted admin cannot create an organisation-wide run.' });
+    }
+    {
+      const blocked = await orgWideRunBlocked(branchState, oId);
+      if (blocked) return res.status(400).json({ error: blocked });
     }
 
     // Resolve to an employee ID array (null = org-wide)
@@ -1456,7 +1489,7 @@ router.get('/payslips/:id/details', auth, hasPermission('payroll', 'view'), asyn
     const slip = rows[0];
     // Non-admin employees may only view their own payslips (unchanged behavior)
     if (!isAdmin(req.user.role)) {
-      if (slip.user_id !== req.user.id) return res.status(403).json({ error: 'Access denied' });
+      if (!sameId(slip.user_id, req.user.id)) return res.status(403).json({ error: 'Access denied' });
     } else if (slip.user_branch_id != null) {
       // NR-1 FIX: Admin/HR must have branch access to view this employee's payslip
       const ok = await validateBranchAccess(req.user.id, oId, req.user.role, slip.user_branch_id);
@@ -1530,10 +1563,23 @@ router.get('/payslips/:id/pdf', auth, async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // POST /api/payroll/scheduler/trigger — manually trigger payroll for a period
-router.post('/scheduler/trigger', auth, hasPermission('payroll', 'generate'), async (req, res) => {
+router.post('/scheduler/trigger', auth, hasPermission('payroll', 'generate'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const { month, year, force } = req.body;
+    // Branch-enabled org: the trigger runs ONE branch (caller needs access to it) or, without branch_id,
+    // every branch (all-branch callers only). Branch-OFF org: unchanged org-wide trigger (all-branch callers).
+    let triggerBranchId = null;
+    if (req.body.branch_id != null && req.body.branch_id !== '') {
+      triggerBranchId = parseInt(req.body.branch_id, 10);
+      if (!await validateBranchAccess(req.user.id, oId, req.user.role, triggerBranchId))
+        return res.status(403).json({ error: 'You do not have access to this branch.' });
+    } else {
+      const st = getFilterState(req.branchContext);
+      if (st.type === 'specific') triggerBranchId = Number(st.branchId);   // the caller's selected branch
+      else if (!req.branchContext?.hasAllBranches)
+        return res.status(403).json({ error: 'Running payroll for every branch needs all-branch access. Select a branch.' });
+    }
     if (!month || !year) return res.status(400).json({ error: 'month and year are required' });
     const result = await triggerManual({
       organizationId: oId,
@@ -1542,6 +1588,7 @@ router.post('/scheduler/trigger', auth, hasPermission('payroll', 'generate'), as
       force:          Boolean(force),
       actorId:        req.user.id,
       actorName:      req.user.name,
+      branchId:       triggerBranchId,
     });
     res.status(201).json(result);
   } catch (err) {
@@ -1553,31 +1600,44 @@ router.post('/scheduler/trigger', auth, hasPermission('payroll', 'generate'), as
 });
 
 // GET /api/payroll/scheduler/runs — list scheduler run history for this org
-router.get('/scheduler/runs', auth, hasPermission('payroll', 'view'), async (req, res) => {
+router.get('/scheduler/runs', auth, hasPermission('payroll', 'view'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
+    const st = getFilterState(req.branchContext);
+    if (st.type === 'none') return res.json([]);
     const { rows } = await pool.query(
-      `SELECT psr.*, pr.status AS run_status, pr.employee_count, pr.total_net
+      `SELECT psr.*, pr.status AS run_status, pr.employee_count, pr.total_net, pr.branch_id AS run_branch_id
          FROM payroll_scheduler_runs psr
          LEFT JOIN payroll_runs pr ON pr.id = psr.payroll_run_id
         WHERE psr.organization_id = $1
         ORDER BY psr.created_at DESC
-        LIMIT 100`,
+        LIMIT 300`,
       [oId]
     );
-    res.json(rows);
+    // Org-wide (NULL-branch) scheduler runs are visible to all-branch callers only.
+    const visible = rows.filter(r => r.run_branch_id == null
+      ? !!req.branchContext?.hasAllBranches
+      : (st.type === 'all' || (st.type === 'specific' ? Number(r.run_branch_id) === Number(st.branchId)
+                                                       : st.branchIds.map(Number).includes(Number(r.run_branch_id)))));
+    res.json(visible.slice(0, 100));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // GET /api/payroll/scheduler/email-log — email log for a payroll run
-router.get('/scheduler/email-log', auth, hasPermission('payroll', 'view'), async (req, res) => {
+router.get('/scheduler/email-log', auth, hasPermission('payroll', 'view'), withBranchContext, async (req, res) => {
   try {
     const oId   = orgId(req);
     const runId = parseInt(req.query.runId || '0', 10);
-    const where = runId
+    const st = getFilterState(req.branchContext);
+    if (st.type === 'none') return res.json([]);
+    const where0 = runId
       ? 'pel.organization_id = $1 AND pel.payroll_run_id = $2'
       : 'pel.organization_id = $1';
     const params = runId ? [oId, runId] : [oId];
+    // Email log rows follow the recipient employee's branch.
+    const bf = getBranchUserSQLFilter(st, params.length, 'u');
+    params.push(...bf.params);
+    const where = where0 + ' ' + bf.clause;
     const { rows } = await pool.query(
       `SELECT pel.*, u.name, u.employee_id
          FROM payroll_email_log pel
@@ -1611,7 +1671,7 @@ router.get('/payslips/:id', auth, async (req, res) => {
     const slip = rows[0];
     // Non-admin employees may only view their own payslips (unchanged behavior)
     if (!isAdmin(req.user.role)) {
-      if (slip.user_id !== req.user.id) return res.status(403).json({ error: 'Access denied' });
+      if (!sameId(slip.user_id, req.user.id)) return res.status(403).json({ error: 'Access denied' });
     } else if (slip.user_branch_id != null) {
       // NR-1 FIX: Admin/HR must have branch access to view this employee's payslip
       const ok = await validateBranchAccess(req.user.id, oId, req.user.role, slip.user_branch_id);
@@ -1833,7 +1893,7 @@ router.get('/overrides', auth, hasPermission('payroll', 'manage_overrides'), asy
 });
 
 // POST /api/payroll/overrides
-router.post('/overrides', auth, hasPermission('payroll', 'manage_overrides'), async (req, res) => {
+router.post('/overrides', auth, hasPermission('payroll', 'manage_overrides'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const { payroll_run_id, user_id, original_values, override_values, reason } = req.body;
@@ -1848,6 +1908,14 @@ router.post('/overrides', auth, hasPermission('payroll', 'manage_overrides'), as
     );
     if (!runCheck.length) return res.status(404).json({ error: 'Payroll run not found' });
     if (await assertRunBranchAccess(req, res, runCheck[0])) return;
+    if (!await canAdminAccessUser(req.branchContext, parseInt(user_id, 10), oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
+    {
+      const { rows: inRun } = await pool.query(
+        'SELECT 1 FROM payslips WHERE payroll_run_id = $1 AND user_id = $2 AND organization_id = $3 LIMIT 1',
+        [Number(payroll_run_id), parseInt(user_id, 10), oId]);
+      if (!inRun.length) return res.status(400).json({ error: 'This employee is not part of the selected payroll run.' });
+    }
 
     const ov = await createOverride({
       organizationId: oId,

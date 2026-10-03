@@ -31,7 +31,7 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       .not('employee_status', 'in', ['inactive', 'resigned', 'terminated']);
 
     // Apply branch filter for admin views (employee self-view not applicable for dashboard)
-    if (isAdminRole(req.user.role)) {
+    {
       if (branchState.type === 'none') {
         // No accessible branches — return zero-KPI dashboard
         return res.json({

@@ -37,13 +37,22 @@ async function getSettings(orgId) {
     const { data } = await q.single();
     if (data) return data;
   } catch { }
-  try {
-    const { data: fallback } = await db.from('work_schedule').select('*').limit(1).single();
-    return fallback || null;
-  } catch { return null; }
+  // No schedule row for THIS org: use neutral defaults. Never fall back to another
+  // organisation's schedule (cross-tenant leak).
+  return {
+    start_time: '09:00', end_time: '18:00', late_threshold: '09:30', early_exit_threshold: '17:00',
+    half_day_hours: 4.5, full_day_hours: 8, work_days: '1,2,3,4,5', max_early_leave_count: 3,
+    late_entry_threshold_enabled: true, early_exit_threshold_enabled: true,
+  };
 }
 
-function orgId(req) { return req.user?.organization_id || 1; }
+// The organisation always comes from the authenticated JWT. There is deliberately no
+// default organisation: a request without one must fail, not silently act on org 1.
+function orgId(req) {
+  const id = req.user?.organization_id;
+  if (id === undefined || id === null || id === '') throw new Error('Missing organisation context');
+  return id;
+}
 
 function toMinutes(t) {
   const [h, m] = (t || '00:00').split(':').map(Number);
@@ -172,4 +181,19 @@ async function getEffectiveWorkSchedule(orgId, branchId) {
   return getSettings(orgId);
 }
 
-module.exports = { localDateStr, localTimeStr, flat, flatOne, getSettings, getEffectiveWorkSchedule, getSettingsForUser, orgId, toMinutes, isWorkingDay, getRecipients, generateUniqueSlug, getOrgContext };
+// Branch of one employee (null when none / branches not in use).
+async function getUserBranchId(oId, userId) {
+  try {
+    const { data } = await db.from('users').select('branch_id')
+      .eq('id', userId).eq('organization_id', oId).maybeSingle();
+    return data?.branch_id != null ? Number(data.branch_id) : null;
+  } catch { return null; }
+}
+
+// A holiday row applies to an employee when it is organisation-wide (branch_id NULL) or
+// belongs to the employee's own branch.
+function holidayAppliesToBranch(holiday, branchId) {
+  return holiday.branch_id == null || (branchId != null && Number(holiday.branch_id) === Number(branchId));
+}
+
+module.exports = { getUserBranchId, holidayAppliesToBranch, localDateStr, localTimeStr, flat, flatOne, getSettings, getEffectiveWorkSchedule, getSettingsForUser, orgId, toMinutes, isWorkingDay, getRecipients, generateUniqueSlug, getOrgContext };

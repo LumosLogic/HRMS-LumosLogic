@@ -89,4 +89,53 @@ function hasAnyPermission(permissionList) {
   };
 }
 
-module.exports = { hasPermission, hasAnyPermission };
+// ─── Permission with legacy-admin compatibility ──────────────────────────────
+// Some modules (biometric) historically gated on adminOnly, and the seeded hr_admin role
+// does not hold every action those routes need. Switching straight to hasPermission() would
+// lock HR admins out until a grant migration runs. This wrapper enforces the permission, but
+// while the org's hr_admin role has NOT been provisioned with it (migration not applied) an
+// HR admin keeps their previous access. Custom-role users and employees are never widened.
+const _provisioned = new Map(); // `${orgId}:${module}.${action}` → { value, exp }
+async function hrRoleHasPermission(orgId, module, action) {
+  const key = `${orgId}:${module}.${action}`;
+  const hit = _provisioned.get(key);
+  if (hit && hit.exp > Date.now()) return hit.value;
+  let value = false;
+  try {
+    const { pool } = require('../config/db');
+    const { rows } = await pool.query(
+      `SELECT 1
+         FROM roles r
+         JOIN role_permissions rp ON rp.role_id = r.id
+         JOIN permissions p ON p.id = rp.permission_id
+        WHERE r.org_id = $1 AND r.slug = 'hr_admin' AND r.is_system_role = true
+          AND p.module_key = $2 AND p.action = $3
+        LIMIT 1`, [orgId, module, action]);
+    value = rows.length > 0;
+  } catch { value = false; }
+  _provisioned.set(key, { value, exp: Date.now() + 60 * 1000 });
+  return value;
+}
+
+function hasPermissionOrLegacyAdmin(module, action) {
+  return async function gate(req, res, next) {
+    if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
+    if (req.user.role === 'root_admin') return next();
+    try {
+      const permissions = await resolvePermissions(req.user.id, req.user.organization_id);
+      if (hasPermissionCheck(permissions, module, action)) return next();
+      if (req.user.role === 'admin' && !(await hrRoleHasPermission(req.user.organization_id, module, action))) {
+        return next(); // legacy behaviour until the hr_admin grant is provisioned
+      }
+      return res.status(403).json({
+        error: "You don't have permission to perform this action",
+        required_permission: `${module}.${action}`,
+      });
+    } catch (err) {
+      console.error('[permissions] hasPermissionOrLegacyAdmin error:', err.message);
+      return res.status(500).json({ error: 'Permission check failed' });
+    }
+  };
+}
+
+module.exports = { hasPermission, hasAnyPermission, hasPermissionOrLegacyAdmin };

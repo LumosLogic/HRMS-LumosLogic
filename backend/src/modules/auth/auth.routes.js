@@ -1,5 +1,6 @@
 const express   = require('express');
 const router    = express.Router();
+const { sameId } = require('../../utils/ids');
 const bcrypt    = require('bcryptjs');
 const jwt       = require('jsonwebtoken');
 const crypto    = require('crypto');
@@ -79,11 +80,20 @@ router.post('/login', rateLimiter(LIMITS.LOGIN), async (req, res) => {
       return res.json({ requires2FA: true, totp_session: totpSession });
     }
 
+    // Tenant isolation: the token's organisation is the user's OWN organisation. There is no default tenant —
+    // a user not linked to an organisation cannot sign in (it used to be silently placed in organisation 1).
+    if (user.organization_id === null || user.organization_id === undefined) {
+      return res.status(403).json({
+        error: 'Your account is not linked to an organisation. Please contact your administrator.',
+        code: 'NO_ORGANIZATION',
+      });
+    }
+
     // BUG_217: clear role-change flag before issuing token so stale session is gone
     clearRoleChanged(user.id);
     const org = user.organizations || {};
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role, name: user.name, organization_id: user.organization_id || 1, organization_slug: org.slug || 'lumoslogic' },
+      { id: user.id, email: user.email, role: user.role, name: user.name, organization_id: user.organization_id, organization_slug: org.slug || '' },
       JWT_SECRET, { expiresIn: '7d' }
     );
     res.json({
@@ -95,9 +105,9 @@ router.post('/login', rateLimiter(LIMITS.LOGIN), async (req, res) => {
         employee_id: user.employee_id || null, totp_enabled: user.totp_enabled || false,
         last_login_at: user.last_login_at || null,
         force_password_change: user.force_password_change || false,
-        organization_id: user.organization_id || 1,
-        organization_name: org.name || 'LumosLogic',
-        organization_slug: org.slug || 'lumoslogic',
+        organization_id: user.organization_id,
+        organization_name: org.name || '',
+        organization_slug: org.slug || '',
         organization_logo: org.logo_url || '',
       }
     });
@@ -144,7 +154,7 @@ router.put('/profile', auth, async (req, res) => {
     if (email) {
       const norm = email.toLowerCase().trim();
       const { data: dup } = await db.from('users').select('id').eq('email', norm).maybeSingle();
-      if (dup && dup.id !== req.user.id) return res.status(400).json({ error: 'Email already in use by another account' });
+      if (dup && !sameId(dup.id, req.user.id)) return res.status(400).json({ error: 'Email already in use by another account' });
       update.email = norm;
     }
     // SELECT without avatar_url so it works even before the migration column is added.
@@ -247,7 +257,9 @@ router.post('/forgot-password', rateLimiter(LIMITS.FORGOT_PASSWORD), async (req,
     const orgName  = user.organizations?.name || '';
     const orgEmail = user.email; // reset email context; HR contact fetched async below
     // Fetch HR email for footer (fire-and-forget style — use orgEmail as fallback)
-    const { orgEmail: hrEmail } = await require('../../utils/helpers').getOrgContext(user.organization_id || 1).catch(() => ({ orgEmail: '' }));
+    const { orgEmail: hrEmail } = user.organization_id != null
+      ? await require('../../utils/helpers').getOrgContext(user.organization_id).catch(() => ({ orgEmail: '' }))
+      : { orgEmail: '' };
 
     sendMail({
       to:      user.email,
@@ -428,11 +440,18 @@ router.post('/totp/verify-login', rateLimiter(LIMITS.TOTP_VERIFY), async (req, r
     if (!authenticator.check(totpToken, user.totp_secret))
       return res.status(400).json({ error: 'Invalid authenticator code' });
 
+    if (user.organization_id === null || user.organization_id === undefined) {
+      return res.status(403).json({
+        error: 'Your account is not linked to an organisation. Please contact your administrator.',
+        code: 'NO_ORGANIZATION',
+      });
+    }
+
     // BUG_217: clear role-change flag before issuing token (TOTP path)
     clearRoleChanged(user.id);
     const org = user.organizations || {};
     const token = jwt.sign(
-      { id: user.id, email: user.email, role: user.role, name: user.name, organization_id: user.organization_id || 1, organization_slug: org.slug || 'lumoslogic' },
+      { id: user.id, email: user.email, role: user.role, name: user.name, organization_id: user.organization_id, organization_slug: org.slug || '' },
       JWT_SECRET, { expiresIn: '7d' }
     );
     res.json({
@@ -443,9 +462,9 @@ router.post('/totp/verify-login', rateLimiter(LIMITS.TOTP_VERIFY), async (req, r
         avatar_url: user.avatar_url || '', email_verified: user.email_verified || false,
         employee_id: user.employee_id || null, totp_enabled: true,
         force_password_change: user.force_password_change || false,
-        organization_id: user.organization_id || 1,
-        organization_name: org.name || 'LumosLogic',
-        organization_slug: org.slug || 'lumoslogic',
+        organization_id: user.organization_id,
+        organization_name: org.name || '',
+        organization_slug: org.slug || '',
         organization_logo: org.logo_url || '',
       }
     });
