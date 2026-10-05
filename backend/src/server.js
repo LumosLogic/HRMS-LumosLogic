@@ -17,6 +17,7 @@ const { mobileLoginGuard } = require('./modules/mobile/mobile.login');
 const { ensureMobileSchema } = require('./modules/mobile/mobile.schema');
 const { rateLimiter, LIMITS } = require('./middleware/rateLimiter');
 const { setStaticHeaders } = require('./utils/staticHeaders');
+const { compression, compressionOptions } = require('./utils/compression');
 const { maintenanceMiddleware } = require('./middleware/maintenanceMode');
 const { biometricSnGuard, biometricAuditLog } = require('./middleware/biometricSecurity');
 const { scheduleDailyAt, scheduleEveryMinutes, runDailyNotifications, runAutoMarkAbsent, runProbationExpiryCheck, runResignationExpiry, runScheduledAnnouncementPublisher, runEarlyLeaveAutoCheckout } = require('./utils/cronJobs');
@@ -106,6 +107,9 @@ app.use('/iclock/cdata', (req, res, next) => {
   req.on('error', next);
 });
 app.use('/iclock/', express.text({ type: '*/*' }));
+// gzip for JS / CSS / JSON / SVG (utils/compression.js). Production traffic reaches this app through a Traefik instance shared
+// with other apps, so compression lives here (scoped to this app) instead of in the shared proxy.
+app.use(compression(compressionOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
 app.use(express.static(path.join(__dirname, '../../public'), { setHeaders: setStaticHeaders }));
