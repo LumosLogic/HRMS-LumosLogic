@@ -193,6 +193,7 @@ app.use('/api/notifications',  notificationsRouter);
 app.use('/api/reports',        reportsRouter);
 app.use('/api/documents',      documentsRouter);
 app.use('/api/doc-requirements', docRequirementsRouter);
+app.use('/api/bgv',            require('./modules/bgv/bgv.routes')); // additive; feature `bgv` is strict opt-in
 app.use('/api/payroll',        payrollRouter);
 app.use('/api/assets',         assetsRouter);
 app.use('/api/expenses',       expensesRouter);

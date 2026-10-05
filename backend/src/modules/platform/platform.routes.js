@@ -17,6 +17,10 @@ const ALL_FEATURE_KEYS = [
   'biometric','branches','statutory',
 ];
 
+// Opt-in features: NOT in ALL_FEATURE_KEYS on purpose, so plan presets (incl. Platinum) and new-org
+// seeding never touch them. Missing row = OFF; only an explicit Platform Admin toggle enables them.
+const OPT_IN_FEATURE_KEYS = ['bgv'];
+
 // Features that are off by default; only enabled when plan explicitly includes them
 const BIOMETRIC_FEATURES = ['biometric', 'branches', 'statutory'];
 
@@ -169,6 +173,7 @@ router.get('/organizations/:id/features', platformAdminAuth, async (req, res) =>
         flags[key] = true;
       }
     }
+    for (const key of OPT_IN_FEATURE_KEYS) flags[key] = map[key] === true;
     res.json(flags);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -179,7 +184,7 @@ router.put('/organizations/:id/features', platformAdminAuth, async (req, res) =>
     const orgId = parseInt(req.params.id);
     const updates = req.body; // { payroll: true, expenses: false, ... }
     const upserts = Object.entries(updates)
-      .filter(([key]) => ALL_FEATURE_KEYS.includes(key))
+      .filter(([key]) => ALL_FEATURE_KEYS.includes(key) || OPT_IN_FEATURE_KEYS.includes(key))
       .map(([feature_key, enabled]) => ({
         organization_id: orgId,
         feature_key,

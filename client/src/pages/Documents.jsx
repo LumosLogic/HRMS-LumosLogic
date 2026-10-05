@@ -15,6 +15,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
+import { useFeature } from '@/context/FeatureFlagContext';
 import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
 import { useBranchesList, useDocumentsList } from '@/hooks/useReferenceData';
 import { useEmployees } from '@/hooks/useEmployees';
@@ -1712,8 +1713,66 @@ function ReviewModal({ submission, onClose, onReviewed }) {
 }
 
 // ── Admin: Verification Queue Tab ────────────────────────────────────────────
+// ── BGV (SpringVerify) — additive, only rendered when feature `bgv` is ON ─────────
+const BGV_BADGE = {
+  pending:     { label: 'BGV Pending',     cls: 'bg-amber-50 text-amber-700 border-amber-200' },
+  in_progress: { label: 'BGV In Progress', cls: 'bg-blue-50 text-blue-700 border-blue-200' },
+  completed:   { label: 'BGV Completed',   cls: 'bg-emerald-50 text-emerald-700 border-emerald-200' },
+  failed:      { label: 'BGV Failed',      cls: 'bg-rose-50 text-rose-700 border-rose-200' },
+  cancelled:   { label: 'BGV Cancelled',   cls: 'bg-slate-50 text-slate-600 border-slate-200' },
+};
+
+function BgvCell({ sub, latest }) {
+  const toast = useToast();
+  const qc = useQueryClient();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const active = latest && (latest.status === 'pending' || latest.status === 'in_progress');
+  const badge = latest && BGV_BADGE[latest.status];
+
+  const run = useMutation({
+    mutationFn: () => apiPost('/bgv/requests', { employee_id: sub.user_id, submission_id: sub.id }),
+    onSuccess: () => { toast('BGV request submitted', 'success'); qc.invalidateQueries({ queryKey: ['bgv-requests'] }); },
+    onError: (e) => { toast(e?.message || 'Could not start BGV', 'error'); qc.invalidateQueries({ queryKey: ['bgv-requests'] }); },
+  });
+  const openReport = async () => {
+    try {
+      const r = await apiGet(`/bgv/requests/${latest.id}/report`);
+      if (r.pdf_base64) {
+        const bytes = Uint8Array.from(atob(r.pdf_base64), ch => ch.charCodeAt(0));
+        const blobUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' }));
+        window.open(blobUrl, '_blank', 'noopener,noreferrer');
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+      } else if (r.url) {
+        window.open(r.url, '_blank', 'noopener,noreferrer');
+      }
+    } catch (e) { toast(e?.message || 'Report not available', 'error'); }
+  };
+
+  return (
+    <div className="flex flex-col gap-1.5 items-start">
+      {badge && (
+        <span className={`inline-flex px-2 py-0.5 rounded-full text-[0.65rem] font-bold border ${badge.cls}`}
+              title={latest.status === 'failed' ? (latest.error_message || '') : undefined}>{badge.label}</span>
+      )}
+      {latest?.status === 'completed' && latest.has_report && (
+        <button onClick={openReport} className="text-[0.65rem] font-bold text-[#3525cd] hover:underline">View report</button>
+      )}
+      {!active && (
+        <button onClick={() => setConfirmOpen(true)} disabled={run.isPending}
+          className="px-2.5 py-1 rounded-lg text-[0.65rem] font-bold border border-[#3525cd] text-[#3525cd] hover:bg-[#f0f3ff] disabled:opacity-50">
+          {latest?.status === 'failed' || latest?.status === 'cancelled' ? 'Retry BGV' : 'Run BGV'}
+        </button>
+      )}
+      <ConfirmModal open={confirmOpen} variant="warning" title="Run BGV?" confirmLabel="Continue"
+        message="BGV verification may incur a charge. Do you want to continue?"
+        onConfirm={() => run.mutate()} onCancel={() => setConfirmOpen(false)} />
+    </div>
+  );
+}
+
 function VerificationQueueTab() {
   const { isRootAdmin } = useAuth();
+  const bgvOn = useFeature('bgv');
   const [reviewSub,    setReviewSub]    = useState(null);
   const [statusFilter, setStatusFilter] = useState('all');
   const [search,       setSearch]       = useState('');
@@ -1726,6 +1785,20 @@ function VerificationQueueTab() {
     meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/doc-requirements/verification-queue'),
   });
+
+  // BGV statuses — fetched only when the org has the bgv feature enabled (list is newest-first).
+  const { data: bgvList = [] } = useQuery({
+    queryKey: ['bgv-requests', _bk2],
+    meta: BRANCH_KEYED,
+    enabled: bgvOn,
+    queryFn: () => apiGet('/bgv/requests'),
+    refetchInterval: 60000,
+  });
+  const bgvLatestByEmp = useMemo(() => {
+    const m = new Map();
+    for (const r of bgvList) if (!m.has(String(r.employee_id))) m.set(String(r.employee_id), r);
+    return m;
+  }, [bgvList]);
 
   const STATUS_TABS = [
     { key: 'all',                 label: 'All',               count: allSubs.length },
@@ -1873,6 +1946,9 @@ function VerificationQueueTab() {
                         : <span>—</span>}
                     </td>
                     <td className="px-4 py-3.5">
+                      {bgvOn && (
+                        <div className="mb-2"><BgvCell sub={sub} latest={bgvLatestByEmp.get(String(sub.user_id))} /></div>
+                      )}
                       {sub.status === 're_upload_requested' ? (
                         <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200 cursor-default">
                           <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse flex-shrink-0" />

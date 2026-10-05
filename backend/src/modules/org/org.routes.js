@@ -237,6 +237,7 @@ router.get('/features', auth, async (req, res) => {
     for (const key of BIOMETRIC_FEATURE_KEYS) {
       if (!(key in flags)) flags[key] = plan === 'platinum';
     }
+    flags.bgv = flags.bgv === true; // opt-in feature: missing row = OFF (never plan-derived)
     res.json(flags);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

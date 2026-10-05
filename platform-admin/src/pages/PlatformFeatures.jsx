@@ -4,7 +4,7 @@ import {
   Zap, Building2, DollarSign, Receipt, Monitor, BarChart3,
   Target, FolderOpen, UserCheck, LogOut, Megaphone, ClipboardList,
   Shield, Clock, Timer, Bell, Calendar, ChevronDown, CheckCircle2,
-  XCircle, Layers, Fingerprint, GitBranch, ScrollText,
+  XCircle, Layers, Fingerprint, GitBranch, ScrollText, ShieldCheck,
 } from 'lucide-react';
 import { paGet, paPut } from '@/lib/platformApi';
 
@@ -33,7 +33,11 @@ const FEATURES = [
   { key: 'biometric', label: 'Biometric',  desc: 'ZKTeco device integration, punch logs, and biometric attendance', category: 'Biometric', Icon: Fingerprint },
   { key: 'branches',  label: 'Branches',   desc: 'Multi-branch organization structure and branch-level reporting',   category: 'Biometric', Icon: GitBranch },
   { key: 'statutory', label: 'Statutory',  desc: 'Statutory compliance fields — PF, ESI, UAN, PAN for employees',   category: 'Biometric', Icon: ScrollText },
+  // Opt-in: never part of a plan or bulk toggle; Platform Admin must enable per organization.
+  { key: 'bgv', label: 'Background Verification (BGV)', desc: 'SpringVerify background checks run manually by HR from the Documents verification queue (paid per request)', category: 'Integration', Icon: ShieldCheck, optIn: true },
 ];
+const isOn = (f, flags) => (f.optIn ? flags[f.key] === true : flags[f.key] !== false);
+
 
 const CATEGORY_ORDER = ['HR', 'Finance', 'People', 'Integration', 'System', 'Biometric'];
 const CATEGORY_COLORS = {
@@ -141,20 +145,20 @@ export default function PlatformFeatures() {
 
   function enableAll() {
     const all = {};
-    FEATURES.forEach(f => { all[f.key] = true; });
+    FEATURES.filter(f => !f.optIn).forEach(f => { all[f.key] = true; });
     setLocalFlags(prev => ({ ...prev, ...all }));
     saveMut.mutate({ orgId: selectedOrgId, updates: all });
   }
 
   function disableAll() {
     const all = {};
-    FEATURES.forEach(f => { all[f.key] = false; });
+    FEATURES.filter(f => !f.optIn).forEach(f => { all[f.key] = false; });
     setLocalFlags(prev => ({ ...prev, ...all }));
     saveMut.mutate({ orgId: selectedOrgId, updates: all });
   }
 
   const selectedOrg = orgs.find(o => String(o.id) === String(selectedOrgId));
-  const activeCount  = FEATURES.filter(f => localFlags[f.key] !== false).length;
+  const activeCount  = FEATURES.filter(f => isOn(f, localFlags)).length;
   const totalCount   = FEATURES.length;
 
   const categories  = ['All', ...CATEGORY_ORDER];
@@ -251,7 +255,7 @@ export default function PlatformFeatures() {
                 {cat}
                 {cat !== 'All' && (
                   <span className="ml-1.5 opacity-70">
-                    ({FEATURES.filter(f => f.category === cat && localFlags[f.key] !== false).length}/{FEATURES.filter(f => f.category === cat).length})
+                    ({FEATURES.filter(f => f.category === cat && isOn(f, localFlags)).length}/{FEATURES.filter(f => f.category === cat).length})
                   </span>
                 )}
               </button>
@@ -269,7 +273,7 @@ export default function PlatformFeatures() {
                 <FeatureCard
                   key={feature.key}
                   feature={feature}
-                  enabled={localFlags[feature.key] !== false}
+                  enabled={isOn(feature, localFlags)}
                   onChange={val => handleToggle(feature.key, val)}
                   saving={savingKey === feature.key}
                 />

@@ -7,7 +7,7 @@ import {
   Crown, Zap, Megaphone, DollarSign, Receipt, Monitor, BarChart3,
   Target, FolderOpen, UserCheck, LogOut, Shield, Timer, Bell,
   Layers, Activity, UserPlus, UserMinus, Fingerprint, GitBranch, ScrollText,
-  Pencil, X, Save, Smartphone,
+  Pencil, X, Save, Smartphone, ShieldCheck,
 } from 'lucide-react';
 import MobileAppTab from './MobileAppTab';
 import { paGet, paPut, paPatch } from '@/lib/platformApi';
@@ -82,7 +82,11 @@ const FEATURES = [
   { key: 'biometric',          label: 'Biometric',           category: 'Biometric',   Icon: Fingerprint },
   { key: 'branches',           label: 'Branches',            category: 'Biometric',   Icon: GitBranch },
   { key: 'statutory',          label: 'Statutory',           category: 'Biometric',   Icon: ScrollText },
+  // Opt-in: never part of a plan or bulk toggle; Platform Admin must enable per organization.
+  { key: 'bgv',                label: 'Background Verification (BGV)', category: 'Integration', Icon: ShieldCheck, optIn: true },
 ];
+const isOn = (f, flags) => (f.optIn ? flags[f.key] === true : flags[f.key] !== false);
+
 
 const CAT_COLORS = {
   HR:          { bg: 'bg-[#f0f3ff]', text: 'text-[#3525cd]', border: 'border-[#c7c4d8]' },
@@ -124,7 +128,7 @@ const PLANS = [
     bg: 'bg-[#f0f3ff]',
     border: 'border-[#c7c4d8]',
     activeBorder: 'border-[#3525cd]',
-    activeFeatures: FEATURES.map(f => f.key),
+    activeFeatures: FEATURES.filter(f => !f.optIn).map(f => f.key),
     description: 'Complete platform access with all integrations',
     badge: '👑',
   },
@@ -196,7 +200,7 @@ export default function PlatformOrgDetail() {
 
   function bulkFeatures(all) {
     const updates = {};
-    FEATURES.forEach(f => { updates[f.key] = all; });
+    FEATURES.filter(f => !f.optIn).forEach(f => { updates[f.key] = all; });
     setLocalFlags(prev => ({ ...prev, ...updates }));
     saveMut.mutate({ updates });
   }
@@ -242,7 +246,7 @@ export default function PlatformOrgDetail() {
     finally { setPlanSaving(false); }
   }
 
-  const activeCount = FEATURES.filter(f => localFlags[f.key] !== false).length;
+  const activeCount = FEATURES.filter(f => isOn(f, localFlags)).length;
   const currentPlan = (org?.plan || 'free').toLowerCase();
 
   const TABS = [
@@ -484,7 +488,7 @@ export default function PlatformOrgDetail() {
           ) : (
             <div className="grid sm:grid-cols-2 gap-3">
               {FEATURES.map(f => {
-                const enabled = localFlags[f.key] !== false;
+                const enabled = isOn(f, localFlags);
                 const cat = CAT_COLORS[f.category] || CAT_COLORS.HR;
                 return (
                   <div key={f.key} className={`bg-white rounded-xl border p-4 flex items-center gap-3 transition-all ${enabled ? 'border-[#c7c4d8]' : 'border-dashed border-[#c7c4d8] opacity-70'}`}>
