@@ -408,6 +408,11 @@ export default function MyAttendance() {
         map[ds] = { ...heldRow, status: 'holiday' };
         continue;
       }
+      // Declared holiday with no attendance row at all: show it as a Holiday row instead of leaving the day blank.
+      if (holidaysSet.has(ds) && !heldRow) {
+        map[ds] = { date: ds, status: 'holiday', check_in: null, check_out: null, work_hours: 0, gross_hours: 0, _synthetic: true };
+        continue;
+      }
 
       const d = new Date(ds + 'T12:00:00');
       const dow = d.getDay();
