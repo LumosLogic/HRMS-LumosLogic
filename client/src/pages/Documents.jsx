@@ -1722,7 +1722,7 @@ const BGV_BADGE = {
   cancelled:   { label: 'BGV Cancelled',   cls: 'bg-slate-50 text-slate-600 border-slate-200' },
 };
 
-function BgvCell({ sub, latest }) {
+function BgvCell({ employeeId, latest }) {
   const toast = useToast();
   const qc = useQueryClient();
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -1731,7 +1731,7 @@ function BgvCell({ sub, latest }) {
 
   const run = useMutation({
     // BGV is per employee (covers all their documents), not per document.
-    mutationFn: () => apiPost('/bgv/requests', { employee_id: sub.user_id }),
+    mutationFn: () => apiPost('/bgv/requests', { employee_id: employeeId }),
     onSuccess: () => { toast('BGV request submitted', 'success'); qc.invalidateQueries({ queryKey: ['bgv-requests'] }); },
     onError: (e) => { toast(e?.message || 'Could not start BGV', 'error'); qc.invalidateQueries({ queryKey: ['bgv-requests'] }); },
   });
@@ -1767,6 +1767,52 @@ function BgvCell({ sub, latest }) {
       <ConfirmModal open={confirmOpen} variant="warning" title="Run BGV for this employee?" confirmLabel="Continue"
         message="BGV verification may incur a charge. Do you want to continue?"
         onConfirm={() => run.mutate()} onCancel={() => setConfirmOpen(false)} />
+    </div>
+  );
+}
+
+// One row per EMPLOYEE (not per document): BGV verifies the whole person, so there is a single action/status each.
+function BgvPanel({ subs, latestByEmp, search }) {
+  const [open, setOpen] = useState(true);
+  const employees = useMemo(() => {
+    const m = new Map();
+    for (const s of subs) {
+      const k = String(s.user_id);
+      if (!m.has(k)) m.set(k, { id: s.user_id, employee: s.employee, docs: 0, approved: 0 });
+      const e = m.get(k); e.docs += 1; if (s.status === 'approved') e.approved += 1;
+    }
+    const q = search.trim().toLowerCase();
+    return [...m.values()]
+      .filter(e => !q || e.employee?.name?.toLowerCase().includes(q))
+      .sort((a, b) => (a.employee?.name || '').localeCompare(b.employee?.name || ''));
+  }, [subs, search]);
+
+  if (employees.length === 0) return null;
+  return (
+    <div className="bg-white rounded-xl border border-[#c7c4d8] mb-5 overflow-hidden">
+      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between px-5 py-3 text-left">
+        <div>
+          <p className="text-sm font-black text-[#151c27]">Background Verification (BGV)</p>
+          <p className="text-[0.7rem] text-[#777587]">One check per employee — covers all of their documents. May incur a charge.</p>
+        </div>
+        <ChevronDown size={16} className={`text-[#777587] transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="divide-y divide-[#f0f3ff] border-t border-[#f0f3ff] max-h-80 overflow-y-auto">
+          {employees.map(e => (
+            <div key={e.id} className="flex items-center justify-between gap-4 px-5 py-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <Avatar name={e.employee?.name} color={e.employee?.avatar_color} size={28} />
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-[#151c27] truncate">{e.employee?.name}</p>
+                  <p className="text-[0.65rem] text-[#9ca3af]">{e.docs} document{e.docs === 1 ? '' : 's'} · {e.approved} approved</p>
+                </div>
+              </div>
+              <BgvCell employeeId={e.id} latest={latestByEmp.get(String(e.id))} />
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
@@ -1838,13 +1884,6 @@ function VerificationQueueTab() {
     return list;
   }, [allSubs, statusFilter, search, sortCol, sortDir]);
 
-  // One BGV control per employee (it verifies all of their documents): show it on their first visible row only.
-  const bgvFirstRowIds = useMemo(() => {
-    const seen = new Set(); const ids = new Set();
-    for (const s of filtered) { const k = String(s.user_id); if (!seen.has(k)) { seen.add(k); ids.add(s.id); } }
-    return ids;
-  }, [filtered]);
-
   const toggleSort = (col) => {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setSortCol(col); setSortDir('asc'); }
@@ -1872,6 +1911,8 @@ function VerificationQueueTab() {
             value={search} onChange={e => setSearch(e.target.value)} />
         </div>
       </div>
+
+      {bgvOn && !isLoading && <BgvPanel subs={allSubs} latestByEmp={bgvLatestByEmp} search={search} />}
 
       {/* Status filter tabs — overflow-x-auto for tablet/mobile */}
       <div className="overflow-x-auto scrollbar-hide mb-4 border-b border-[#c7c4d8]">
@@ -1954,12 +1995,6 @@ function VerificationQueueTab() {
                         : <span>—</span>}
                     </td>
                     <td className="px-4 py-3.5">
-                      {bgvOn && bgvFirstRowIds.has(sub.id) && (
-                        <div className="mb-2">
-                          <p className="text-[0.6rem] font-black text-[#777587] uppercase tracking-wide mb-1">Background check · all documents</p>
-                          <BgvCell sub={sub} latest={bgvLatestByEmp.get(String(sub.user_id))} />
-                        </div>
-                      )}
                       {sub.status === 're_upload_requested' ? (
                         <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200 cursor-default">
                           <span className="w-1.5 h-1.5 rounded-full bg-amber-500 animate-pulse flex-shrink-0" />
