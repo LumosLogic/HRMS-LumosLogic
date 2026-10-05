@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Shield, Mail, Building2, AlertTriangle, UserMinus, Eye, EyeOff, KeyRound, Check, Lock } from 'lucide-react';
+import { Shield, Mail, Building2, AlertTriangle, UserMinus, Eye, EyeOff, KeyRound, Check, Lock, X } from 'lucide-react';
 import { apiGet, apiDelete, apiPut } from '@/lib/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
@@ -69,6 +69,20 @@ function ChangePasswordModal({ open, onClose, target }) {
   );
 }
 
+function getStrength(pw) {
+  let score = 0;
+  if (pw.length >= 8)          score++;
+  if (/[A-Z]/.test(pw))        score++;
+  if (/[a-z]/.test(pw))        score++;
+  if (/[0-9]/.test(pw))        score++;
+  if (/[^A-Za-z0-9]/.test(pw)) score++;
+  return score;
+}
+
+const STRENGTH_LABELS = ['', 'Very Weak', 'Weak', 'Fair', 'Strong', 'Very Strong'];
+const STRENGTH_COLORS = ['', '#ef4444', '#f97316', '#eab308', '#22c55e', '#16a34a'];
+const STRENGTH_BG     = ['', 'bg-red-500', 'bg-orange-500', 'bg-yellow-400', 'bg-emerald-500', 'bg-emerald-600'];
+
 function ChangeSelfPasswordModal({ open, onClose }) {
   const toast = useToast();
   const [curPw,   setCurPw]   = useState('');
@@ -80,6 +94,19 @@ function ChangeSelfPasswordModal({ open, onClose }) {
 
   React.useEffect(() => { if (open) { setCurPw(''); setNewPw(''); setConfPw(''); setShowCur(false); setShowNew(false); setShowConf(false); } }, [open]);
 
+  const reqs = [
+    { label: 'Minimum 8 characters',        met: newPw.length >= 8 },
+    { label: 'At least 1 uppercase letter',  met: /[A-Z]/.test(newPw) },
+    { label: 'At least 1 lowercase letter',  met: /[a-z]/.test(newPw) },
+    { label: 'At least 1 number',            met: /[0-9]/.test(newPw) },
+    { label: 'At least 1 special character', met: /[^A-Za-z0-9]/.test(newPw) },
+  ];
+
+  const strength   = getStrength(newPw);
+  const allReqsMet = reqs.every(r => r.met);
+  const pwsMatch   = !!(newPw && confPw && newPw === confPw);
+  const canSubmit  = !!(curPw && allReqsMet && pwsMatch);
+
   const save = useMutation({
     mutationFn: () => apiPut('/auth/change-password', { currentPassword: curPw, newPassword: newPw }),
     onSuccess: () => {
@@ -88,10 +115,6 @@ function ChangeSelfPasswordModal({ open, onClose }) {
     },
     onError: (e) => toast(e.message, 'error'),
   });
-
-  const passwordValid = newPw.length >= 8;
-  const passwordsMatch = newPw && confPw && newPw === confPw;
-  const canSubmit = curPw && passwordValid && passwordsMatch;
 
   return (
     <Modal open={open} onClose={onClose} title="Change Your Password"
@@ -116,7 +139,7 @@ function ChangeSelfPasswordModal({ open, onClose }) {
           <label className="form-label">Current Password</label>
           <div className="relative">
             <input className="form-control pr-10" type={showCur ? 'text' : 'password'} value={curPw}
-              onChange={e => setCurPw(e.target.value)} placeholder="••••••••" autoFocus />
+              onChange={e => setCurPw(e.target.value)} placeholder="Enter your current password" autoFocus />
             <button type="button" onClick={() => setShowCur(s => !s)}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-[#777587] hover:text-[#151c27]">
               {showCur ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -128,29 +151,59 @@ function ChangeSelfPasswordModal({ open, onClose }) {
           <label className="form-label">New Password</label>
           <div className="relative">
             <input className="form-control pr-10" type={showNew ? 'text' : 'password'} value={newPw}
-              onChange={e => setNewPw(e.target.value)} placeholder="Min. 8 characters" />
+              onChange={e => setNewPw(e.target.value)} placeholder="Create a strong password" />
             <button type="button" onClick={() => setShowNew(s => !s)}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-[#777587] hover:text-[#151c27]">
               {showNew ? <EyeOff size={16} /> : <Eye size={16} />}
             </button>
           </div>
+
+          {newPw && (
+            <div className="mt-2 space-y-1">
+              <div className="flex gap-1">
+                {[1, 2, 3, 4, 5].map(i => (
+                  <div key={i}
+                    className={`h-1.5 flex-1 rounded-full transition-all duration-300 ${i <= strength ? STRENGTH_BG[strength] : 'bg-[#e7eefe]'}`}
+                  />
+                ))}
+              </div>
+              <p className="text-[0.72rem] font-bold" style={{ color: STRENGTH_COLORS[strength] }}>
+                {STRENGTH_LABELS[strength]}
+              </p>
+            </div>
+          )}
+
+          {newPw && (
+            <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1">
+              {reqs.map(r => (
+                <span key={r.label}
+                  className={`flex items-center gap-1 text-[0.68rem] font-medium transition-colors ${r.met ? 'text-emerald-600' : 'text-[#777587]'}`}>
+                  {r.met
+                    ? <Check size={10} className="flex-shrink-0" />
+                    : <X    size={10} className="flex-shrink-0" />}
+                  {r.label}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
 
         <div>
           <label className="form-label">Confirm New Password</label>
           <div className="relative">
             <input className="form-control pr-10" type={showConf ? 'text' : 'password'} value={confPw}
-              onChange={e => setConfPw(e.target.value)} placeholder="Repeat new password" />
+              onChange={e => setConfPw(e.target.value)} placeholder="Repeat your new password" />
             <button type="button" onClick={() => setShowConf(s => !s)}
               className="absolute right-3 top-1/2 -translate-y-1/2 text-[#777587] hover:text-[#151c27]">
               {showConf ? <EyeOff size={16} /> : <Eye size={16} />}
             </button>
           </div>
-          {newPw && confPw && !passwordsMatch && (
-            <p className="text-xs text-rose-600 mt-1">Passwords do not match</p>
-          )}
-          {newPw && confPw && passwordsMatch && (
-            <p className="text-xs text-emerald-600 mt-1">Passwords match</p>
+          {confPw && (
+            <p className={`text-xs mt-1 flex items-center gap-1 ${pwsMatch ? 'text-emerald-600' : 'text-rose-500'}`}>
+              {pwsMatch
+                ? <><Check size={11} /> Passwords match</>
+                : <><X    size={11} /> Passwords do not match</>}
+            </p>
           )}
         </div>
       </div>
