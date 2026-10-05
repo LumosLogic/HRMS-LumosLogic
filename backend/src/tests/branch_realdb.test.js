@@ -933,12 +933,12 @@ async function devicePunch(sn, pin, when) {
         const rows = (await call('GET', '/api/leaves' + qs, who)).body;
         const c = await call('GET', '/api/leaves/counts' + qs, who);
         assert.strictEqual(c.status, 200, JSON.stringify(c.body));
-        assert.deepStrictEqual(c.body, fromRows(rows), JSON.stringify(who) + ' ' + qs);
+        assert.deepStrictEqual({ pending: c.body.pending, wfh_pending: c.body.wfh_pending }, fromRows(rows), JSON.stringify(who) + ' ' + qs);
       }
     }
     assert.ok((await call('GET', '/api/leaves/counts', { as: ID.root })).body.wfh_pending >= 1, 'wfh pending is counted separately');
     const one = await call('GET', `/api/leaves/counts?userId=${ID.empD}`, { as: ID.hrD, branch: ID.dalal });
-    assert.deepStrictEqual(one.body, fromRows((await call('GET', `/api/leaves?userId=${ID.empD}`, { as: ID.hrD, branch: ID.dalal })).body));
+    assert.deepStrictEqual({ pending: one.body.pending, wfh_pending: one.body.wfh_pending }, fromRows((await call('GET', `/api/leaves?userId=${ID.empD}`, { as: ID.hrD, branch: ID.dalal })).body));
     assert.strictEqual((await call('GET', `/api/leaves/counts?userId=${ID.empB}`, { as: ID.hrD, branch: ID.dalal })).status, 403, 'other branch employee refused');
     assert.strictEqual((await call('GET', '/api/leaves/counts', { as: ID.hrD, branch: ID.bhuj })).status, 403, 'foreign branch header refused');
     const f = (await call('GET', '/api/leaves/counts', { as: ID.froot })).body;
@@ -966,6 +966,172 @@ async function devicePunch(sn, pin, when) {
     const oldPend = (await call('GET', '/api/leaves', { as: ID.root })).body.filter(l => PEND.includes(l.status));
     assert.deepStrictEqual(idsOf([...sum.leaves, ...sum.my_approvals.filter(m => oldPend.some(o => Number(o.id) === Number(m.id)))]), idsOf(oldPend), 'every pending leave is present exactly once (in leaves or my_approvals)');
   });
+
+  // ════════════════════════════════════════════════════════════════════════════════════════
+  console.log('\nLEAVES PAGINATION + SUMMARY COUNTS (Phase 5) on real SQL');
+  const P5 = 'p5bulk';
+  async function p5Seed() {
+    await resetAccess();
+    // Dalal: 60 leaves, Bhuj: 20 leaves. status / type / wfh / dates cycle so every filter has rows to bite on.
+    const ins = (uid, n, off) => S(
+      `INSERT INTO leaves (user_id, organization_id, start_date, end_date, leave_type, leave_time, status, reason)
+       SELECT $1, $2, ('2027-02-01'::date + (g + $4)), ('2027-02-01'::date + (g + $4)),
+              (ARRAY['casual','sick','annual','wfh'])[1 + (g % 4)],
+              CASE WHEN g % 4 = 3 THEN 'wfh' ELSE 'full' END,
+              (ARRAY['pending','approved','rejected','pending_dept','cancelled'])[1 + (g % 5)], $3
+         FROM generate_series(1, $5) g`, [uid, ID.orgA, P5, off, n]);
+    await ins(ID.empD, 60, 0); await ins(ID.empB, 20, 100);
+  }
+  await p5Seed();
+  const tot = (r) => Number(r.headers.get('x-total'));
+  const dalalAll = Number((await one(`SELECT COUNT(*) c FROM leaves l JOIN users u ON u.id=l.user_id WHERE l.organization_id=$1 AND u.branch_id=$2`, [ID.orgA, ID.dalal])).c);
+  const orgAll = Number((await one(`SELECT COUNT(*) c FROM leaves WHERE organization_id=$1`, [ID.orgA])).c);
+
+  await t('pagination metadata: X-Total / X-Total-Pages / X-Page / X-Limit / X-Has-More are right on first, middle, last and past-the-end pages', async () => {
+    const who = { as: ID.root };
+    const p1 = await call('GET', '/api/leaves?view=list&limit=25&page=1', who);
+    assert.strictEqual(p1.status, 200); assert.strictEqual(p1.body.length, 25);
+    assert.strictEqual(tot(p1), orgAll, 'X-Total is the whole filtered set, not the page');
+    assert.strictEqual(Number(p1.headers.get('x-total-pages')), Math.ceil(orgAll / 25));
+    assert.strictEqual(p1.headers.get('x-page'), '1'); assert.strictEqual(p1.headers.get('x-limit'), '25'); assert.strictEqual(p1.headers.get('x-has-more'), '1');
+    const lastPage = Math.ceil(orgAll / 25);
+    const last = await call('GET', `/api/leaves?view=list&limit=25&page=${lastPage}`, who);
+    assert.strictEqual(last.body.length, orgAll - 25 * (lastPage - 1)); assert.strictEqual(last.headers.get('x-has-more'), '0');
+    const past = await call('GET', `/api/leaves?view=list&limit=25&page=${lastPage + 3}`, who);
+    assert.deepStrictEqual(past.body, []); assert.strictEqual(tot(past), orgAll, 'total still reported past the end (client clamps to the last page)');
+  });
+  await t('pages are a stable partition: no row twice, none missed, equal to the un-paged list', async () => {
+    const who = { as: ID.root };
+    const all = idsOf((await call('GET', '/api/leaves?view=list', who)).body);
+    const seen = [];
+    for (let pg = 1; pg <= Math.ceil(orgAll / 20); pg++) seen.push(...(await call('GET', `/api/leaves?view=list&limit=20&page=${pg}`, who)).body.map(r => Number(r.id)));
+    assert.strictEqual(new Set(seen).size, seen.length, 'no duplicates across pages');
+    assert.deepStrictEqual([...seen].sort((a, b) => a - b), all);
+  });
+  await t('no limit → unchanged contract: plain array, no paging headers (every other screen keeps working)', async () => {
+    const r = await call('GET', '/api/leaves?view=list', { as: ID.root });
+    assert.ok(Array.isArray(r.body)); assert.strictEqual(r.headers.get('x-total'), null);
+    assert.strictEqual(r.body.length, orgAll);
+  });
+  await t('filtered total: status / type / kind / date range / employee each narrow BOTH the page and the total identically', async () => {
+    const who = { as: ID.root };
+    const cases = {
+      'status=approved': (l) => l.status === 'approved',
+      'status=pending,pending_dept': (l) => ['pending', 'pending_dept'].includes(l.status),
+      'type=sick': (l) => l.leave_type === 'sick',
+      'kind=wfh': (l) => l.leave_time === 'wfh' || l.leave_type === 'wfh',
+      'kind=leave': (l) => l.leave_time !== 'wfh' && l.leave_type !== 'wfh',
+      'from=2027-02-10&to=2027-02-20': (l) => l.end_date >= '2027-02-10' && l.start_date <= '2027-02-20',
+      [`userId=${ID.empB}`]: (l) => Number(l.user_id) === ID.empB,
+      [`kind=leave&type=casual&status=approved&userId=${ID.empD}`]: (l) => l.leave_type === 'casual' && l.status === 'approved' && Number(l.user_id) === ID.empD && l.leave_time !== 'wfh',
+    };
+    const everything = (await call('GET', '/api/leaves', who)).body.map(l => ({ ...l, start_date: String(l.start_date).slice(0, 10), end_date: String(l.end_date).slice(0, 10) }));
+    for (const [qs, pred] of Object.entries(cases)) {
+      const expected = everything.filter(pred).length;
+      const r = await call('GET', `/api/leaves?view=list&limit=7&page=1&${qs}`, who);
+      assert.strictEqual(r.status, 200, qs + ' ' + JSON.stringify(r.body));
+      assert.strictEqual(tot(r), expected, 'X-Total for ' + qs);
+      assert.strictEqual(r.body.length, Math.min(7, expected), 'page size for ' + qs);
+    }
+  });
+  await t('summary counts describe the WHOLE filtered set (not the page) and equal the list totals', async () => {
+    for (const who of [{ as: ID.root }, { as: ID.hrD, branch: ID.dalal }, { as: ID.hrB, branch: ID.bhuj }, { as: ID.hrAll }, { as: ID.empD }, { as: ID.empB }]) {
+      for (const qs of ['', 'kind=leave', 'kind=wfh', 'kind=leave&type=sick', 'from=2027-02-05&to=2027-03-10&kind=leave']) {
+        const c = (await call('GET', `/api/leaves/counts?${qs}`, who)).body;
+        const totalOf = async (extra) => tot(await call('GET', `/api/leaves?view=list&limit=1&${qs}${extra}`, who));
+        assert.strictEqual(c.summary.total, await totalOf(''), JSON.stringify(who) + ' total ' + qs);
+        assert.strictEqual(c.summary.approved, await totalOf('&status=approved'), 'approved ' + qs);
+        assert.strictEqual(c.summary.rejected, await totalOf('&status=rejected'), 'rejected ' + qs);
+        assert.strictEqual(c.summary.pending, await totalOf('&status=pending,pending_dept,pending_root,pending_approval'), 'pending ' + qs);
+        assert.ok(c.summary.pending + c.summary.approved + c.summary.rejected <= c.summary.total, 'cancelled etc. are only in the total');
+        assert.strictEqual(c.filtered_total, c.summary.total, 'no status filter → filtered_total = total');
+      }
+    }
+    const big = (await call('GET', '/api/leaves/counts?kind=leave', { as: ID.root })).body;
+    assert.ok(big.summary.total > 25, 'the cards cover far more rows than one 25-row page');
+  });
+  await t('status filter narrows filtered_total (pagination) but NOT the cards (they stay the breakdown)', async () => {
+    const who = { as: ID.root };
+    const base = (await call('GET', '/api/leaves/counts?kind=leave', who)).body;
+    const ap = (await call('GET', '/api/leaves/counts?kind=leave&status=approved', who)).body;
+    assert.deepStrictEqual(ap.summary, base.summary, 'cards identical with or without the status filter');
+    assert.strictEqual(ap.filtered_total, base.summary.approved);
+    assert.strictEqual(ap.filtered_total, tot(await call('GET', '/api/leaves?view=list&limit=10&kind=leave&status=approved', who)));
+    const two = (await call('GET', '/api/leaves/counts?kind=leave&status=approved,rejected', who)).body;
+    assert.strictEqual(two.filtered_total, base.summary.approved + base.summary.rejected);
+  });
+  await t('tab badges (pending / wfh_pending) ignore type/kind/status filters but follow the date window', async () => {
+    const who = { as: ID.root };
+    const a = (await call('GET', '/api/leaves/counts', who)).body, b = (await call('GET', '/api/leaves/counts?kind=wfh&type=sick&status=approved', who)).body;
+    assert.strictEqual(a.pending, b.pending); assert.strictEqual(a.wfh_pending, b.wfh_pending);
+    const w = (await call('GET', '/api/leaves/counts?from=2027-02-01&to=2027-02-10', who)).body;
+    assert.ok(w.pending <= a.pending && w.wfh_pending <= a.wfh_pending);
+  });
+  await t('branch isolation: HR Dalal / HR Bhuj / HR All / root totals, counts and pages never cross branches', async () => {
+    const d = await call('GET', '/api/leaves?view=list&limit=25', { as: ID.hrD, branch: ID.dalal });
+    assert.strictEqual(tot(d), dalalAll);
+    for (const r of d.body) assert.strictEqual(Number(r.user_id) === ID.empB, false, 'no Bhuj row on a Dalal page');
+    const dc = (await call('GET', '/api/leaves/counts', { as: ID.hrD, branch: ID.dalal })).body;
+    assert.strictEqual(dc.summary.total, dalalAll);
+    const bc = (await call('GET', '/api/leaves/counts', { as: ID.hrB, branch: ID.bhuj })).body;
+    assert.ok(bc.summary.total > 0 && bc.summary.total < dalalAll + bc.summary.total);
+    assert.strictEqual(dc.summary.total + bc.summary.total, orgAll, 'Dalal + Bhuj partition the org here');
+    // limited HR with NO branch header: multi-branch scope = only their own branch
+    assert.strictEqual(tot(await call('GET', '/api/leaves?view=list&limit=5', { as: ID.hrD })), dalalAll);
+    assert.strictEqual((await call('GET', '/api/leaves/counts', { as: ID.hrD })).body.summary.total, dalalAll);
+    // forbidden header → refused for rows and counts, never silently widened
+    assert.strictEqual((await call('GET', '/api/leaves?view=list&limit=5', { as: ID.hrD, branch: ID.bhuj })).status, 403);
+    assert.strictEqual((await call('GET', '/api/leaves/counts', { as: ID.hrD, branch: ID.bhuj })).status, 403);
+    // all-branch HR and root see the org
+    assert.strictEqual(tot(await call('GET', '/api/leaves?view=list&limit=5', { as: ID.hrAll })), orgAll);
+    assert.strictEqual(tot(await call('GET', `/api/leaves?view=list&limit=5`, { as: ID.root, branch: ID.bhuj })), bc.summary.total, 'root can narrow to one branch');
+    // another organisation sees none of it
+    const f = await call('GET', '/api/leaves?view=list&limit=25', { as: ID.froot });
+    assert.deepStrictEqual(f.body, []); assert.strictEqual(tot(f), 0);
+    assert.strictEqual((await call('GET', '/api/leaves/counts', { as: ID.froot })).body.summary.total, 0);
+  });
+  await t('employees: pages and counts cover only their own leaves; userId of someone else is ignored for them', async () => {
+    const mine = await call('GET', '/api/leaves?view=list&limit=25', { as: ID.empB });
+    for (const r of mine.body) assert.strictEqual(Number(r.user_id), ID.empB);
+    const own = Number((await one(`SELECT COUNT(*) c FROM leaves WHERE user_id=$1`, [ID.empB])).c);
+    assert.strictEqual(tot(mine), own);
+    assert.strictEqual((await call('GET', '/api/leaves/counts', { as: ID.empB })).body.summary.total, own);
+    assert.strictEqual(tot(await call('GET', `/api/leaves?view=list&limit=5&userId=${ID.empD}`, { as: ID.empB })), own, 'cannot read a colleague through ?userId');
+  });
+  await t('empty result and single-page result', async () => {
+    const empty = await call('GET', '/api/leaves?view=list&limit=25&status=rejected&type=sick&userId=' + ID.empB + '&from=2030-01-01', { as: ID.root });
+    assert.deepStrictEqual(empty.body, []); assert.strictEqual(tot(empty), 0); assert.strictEqual(empty.headers.get('x-total-pages'), '1'); assert.strictEqual(empty.headers.get('x-has-more'), '0');
+    const c = (await call('GET', '/api/leaves/counts?from=2030-01-01', { as: ID.root })).body;
+    assert.deepStrictEqual(c.summary, { total: 0, pending: 0, approved: 0, rejected: 0 }); assert.strictEqual(c.filtered_total, 0);
+    const single = await call('GET', `/api/leaves?view=list&limit=100&userId=${ID.empB}`, { as: ID.root });
+    assert.ok(single.body.length <= 100 && single.headers.get('x-total-pages') === '1' && single.headers.get('x-has-more') === '0');
+  });
+  await t('sort=start_asc returns the soonest start first; default stays newest-created first', async () => {
+    const rows = (await call('GET', '/api/leaves?view=list&limit=40&sort=start_asc&status=approved', { as: ID.root })).body.map(r => String(r.start_date).slice(0, 10));
+    assert.deepStrictEqual(rows, [...rows].sort());
+    const def = (await call('GET', '/api/leaves?view=list&limit=40', { as: ID.root })).body.map(r => new Date(r.created_at).getTime());
+    assert.deepStrictEqual(def, [...def].sort((a, b) => b - a));
+  });
+  await t('invalid list params are rejected (400), never silently ignored', async () => {
+    for (const qs of ['limit=0', 'limit=abc', 'kind=nope', 'sort=random', 'status=Bad-Status!', 'from=2026-13-45', 'to=tomorrow'])
+      assert.strictEqual((await call('GET', '/api/leaves?view=list&' + qs, { as: ID.root })).status, 400, qs);
+    for (const qs of ['kind=nope', 'status=x y', 'to=tomorrow'])
+      assert.strictEqual((await call('GET', '/api/leaves/counts?' + qs, { as: ID.root })).status, 400, 'counts ' + qs);
+    assert.ok(Number((await call('GET', '/api/leaves?view=list&limit=9999', { as: ID.root })).headers.get('x-limit')) <= 500, 'limit is capped');
+  });
+  await t('approval / rejection / cancellation keep working and the cards + totals move with them', async () => {
+    const pend = (await one(`SELECT id FROM leaves WHERE reason=$1 AND status='pending' AND user_id=$2 ORDER BY id LIMIT 1`, [P5, ID.empD])).id;
+    const before = (await call('GET', '/api/leaves/counts?kind=leave', { as: ID.hrD, branch: ID.dalal })).body;
+    const ap = await call('PUT', `/api/leaves/${pend}/approve`, { as: ID.hrD, branch: ID.dalal, body: {} });
+    assert.strictEqual(ap.status, 200, JSON.stringify(ap.body));
+    const after = (await call('GET', '/api/leaves/counts?kind=leave', { as: ID.hrD, branch: ID.dalal })).body;
+    assert.strictEqual(after.summary.approved, before.summary.approved + 1);
+    assert.strictEqual(after.summary.pending, before.summary.pending - 1);
+    assert.strictEqual(after.summary.total, before.summary.total, 'total unchanged by a status move');
+    assert.strictEqual((await call('PUT', `/api/leaves/${pend}/approve`, { as: ID.hrB, branch: ID.bhuj, body: {} })).status, 403, 'other-branch HR still cannot act');
+  });
+  await S(`DELETE FROM leaves WHERE reason=$1`, [P5]);
+  await resetAccess();
 
   console.log('\nTENANT ISOLATION / CONSTRAINTS');
   await t('login refuses a user with no organisation (no fallback to org 1)', async () => {

@@ -16,6 +16,7 @@ import { DateInput } from '@/components/ui/DateInput';
 import { StatusBadge, LeaveTypeBadge } from '@/components/ui/Badge';
 import { Modal } from '@/components/ui/Modal';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
+import { PAGE_SIZES, DEFAULT_PAGE_SIZE, leaveFilterSig, resolvePage, pageCount, clampPage, pageRange } from '@/lib/leavePaging';
 import { fmtDate, fmtDateRange, fmtTime, fmtHours, initials, todayStr, cn, countWorkingDaysInRange } from '@/lib/utils';
 
 
@@ -29,6 +30,11 @@ const ATT_STATUS_CFG = {
   on_leave: { label: 'On Leave', cls: 'bg-rose-50 text-rose-700 border-rose-200' },
   absent:   { label: 'Absent',   cls: 'bg-slate-50 text-slate-500 border-slate-200' },
 };
+
+const PENDING_STATUSES = ['pending', 'pending_dept', 'pending_root', 'pending_approval'];
+// Status filter → statuses sent to the server (the same list drives the table rows, the pagination total and the cards).
+const STATUS_FILTERS = { all: undefined, pending: PENDING_STATUSES, approved: ['approved'], rejected: ['rejected'] };
+const HIGHLIGHT_PAGE_SIZE = 500;   // a notification deep link must find its leave wherever it sits in the list
 
 export default function Leaves() {
   const { user, isAdmin } = useAuth();
@@ -65,30 +71,80 @@ export default function Leaves() {
   const [filterEnd,    setFilterEnd]    = useState('');
   const [filterMonth,  setFilterMonth]  = useState('');
   const [filterType,   setFilterType]   = useState(() => typeParam || '');
+  const [statusFilter, setStatusFilter] = useState(() => (['pending', 'approved', 'rejected'].includes(statusParam) ? statusParam : 'all'));
   const [applyModal, setApplyModal] = useState(false);
   const [editLeave,  setEditLeave]  = useState(null);
   const [confirmDel,    setConfirmDel]    = useState(null);
   const [confirmRevert, setConfirmRevert] = useState(null);
 
   // Admin list: recent history by default (server-side window) with an explicit "Show full history" switch.
-  // An explicit date filter is applied ON THE SERVER (only leaves overlapping the chosen range are downloaded — it used to
-  // pull the whole history and filter in the browser: ~686 KB for one month). The tab badges then come from a tiny
-  // /leaves/counts request, because the rows no longer contain every pending leave. A single-employee view, a pending-only
-  // deep link and a highlighted leave (notification link) load what they ask for. Employees keep their own full list.
+  // Every filter (date range, status, type, WFH-vs-leave, employee) is applied ON THE SERVER, and the table only ever
+  // downloads the current page. The summary cards and the pagination total come from ONE small /leaves/counts request that
+  // uses exactly the same filters, so they describe the whole filtered set, not the 25 rows on screen.
+  // A single-employee view, a pending-only filter and a highlighted leave (notification link) load what they ask for.
   const [allHistory, setAllHistory] = useState(() => !!highlightId);
   const hasDateFilter = !!(filterStart || filterEnd);
-  const pendingOnlyLink = statusParam === 'pending';
-  const defaultWindow = isAdmin && !hasDateFilter && !allHistory && !userIdParam && !pendingOnlyLink;
-  const leaveParams = !isAdmin ? {} : {
-    userId: userIdParam || undefined,
-    statuses: pendingOnlyLink ? ['pending', 'pending_approval', 'pending_dept', 'pending_root'] : undefined,
-    from: hasDateFilter ? (filterStart || undefined) : (defaultWindow ? historyFrom(HISTORY_DAYS.leaves) : undefined),
-    to: hasDateFilter ? (filterEnd || undefined) : undefined,
+  const pendingOnly = statusFilter === 'pending';
+  const defaultWindow = isAdmin && !hasDateFilter && !allHistory && !userIdParam && !pendingOnly;
+  const windowFrom = hasDateFilter ? (filterStart || undefined) : (defaultWindow ? historyFrom(HISTORY_DAYS.leaves) : undefined);
+  const windowTo   = hasDateFilter ? (filterEnd || undefined) : undefined;
+  const kind = tab === 'wfh' ? 'wfh' : 'leave';
+
+  // ── Pagination state ───────────────────────────────────────────────────────────────────────────────────────────────
+  // The page belongs to the filter set it was chosen under: when ANY filter, the tab, the branch or the page size changes the
+  // signature changes and the page falls back to 1 in the SAME render (no request for "page 4 of the new filter").
+  const urlLimit = parseInt(searchParams.get('limit'), 10);
+  const [pageSize, setPageSize] = useState(PAGE_SIZES.includes(urlLimit) ? urlLimit : DEFAULT_PAGE_SIZE);
+  const filterSig = leaveFilterSig({ branchId: selectedBranchId, tab, status: statusFilter, type: filterType, from: filterStart, to: filterEnd, userId: userIdParam, allHistory, pageSize });
+  const [pageState, setPageState] = useState(() => ({ sig: filterSig, page: Math.max(1, parseInt(searchParams.get('page'), 10) || 1) }));
+  const page = resolvePage(pageState, filterSig);
+  const goToPage = (p) => setPageState({ sig: filterSig, page: Math.max(1, p) });
+  // keep ?page= / ?limit= in the URL (replace, so Back leaves the page instead of stepping through every page)
+  useEffect(() => {
+    setSearchParams(prev => {
+      const n = new URLSearchParams(prev);
+      if (page > 1) n.set('page', String(page)); else n.delete('page');
+      if (pageSize !== DEFAULT_PAGE_SIZE) n.set('limit', String(pageSize)); else n.delete('limit');
+      return n.toString() === prev.toString() ? prev : n;
+    }, { replace: true });
+  }, [page, pageSize, setSearchParams]);
+
+  // Filters shared by the rows, the counts and the cards. The Type filter only applies to the leaves tab (as before).
+  const statuses = STATUS_FILTERS[statusFilter];
+  const typeParamFor = tab !== 'wfh' && filterType ? filterType : undefined;
+  const sharedFilters = {
+    userId: isAdmin ? (userIdParam || undefined) : undefined,
+    from: windowFrom, to: windowTo, statuses, type: typeParamFor,
   };
-  const { data: leaves = [], refetch: refetchLeaves, isPlaceholderData: leavesStale, isFetching: leavesFetching } = useLeavesList(leaveParams);
-  // all-time badge counts while a date filter narrows the rows (same numbers the page showed when it loaded everything)
-  const badgeServerSide = isAdmin && hasDateFilter;
-  const { data: badgeCounts } = useLeaveCounts({ userId: userIdParam || undefined }, { enabled: badgeServerSide });
+  const listEnabled = tab !== 'summary';
+  const { data: leaves = [], isLoading: leavesLoading, isPlaceholderData: listPlaceholder } = useLeavesList(
+    // a highlighted leave may be of either kind → no kind filter, the list below is narrowed to the tab client-side
+    { ...sharedFilters, kind: highlightId ? undefined : kind, limit: highlightId ? HIGHLIGHT_PAGE_SIZE : pageSize, page: highlightId ? 1 : page },
+    { enabled: listEnabled });
+  // a disabled query (Summary tab) can still report placeholder data from the previous tab — that is not a refresh in progress
+  const leavesStale = listEnabled && listPlaceholder;
+  const { data: counts, isPlaceholderData: countsStale } = useLeaveCounts({ ...sharedFilters, kind }, { enabled: listEnabled });
+  const refreshLeaves = () => qc.invalidateQueries({ queryKey: ['leaves'] });   // rows + counts + cards together
+
+  // Summary tab: per-employee totals need every leave of the window (the one place that still reads the whole set)
+  const { data: summaryLeaves = [] } = useLeavesList(
+    { userId: userIdParam || undefined, from: windowFrom, to: windowTo },
+    { enabled: isAdmin && tab === 'summary' });
+  // Upcoming Leaves side card: the soonest approved leaves, fetched on their own (a page of the table is not "upcoming")
+  const { data: upcomingRows = [] } = useLeavesList(
+    { statuses: ['approved'], kind: 'leave', from: todayStr(), sort: 'start_asc', limit: 30, page: 1 },
+    { staleTime: 60000 });
+  // Apply-leave modal: advisory per-employee balance preview uses approved leaves — only fetched while the modal is open
+  const { data: modalLeaves = [] } = useLeavesList(
+    { userId: userIdParam || undefined, statuses: ['approved'], from: windowFrom, to: windowTo },
+    { enabled: isAdmin && applyModal });
+
+  const total = counts?.filtered_total ?? null;
+  const totalPages = pageCount(total, pageSize);
+  // after deleting / filtering the last rows of the last page, step back to the last page that exists
+  useEffect(() => {
+    if (!countsStale && totalPages != null && page > totalPages) goToPage(clampPage(page, totalPages));
+  }, [countsStale, totalPages, page]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   // BUG_094: switch to correct tab (WFH vs normal) then scroll to highlighted leave
   useEffect(() => {
@@ -115,7 +171,7 @@ export default function Leaves() {
   const uniqueUserIds = useMemo(() => [...new Set(leaves.map(l => l.user_id))], [leaves]);
   const curYear = new Date().getFullYear();
 
-  // Admin: batch-fetch balances for every employee visible in the list
+  // Admin: batch-fetch balances for every employee visible on the current page
   const { data: adminBalances = {} } = useQuery({
     queryKey: ['leaves-page-balances', uniqueUserIds.join(','), curYear],
     queryFn: () => fetchBalanceMap(uniqueUserIds, curYear),   // ONE request (was one per employee)
@@ -140,61 +196,39 @@ export default function Leaves() {
     ? adminBalances
     : (user?.id ? { [user.id]: myBalanceByType } : {});
 
-  const myLeaves      = leaves.filter(l => l.user_id === user?.id);
-  const allLeaves     = isAdmin ? leaves : myLeaves;
-  const summaryLeaves = isAdmin ? allLeaves : myLeaves;
-
   async function approve(id) {
-    try { await apiPut(`/leaves/${id}/approve`, {}); toast('Leave approved', 'success'); refetchLeaves(); }
+    try { await apiPut(`/leaves/${id}/approve`, {}); toast('Leave approved', 'success'); refreshLeaves(); }
     catch (err) { toast(err.message, 'error'); }
   }
   async function reject(id) {
-    try { await apiPut(`/leaves/${id}/reject`, {}); toast('Leave rejected', 'warning'); refetchLeaves(); }
+    try { await apiPut(`/leaves/${id}/reject`, {}); toast('Leave rejected', 'warning'); refreshLeaves(); }
     catch (err) { toast(err.message, 'error'); }
   }
   async function revert(id) {
-    try { await apiPut(`/leaves/${id}/revert`, {}); toast('Leave reverted', 'info'); refetchLeaves(); }
+    try { await apiPut(`/leaves/${id}/revert`, {}); toast('Leave reverted', 'info'); refreshLeaves(); }
     catch (err) { toast(err.message, 'error'); }
   }
   async function cancel(id) {
-    try { await apiDelete(`/leaves/${id}`); toast('Leave cancelled', 'info'); refetchLeaves(); }
+    try { await apiDelete(`/leaves/${id}`); toast('Leave cancelled', 'info'); refreshLeaves(); }
     catch (err) { toast(err.message, 'error'); }
   }
 
   async function deleteLeave(id) {
-    try { await apiDelete(`/leaves/${id}`); toast('Leave deleted', 'success'); refetchLeaves(); }
+    try { await apiDelete(`/leaves/${id}`); toast('Leave deleted', 'success'); refreshLeaves(); }
     catch (err) { toast(err.message, 'error'); }
   }
 
-  const activeList = (() => {
-    if (tab === 'summary') return [];
-    let src = tab === 'all' ? allLeaves : (tab === 'wfh' ? allLeaves : myLeaves);
-    // While the previous range's rows are still on screen (leavesStale) they must not be filtered by the NEW range — that
-    // would blank the list into "No leave records" for a moment. They stay visible (dimmed, read-only) until the new rows arrive.
-    const hasRange = (filterStart || filterEnd) && !leavesStale;
-    const s = filterStart || '0000-01-01';
-    const e = filterEnd   || '9999-12-31';
-    if (tab === 'wfh') {
-      src = src.filter(l => l.leave_time === 'wfh' || l.leave_type === 'wfh');
-      if (hasRange) src = src.filter(l => l.start_date <= e && l.end_date >= s);
-      return src;
-    }
-    src = src.filter(l => l.leave_time !== 'wfh' && l.leave_type !== 'wfh');
-    if (filterType) src = src.filter(l => l.leave_type === filterType);
-    if (hasRange) src = src.filter(l => l.start_date <= e && l.end_date >= s);
-    return src;
-  })();
+  // The server already applied tab (kind), type, status and date range. Only a highlight deep link (no kind filter) needs the tab narrowing.
+  const isWfhRow = (l) => l.leave_time === 'wfh' || l.leave_type === 'wfh';
+  const displayList = highlightId ? leaves.filter(l => (kind === 'wfh') === isWfhRow(l)) : leaves;
+  const pendingCount    = counts?.pending ?? 0;
+  const wfhPendingCount = counts?.wfh_pending ?? 0;
 
-  const PENDING_STATUSES = ['pending', 'pending_dept', 'pending_root', 'pending_approval'];
-  const pendingCount    = badgeServerSide ? (badgeCounts?.pending ?? 0)     : allLeaves.filter(l => PENDING_STATUSES.includes(l.status) && l.leave_time !== 'wfh' && l.leave_type !== 'wfh').length;
-  const wfhPendingCount = badgeServerSide ? (badgeCounts?.wfh_pending ?? 0) : allLeaves.filter(l => PENDING_STATUSES.includes(l.status) && (l.leave_time === 'wfh' || l.leave_type === 'wfh')).length;
-
-  // When navigated with a status param, filter accordingly
-  const pendingOnly    = statusParam === 'pending';
-  const approvedOnly   = statusParam === 'approved';
-  const displayList    = pendingOnly  ? activeList.filter(l => PENDING_STATUSES.includes(l.status))
-                       : approvedOnly ? activeList.filter(l => l.status === 'approved')
-                       : activeList;
+  function pickStatus(next) {
+    setStatusFilter(next);
+    // the old ?status= deep link must not fight the new selection after a refresh
+    setSearchParams(p => { const n = new URLSearchParams(p); n.delete('status'); return n; }, { replace: true });
+  }
 
   return (
     <div>
@@ -212,6 +246,12 @@ export default function Leaves() {
 
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-5">
         <div>
+          {/* Summary cards: the whole filtered set (from /leaves/counts), not the rows of this page. They double as the status filter. */}
+          {tab !== 'summary' && (
+            <LeaveSummaryCards counts={counts?.summary} stale={countsStale || counts == null} active={statusFilter} onPick={pickStatus}
+              noun={tab === 'wfh' ? 'WFH requests' : 'leaves'} />
+          )}
+
           {/* Active filter badges */}
           {(pendingOnly || filterType || userIdParam) && (
             <div className="flex items-center gap-2 mb-3 flex-wrap">
@@ -235,16 +275,16 @@ export default function Leaves() {
               )}
               {pendingOnly && (
                 <button className="text-xs text-[#3525cd] hover:underline font-semibold"
-                  onClick={() => setSearchParams(p => { const n = new URLSearchParams(p); n.delete('status'); return n; }, { replace: true })}>
+                  onClick={() => pickStatus('all')}>
                   Clear filter
                 </button>
               )}
             </div>
           )}
 
-          {isAdmin && !hasDateFilter && !userIdParam && !pendingOnlyLink && (
+          {isAdmin && !hasDateFilter && !userIdParam && !pendingOnly && (
             <HistoryWindowNote since={historyFrom(HISTORY_DAYS.leaves)} showingAll={allHistory} noun="leaves"
-              loading={leavesFetching} onToggle={() => setAllHistory(v => !v)} />
+              loading={leavesStale} onToggle={() => setAllHistory(v => !v)} />
           )}
 
           {/* Date range filter */}
@@ -276,8 +316,8 @@ export default function Leaves() {
                   setFilterEnd('');
                 }
               }} />
-            {(filterStart || filterEnd || filterType) && (
-              <button className="btn btn-ghost btn-sm text-xs" onClick={() => { setFilterStart(''); setFilterEnd(''); setFilterMonth(''); setFilterType(''); }}>
+            {(filterStart || filterEnd || filterType || statusFilter !== 'all') && (
+              <button className="btn btn-ghost btn-sm text-xs" onClick={() => { setFilterStart(''); setFilterEnd(''); setFilterMonth(''); setFilterType(''); pickStatus('all'); }}>
                 <X size={12} /> Clear
               </button>
             )}
@@ -300,7 +340,7 @@ export default function Leaves() {
           {tab === 'summary' ? (
             <LeaveSummaryTable
               employees={employees}
-              leaves={leaves}
+              leaves={summaryLeaves}
               policies={policies}
               filterStart={leavesStale ? '' : filterStart}
               filterEnd={leavesStale ? '' : filterEnd}
@@ -308,7 +348,9 @@ export default function Leaves() {
             />
           ) : (
             <div className="flex flex-col gap-3">
-              {displayList.length === 0
+              {displayList.length === 0 && leavesLoading
+                ? <div className="empty-state" role="status"><p className="text-xs text-[#777587]">Loading leaves…</p></div>
+                : displayList.length === 0
                 ? <div className="empty-state"><Inbox size={36} className="mx-auto mb-2 opacity-30" /><p>{pendingOnly ? 'No pending approvals' : 'No leave records'}</p></div>
                 : displayList.map(l => (
                     <LeaveCard key={l.id} leave={l} isAdmin={isAdmin} user={user}
@@ -322,6 +364,11 @@ export default function Leaves() {
             </div>
           )}
           </RefreshingOverlay>
+          {tab !== 'summary' && !highlightId && (
+            <LeavePagination page={page} pageSize={pageSize} total={total} totalPages={totalPages} rowCount={leaves.length}
+              busy={leavesStale || countsStale} onPage={goToPage}
+              onPageSize={(n) => setPageSize(n)} />
+          )}
         </div>
 
         {/* Right column */}
@@ -370,7 +417,7 @@ export default function Leaves() {
             <div className="divide-y divide-[#f0f3ff]">
               {(() => {
                 const today = todayStr();
-                const upcoming = allLeaves
+                const upcoming = upcomingRows
                   .filter(l => l.status === 'approved' && l.start_date >= today && l.leave_time !== 'wfh' && l.leave_type !== 'wfh')
                   .sort((a, b) => a.start_date.localeCompare(b.start_date))
                   .slice(0, 6);
@@ -397,8 +444,8 @@ export default function Leaves() {
       </div>
 
       {/* Modals */}
-      {applyModal && <ApplyLeaveModal employees={employees} isAdmin={isAdmin} allLeaves={allLeaves} policies={policies} onClose={() => setApplyModal(false)} onSuccess={refetchLeaves} />}
-      {editLeave  && <EditLeaveModal  leave={editLeave} isAdmin={isAdmin} onClose={() => setEditLeave(null)} onSuccess={refetchLeaves} />}
+      {applyModal && <ApplyLeaveModal employees={employees} isAdmin={isAdmin} allLeaves={modalLeaves} policies={policies} onClose={() => setApplyModal(false)} onSuccess={refreshLeaves} />}
+      {editLeave  && <EditLeaveModal  leave={editLeave} isAdmin={isAdmin} onClose={() => setEditLeave(null)} onSuccess={refreshLeaves} />}
       <ConfirmModal
         open={!!confirmRevert}
         title="Confirm Revert Leave"
@@ -416,6 +463,60 @@ export default function Leaves() {
         onConfirm={() => deleteLeave(confirmDel.id)}
         onCancel={() => setConfirmDel(null)}
       />
+    </div>
+  );
+}
+
+// Status summary cards. Numbers describe the entire filtered result set (server counts), never the current page.
+// `stale` = the counts for the NEW filter are still loading → show a placeholder instead of the previous filter's numbers.
+const SUMMARY_CARDS = [
+  { key: 'all',      field: 'total',    label: 'Total',    accent: 'border-l-[#3525cd]',   num: 'text-[#151c27]',   ring: 'ring-[#3525cd]' },
+  { key: 'pending',  field: 'pending',  label: 'Pending',  accent: 'border-l-amber-400',   num: 'text-amber-700',   ring: 'ring-amber-400' },
+  { key: 'approved', field: 'approved', label: 'Approved', accent: 'border-l-emerald-400', num: 'text-emerald-700', ring: 'ring-emerald-400' },
+  { key: 'rejected', field: 'rejected', label: 'Rejected', accent: 'border-l-rose-400',    num: 'text-rose-700',    ring: 'ring-rose-400' },
+];
+
+function LeaveSummaryCards({ counts, stale, active, onPick, noun }) {
+  return (
+    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3" data-testid="leave-summary-cards">
+      {SUMMARY_CARDS.map(c => {
+        const on = active === c.key;
+        const value = !stale && counts ? Number(counts[c.field] || 0).toLocaleString() : '—';
+        return (
+          <button key={c.key} type="button" aria-pressed={on} onClick={() => onPick(c.key)} title={`Show ${c.label.toLowerCase()} ${noun}`}
+            className={cn('text-left bg-white border border-[#e1e8fd] border-l-4 rounded-xl px-3.5 py-2.5 transition-colors hover:bg-[#f9f9ff]', c.accent, on && `ring-2 ${c.ring}`)}>
+            <div className="text-[0.65rem] font-bold uppercase tracking-wide text-[#777587]">{c.label}</div>
+            <div className={cn('text-xl font-black leading-tight mt-0.5', c.num, stale && 'opacity-40')} data-testid={`leave-card-${c.key}`}>{value}</div>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+// Pager under the list. Layout is fixed (never unmounts while a page loads) so the table does not jump.
+function LeavePagination({ page, pageSize, total, totalPages, rowCount, busy, onPage, onPageSize }) {
+  if (total === 0) return null;                        // empty result: the empty state already says it
+  const known = total != null;
+  const { from, to } = pageRange(page, pageSize, rowCount);
+  const single = known && total <= pageSize;
+  return (
+    <div className="flex items-center justify-between gap-3 flex-wrap mt-3 text-xs text-[#777587]" data-testid="leave-pagination">
+      <span role="status">{known ? `Showing ${from}–${to} of ${total.toLocaleString()}` : 'Loading…'}</span>
+      <div className="flex items-center gap-2">
+        <label className="flex items-center gap-1">Rows
+          <select className="form-control w-auto py-1 px-2 text-xs" value={pageSize} onChange={e => onPageSize(Number(e.target.value))} aria-label="Rows per page">
+            {PAGE_SIZES.map(n => <option key={n} value={n}>{n}</option>)}
+          </select>
+        </label>
+        {!single && (
+          <>
+            <button type="button" className="btn btn-ghost btn-sm text-xs" disabled={busy || page <= 1} onClick={() => onPage(page - 1)}>Previous</button>
+            <span className="font-semibold text-[#464555]">Page {page}{known ? ` of ${totalPages}` : ''}</span>
+            <button type="button" className="btn btn-ghost btn-sm text-xs" disabled={busy || !known || page >= totalPages} onClick={() => onPage(page + 1)}>Next</button>
+          </>
+        )}
+      </div>
     </div>
   );
 }

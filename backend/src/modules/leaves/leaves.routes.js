@@ -861,50 +861,80 @@ router.get('/pending-root', auth, hasPermission('leaves', 'approve'), withBranch
 });
 
 // ─── ROUTE: GET / — list leaves ───────────────────────────────────────────────
+/** WFH requests are stored either as leave_time = 'wfh' or leave_type = 'wfh' (NULL-safe, matches the page's old client-side test). */
+function applyKindFilter(q, kind) {
+  if (kind === 'wfh')   return q.or('leave_time.eq.wfh,leave_type.eq.wfh');
+  if (kind === 'leave') return q.or('leave_time.is.null,leave_time.neq.wfh').or('leave_type.is.null,leave_type.neq.wfh');
+  return q;
+}
+
 router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const { userId, year, month } = req.query;
-    let query = db.from('leaves')
-      .select('*, users!leaves_user_id_fkey(name, email, avatar_color, department), approver:users!leaves_approved_by_fkey(name)')
-      .eq('organization_id', orgId(req))
-      .order('created_at', { ascending: false });
+    const lp = parseListParams(req.query);
 
+    // Scope: who's leaves may this caller see. Resolved once, applied to BOTH the rows query and the total-count query.
+    let scopeUserId = null;
     if (!isAdminRole(req.user.role)) {
       // Employees see only their own leaves — no branch filter needed
-      query = query.eq('user_id', req.user.id);
+      scopeUserId = req.user.id;
     } else if (userId) {
       // Admin requested a specific employee — verify org membership and branch access.
       if (!await canAdminAccessUser(req.branchContext, parseInt(userId, 10), orgId(req)))
         return res.status(403).json({ error: "You do not have access to this employee's branch." });
-      query = query.eq('user_id', parseInt(userId));
-    } else {
-      // Admin viewing all leaves — apply branch filter // branch scope as a SQL subquery (no employee-id list round trip)
-      const scope = applyBranchUserScope(query, 'user_id', req.branchContext, orgId(req));
-      if (scope.empty) return res.json([]);
-      query = scope.query;
+      scopeUserId = parseInt(userId);
     }
-    if (year && month) {
-      const ym = `${year}-${String(month).padStart(2,'0')}`;
-      query = query.lte('start_date', `${ym}-31`).gte('end_date', `${ym}-01`);
-    } else if (year) {
-      query = query.lte('start_date', `${year}-12-31`).gte('end_date', `${year}-01-01`);
-    } else if (req.query.startDate && req.query.endDate) {
-      query = query.lte('start_date', req.query.endDate).gte('end_date', req.query.startDate);
+    const applyScope = (q) => scopeUserId != null
+      ? { query: q.eq('user_id', scopeUserId), empty: false }
+      // Admin viewing all leaves — branch scope as a SQL subquery (no employee-id list round trip)
+      : applyBranchUserScope(q, 'user_id', req.branchContext, orgId(req));
+    // Every filter that narrows the result set (date window, status, type, kind). Optional server-side narrowing is applied
+    // AFTER the RBAC + branch scope above and never widens it.
+    const applyFilters = (q) => {
+      if (year && month) {
+        const ym = `${year}-${String(month).padStart(2,'0')}`;
+        q = q.lte('start_date', `${ym}-31`).gte('end_date', `${ym}-01`);
+      } else if (year) {
+        q = q.lte('start_date', `${year}-12-31`).gte('end_date', `${year}-01-01`);
+      } else if (req.query.startDate && req.query.endDate) {
+        q = q.lte('start_date', req.query.endDate).gte('end_date', req.query.startDate);
+      }
+      if (lp.statuses) q = q.in('status', lp.statuses);
+      if (lp.types)    q = q.in('leave_type', lp.types);
+      if (lp.from)     q = q.gte('end_date', lp.from);     // leave overlaps [from, to]
+      if (lp.to)       q = q.lte('start_date', lp.to);
+      return applyKindFilter(q, lp.kind);
+    };
+
+    let query = db.from('leaves')
+      .select('*, users!leaves_user_id_fkey(name, email, avatar_color, department), approver:users!leaves_approved_by_fkey(name)')
+      .eq('organization_id', orgId(req))
+      // `id` is the tiebreaker: leaves created in one statement / import share a created_at, and without a total order the same
+      // row could land on two pages (or on none) while paging.
+      .order(lp.sort === 'start_asc' ? 'start_date' : 'created_at', { ascending: lp.sort === 'start_asc' })
+      .order('id', { ascending: lp.sort === 'start_asc' });
+
+    const scope = applyScope(query);
+    if (scope.empty) {
+      if (lp.paging) setPagingHeaders(res, lp.paging, false, 0);
+      return res.json([]);
     }
+    query = applyFilters(scope.query);
+    if (lp.paging) query = query.range(lp.paging.offset, lp.paging.offset + lp.paging.limit);   // +1 row = "has more" probe
 
-    // Optional server-side narrowing (no params = unchanged behaviour). Applied AFTER the RBAC + branch filters above.
-    const lp = parseListParams(req.query);
-    if (lp.statuses) query = query.in('status', lp.statuses);
-    if (lp.types)    query = query.in('leave_type', lp.types);
-    if (lp.from)     query = query.gte('end_date', lp.from);     // leave overlaps [from, to]
-    if (lp.to)       query = query.lte('start_date', lp.to);
-    if (lp.paging)   query = query.range(lp.paging.offset, lp.paging.offset + lp.paging.limit);   // +1 row = "has more" probe
+    // Total of the whole filtered set (not just this page) — same scope + filters, count only, runs alongside the rows query.
+    const totalPromise = !lp.paging ? null : (async () => {
+      const cq = applyScope(db.from('leaves').select('id', { count: 'exact', head: true }).eq('organization_id', orgId(req))).query;
+      const { count, error: cErr } = await applyFilters(cq);
+      if (cErr) throw new Error(cErr.message);
+      return count || 0;
+    })();
 
-    const { data: rawLeaves, error } = await query;
+    const [{ data: rawLeaves, error }, total] = await Promise.all([query, totalPromise]);
     if (error) throw new Error(error.message);
     let data = rawLeaves;
     if (lp.paging) {
-      setPagingHeaders(res, lp.paging, (rawLeaves || []).length > lp.paging.limit);
+      setPagingHeaders(res, lp.paging, (rawLeaves || []).length > lp.paging.limit, total);
       data = (rawLeaves || []).slice(0, lp.paging.limit);
     }
 
@@ -996,37 +1026,66 @@ router.get('/', auth, withBranchContext, async (req, res) => {
   }
 });
 
-// ─── ROUTE: GET /counts?from=&userId= ──────────────────────────────────────────────────────────────────────────────
-// The Leaves page tab badges (pending leaves / pending WFH) without downloading the rows behind them. Same scope as GET /
-// (employees: own leaves; admins: their branch scope, or one employee via userId with the same access check), same
-// definition of "pending" and "WFH" as the page, optional `from` = leaves ending on/after that date.
-// Response: { pending, wfh_pending }
+// ─── ROUTE: GET /counts?from=&to=&userId=&status=&type=&kind= ─────────────────────────────────────────────────────
+// Counts for the Leaves page without downloading the rows behind them. Same scope as GET / (employees: own leaves; admins:
+// their branch scope, or one employee via userId with the same access check) and the same date-overlap rule
+// (`from` = leaves ending on/after, `to` = leaves starting on/before). One aggregate query returns:
+//   pending, wfh_pending   tab badges: pending leaves / pending WFH in the date window (type / kind / status filters ignored)
+//   summary                { total, pending, approved, rejected } of the WHOLE filtered set for the summary cards.
+//                          `type` and `kind` narrow it; `status` does NOT (the cards are the status breakdown of the other
+//                          filters, so they stay useful while one status is selected)
+//   filtered_total         rows matching every filter INCLUDING `status` = the pagination total of GET / with the same params
+// PENDING_STATUSES is the page's own definition of pending; "rejected" is the single status 'rejected'.
+const COUNT_PENDING_STATUSES = ['pending', 'pending_dept', 'pending_root', 'pending_approval'];
 router.get('/counts', auth, withBranchContext, async (req, res) => {
+  const EMPTY = { pending: 0, wfh_pending: 0, summary: { total: 0, pending: 0, approved: 0, rejected: 0 }, filtered_total: 0 };
   try {
     const oId = orgId(req);
-    const lp = parseListParams({ from: req.query.from });
-    const params = [oId, ['pending', 'pending_dept', 'pending_root', 'pending_approval']];
+    const lp = parseListParams({ from: req.query.from, to: req.query.to, status: req.query.status, type: req.query.type, kind: req.query.kind });
+    const params = [oId, COUNT_PENDING_STATUSES];
+    const add = (v) => { params.push(v); return `$${params.length}`; };
     let scope = '';
-    if (!isAdminRole(req.user.role)) { params.push(req.user.id); scope = `AND l.user_id = $${params.length}`; }
+    if (!isAdminRole(req.user.role)) { scope = `AND l.user_id = ${add(req.user.id)}`; }
     else if (req.query.userId) {
       const uid = parseInt(req.query.userId, 10);
       if (!Number.isInteger(uid) || !await canAdminAccessUser(req.branchContext, uid, oId))
         return res.status(403).json({ error: "You do not have access to this employee's branch." });
-      params.push(uid); scope = `AND l.user_id = $${params.length}`;
+      scope = `AND l.user_id = ${add(uid)}`;
     } else {
       const st = getFilterState(req.branchContext);
-      if (st.type === 'none') return res.json({ pending: 0, wfh_pending: 0 });
-      if (st.type === 'specific') { params.push(st.branchId);  scope = `AND l.user_id IN (SELECT id FROM users WHERE organization_id = $1 AND branch_id = $${params.length})`; }
-      if (st.type === 'multi')    { params.push(st.branchIds); scope = `AND l.user_id IN (SELECT id FROM users WHERE organization_id = $1 AND branch_id = ANY($${params.length}::bigint[]))`; }
+      if (st.type === 'none') return res.json(EMPTY);
+      if (st.type === 'specific') scope = `AND l.user_id IN (SELECT id FROM users WHERE organization_id = $1 AND branch_id = ${add(st.branchId)})`;
+      if (st.type === 'multi')    scope = `AND l.user_id IN (SELECT id FROM users WHERE organization_id = $1 AND branch_id = ANY(${add(st.branchIds)}::bigint[]))`;
     }
-    let fromSql = '';
-    if (lp.from) { params.push(lp.from); fromSql = `AND l.end_date >= $${params.length}`; }
+    const window = [];
+    if (lp.from) window.push(`l.end_date >= ${add(lp.from)}`);
+    if (lp.to)   window.push(`l.start_date <= ${add(lp.to)}`);
+
+    const IS_WFH = `(l.leave_time = 'wfh' OR l.leave_type = 'wfh')`;
+    const NOT_WFH = `(COALESCE(l.leave_time,'') <> 'wfh' AND COALESCE(l.leave_type,'') <> 'wfh')`;
+    const PENDING = `l.status = ANY($2::text[])`;
+    const card = [
+      lp.kind === 'wfh' ? IS_WFH : lp.kind === 'leave' ? NOT_WFH : 'TRUE',
+      lp.types ? `l.leave_type = ANY(${add(lp.types)}::text[])` : 'TRUE',
+    ].join(' AND ');
+    const statusSql = lp.statuses ? `l.status = ANY(${add(lp.statuses)}::text[])` : 'TRUE';
+
     const { rows } = await pool.query(
-      `SELECT COUNT(*) FILTER (WHERE COALESCE(l.leave_time,'') <> 'wfh' AND COALESCE(l.leave_type,'') <> 'wfh')::int AS pending,
-              COUNT(*) FILTER (WHERE l.leave_time = 'wfh' OR l.leave_type = 'wfh')::int AS wfh_pending
+      `SELECT COUNT(*) FILTER (WHERE ${NOT_WFH} AND ${PENDING})::int                       AS pending,
+              COUNT(*) FILTER (WHERE ${IS_WFH} AND ${PENDING})::int                        AS wfh_pending,
+              COUNT(*) FILTER (WHERE ${card})::int                                         AS s_total,
+              COUNT(*) FILTER (WHERE ${card} AND ${PENDING})::int                          AS s_pending,
+              COUNT(*) FILTER (WHERE ${card} AND l.status = 'approved')::int               AS s_approved,
+              COUNT(*) FILTER (WHERE ${card} AND l.status = 'rejected')::int               AS s_rejected,
+              COUNT(*) FILTER (WHERE ${card} AND ${statusSql})::int                        AS filtered_total
          FROM leaves l
-        WHERE l.organization_id = $1 AND l.status = ANY($2::text[]) ${scope} ${fromSql}`, params);
-    res.json(rows[0]);
+        WHERE l.organization_id = $1 ${scope} ${window.map(w => `AND ${w}`).join(' ')}`, params);
+    const r = rows[0];
+    res.json({
+      pending: r.pending, wfh_pending: r.wfh_pending,
+      summary: { total: r.s_total, pending: r.s_pending, approved: r.s_approved, rejected: r.s_rejected },
+      filtered_total: r.filtered_total,
+    });
   } catch (err) {
     if (err instanceof ListParamError) return res.status(400).json({ error: err.message });
     res.status(500).json({ error: err.message });

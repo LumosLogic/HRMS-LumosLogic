@@ -168,8 +168,10 @@ t('list hooks request the compact view; Leaves narrows by date on the server and
   for (const ep of ["'/leaves', { view: 'list', ...params }", "'/regularization', { view: 'list', ...params }", "'/expenses', { view: 'list', ...params }"]) assert.ok(h.includes(ep), ep);
   assert.match(h, /useLeaveCounts = /);
   const l = read('pages/Leaves.jsx');
-  assert.match(l, /from: hasDateFilter \? \(filterStart \|\| undefined\)/); assert.match(l, /to: hasDateFilter \? \(filterEnd \|\| undefined\)/);
-  assert.match(l, /badgeServerSide \? \(badgeCounts\?\.pending/);
+  // Phase 5: the window + every filter go to the server (rows, counts and cards share one filter object); the tab badges come from /leaves/counts
+  assert.match(l, /const windowFrom = hasDateFilter \? \(filterStart \|\| undefined\)/); assert.match(l, /const windowTo   = hasDateFilter \? \(filterEnd \|\| undefined\)/);
+  assert.match(l, /from: windowFrom, to: windowTo/);
+  assert.match(l, /const pendingCount    = counts\?\.pending \?\? 0/);
 });
 t('no screen reads a column the compact view drops (list screens only)', () => {
   const dropped = ['google_event_id', 'dept_head_id', 'dept_head_reviewed_at', 'root_admin_id', 'root_admin_reviewed_at', 'manager_approved_at'];

@@ -5,9 +5,12 @@
 //   status = comma separated status list            e.g. ?status=pending,manager_approved
 //   from / to = YYYY-MM-DD inclusive date bounds     (either may be given alone)
 //   type = comma separated leave types               e.g. ?type=casual,sick                 (GET /leaves only)
+//   kind = leave | wfh                               GET /leaves and /leaves/counts only: non-WFH leaves vs WFH requests
+//   sort = start_asc                                 GET /leaves only: soonest start_date first (default: newest created first)
 //   view = list                                      compact rows: drops columns no screen reads (per endpoint, see LIST_VIEW_DROP)
 //   limit (1..500) [+ page, 1-based]                 → at most `limit` rows; the response is still a plain array and
-//                                                      X-Page / X-Limit / X-Has-More describe the slice
+//                                                      X-Page / X-Limit / X-Has-More describe the slice; endpoints that can count
+//                                                      cheaply (GET /leaves) also send X-Total / X-Total-Pages for the whole filtered set
 // None of these widen access: they are only ever applied AFTER the RBAC and branch filters of the endpoint.
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -52,6 +55,19 @@ function parseTypeList(value) {
   return [...new Set(list)];
 }
 
+function parseKind(value) {
+  if (value == null || value === '') return null;
+  const v = String(value);
+  if (v !== 'leave' && v !== 'wfh') throw new ListParamError('Invalid kind (use kind=leave or kind=wfh).');
+  return v;
+}
+
+function parseSort(value) {
+  if (value == null || value === '') return null;
+  if (String(value) !== 'start_asc') throw new ListParamError('Invalid sort (use sort=start_asc).');
+  return 'start_asc';
+}
+
 function parseView(value) {
   if (value == null || value === '') return null;
   if (String(value) !== 'list') throw new ListParamError('Invalid view (use view=list).');
@@ -67,9 +83,15 @@ function parsePaging(query) {
   return { limit: Math.min(limit, MAX_LIMIT), page, offset: (page - 1) * Math.min(limit, MAX_LIMIT) };
 }
 
-function setPagingHeaders(res, paging, hasMore) {
-  res.set({ 'X-Page': String(paging.page), 'X-Limit': String(paging.limit), 'X-Has-More': hasMore ? '1' : '0',
-            'Access-Control-Expose-Headers': 'X-Page, X-Limit, X-Has-More' });
+function setPagingHeaders(res, paging, hasMore, total) {
+  const h = { 'X-Page': String(paging.page), 'X-Limit': String(paging.limit), 'X-Has-More': hasMore ? '1' : '0',
+              'Access-Control-Expose-Headers': 'X-Page, X-Limit, X-Has-More' };
+  if (Number.isInteger(total)) {
+    h['X-Total'] = String(total);
+    h['X-Total-Pages'] = String(Math.max(1, Math.ceil(total / paging.limit)));
+    h['Access-Control-Expose-Headers'] += ', X-Total, X-Total-Pages';
+  }
+  res.set(h);
 }
 
 /** Parse all optional params at once; throws ListParamError (callers map it to HTTP 400). */
@@ -77,6 +99,8 @@ function parseListParams(query) {
   return {
     statuses: parseStatusList(query.status),
     types: parseTypeList(query.type),
+    kind: parseKind(query.kind),
+    sort: parseSort(query.sort),
     view: parseView(query.view),
     from: parseDate(query.from, 'from'),
     to: parseDate(query.to, 'to'),
@@ -84,4 +108,4 @@ function parseListParams(query) {
   };
 }
 
-module.exports = { parseListParams, parseStatusList, parseTypeList, parseView, parseDate, parsePaging, setPagingHeaders, compactRows, LIST_VIEW_DROP, ListParamError, MAX_LIMIT };
+module.exports = { parseListParams, parseStatusList, parseTypeList, parseView, parseKind, parseSort, parseDate, parsePaging, setPagingHeaders, compactRows, LIST_VIEW_DROP, ListParamError, MAX_LIMIT };
