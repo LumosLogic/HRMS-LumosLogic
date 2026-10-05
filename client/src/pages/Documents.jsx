@@ -1730,7 +1730,8 @@ function BgvCell({ sub, latest }) {
   const badge = latest && BGV_BADGE[latest.status];
 
   const run = useMutation({
-    mutationFn: () => apiPost('/bgv/requests', { employee_id: sub.user_id, submission_id: sub.id }),
+    // BGV is per employee (covers all their documents), not per document.
+    mutationFn: () => apiPost('/bgv/requests', { employee_id: sub.user_id }),
     onSuccess: () => { toast('BGV request submitted', 'success'); qc.invalidateQueries({ queryKey: ['bgv-requests'] }); },
     onError: (e) => { toast(e?.message || 'Could not start BGV', 'error'); qc.invalidateQueries({ queryKey: ['bgv-requests'] }); },
   });
@@ -1763,7 +1764,7 @@ function BgvCell({ sub, latest }) {
           {latest?.status === 'failed' || latest?.status === 'cancelled' ? 'Retry BGV' : 'Run BGV'}
         </button>
       )}
-      <ConfirmModal open={confirmOpen} variant="warning" title="Run BGV?" confirmLabel="Continue"
+      <ConfirmModal open={confirmOpen} variant="warning" title="Run BGV for this employee?" confirmLabel="Continue"
         message="BGV verification may incur a charge. Do you want to continue?"
         onConfirm={() => run.mutate()} onCancel={() => setConfirmOpen(false)} />
     </div>
@@ -1836,6 +1837,13 @@ function VerificationQueueTab() {
     });
     return list;
   }, [allSubs, statusFilter, search, sortCol, sortDir]);
+
+  // One BGV control per employee (it verifies all of their documents): show it on their first visible row only.
+  const bgvFirstRowIds = useMemo(() => {
+    const seen = new Set(); const ids = new Set();
+    for (const s of filtered) { const k = String(s.user_id); if (!seen.has(k)) { seen.add(k); ids.add(s.id); } }
+    return ids;
+  }, [filtered]);
 
   const toggleSort = (col) => {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -1946,8 +1954,11 @@ function VerificationQueueTab() {
                         : <span>—</span>}
                     </td>
                     <td className="px-4 py-3.5">
-                      {bgvOn && (
-                        <div className="mb-2"><BgvCell sub={sub} latest={bgvLatestByEmp.get(String(sub.user_id))} /></div>
+                      {bgvOn && bgvFirstRowIds.has(sub.id) && (
+                        <div className="mb-2">
+                          <p className="text-[0.6rem] font-black text-[#777587] uppercase tracking-wide mb-1">Background check · all documents</p>
+                          <BgvCell sub={sub} latest={bgvLatestByEmp.get(String(sub.user_id))} />
+                        </div>
                       )}
                       {sub.status === 're_upload_requested' ? (
                         <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-amber-50 text-amber-700 border border-amber-200 cursor-default">
