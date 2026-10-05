@@ -105,7 +105,6 @@ function ChangeSelfPasswordModal({ open, onClose }) {
   const strength   = getStrength(newPw);
   const allReqsMet = reqs.every(r => r.met);
   const pwsMatch   = !!(newPw && confPw && newPw === confPw);
-  const canSubmit  = !!(curPw && allReqsMet && pwsMatch);
 
   const save = useMutation({
     mutationFn: () => apiPut('/auth/change-password', { currentPassword: curPw, newPassword: newPw }),
@@ -116,12 +115,19 @@ function ChangeSelfPasswordModal({ open, onClose }) {
     onError: (e) => toast(e.message, 'error'),
   });
 
+  function handleSubmit() {
+    if (!curPw) { toast('Please enter your current password.', 'error'); return; }
+    if (!allReqsMet) { toast('New password must be at least 8 characters with 1 uppercase, 1 lowercase, 1 number and 1 special character.', 'error'); return; }
+    if (!pwsMatch) { toast('New passwords do not match.', 'error'); return; }
+    save.mutate();
+  }
+
   return (
     <Modal open={open} onClose={onClose} title="Change Your Password"
       footer={
         <div className="flex gap-2 justify-end">
           <button onClick={onClose} className="btn btn-outline btn-sm">Cancel</button>
-          <button onClick={() => save.mutate()} disabled={save.isPending || !canSubmit} className="btn btn-primary btn-sm">
+          <button onClick={handleSubmit} disabled={save.isPending} className="btn btn-primary btn-sm">
             {save.isPending
               ? <span className="flex items-center gap-1.5"><span className="spinner w-3.5 h-3.5" /> Saving…</span>
               : <><Check size={14} /> Update Password</>}
