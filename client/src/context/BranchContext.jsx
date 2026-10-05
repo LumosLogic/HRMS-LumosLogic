@@ -282,7 +282,9 @@ export function BranchProvider({ children }) {
   //
   // Because branchesLoaded is NOT reset on background re-fetches (Issue 4 fix),
   // this stays true during refresh cycles, preventing brief query-disabled windows.
-  const isBranchContextReady = flagsLoaded && (!branchesEnabled || branchesLoaded);
+  //   employees: always ready — they never fetch /branches/my-access (branch is fixed server-side via
+  //              users.branch_id), so branchesLoaded never flips for them and gating on it hangs every list hook.
+  const isBranchContextReady = flagsLoaded && (!branchesEnabled || user?.role === 'employee' || branchesLoaded);
 
   return (
     <BranchContext.Provider value={{

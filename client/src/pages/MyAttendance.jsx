@@ -247,6 +247,7 @@ const STATUS_CONFIG = {
   on_leave:     { label: 'On Leave',     bg: 'bg-indigo-50',   text: 'text-indigo-700',   border: 'border-indigo-200',  dot: 'bg-indigo-500',  cellBg: 'bg-indigo-50',   showTag: true,  tag: 'Leave' },
   wfh:          { label: 'WFH',          bg: 'bg-cyan-50',     text: 'text-cyan-700',     border: 'border-cyan-200',    dot: 'bg-cyan-500',    cellBg: 'bg-cyan-50',     showTag: true,  tag: 'WFH' },
   absent:       { label: 'Absent',       bg: 'bg-rose-50',     text: 'text-rose-700',     border: 'border-rose-200',    dot: 'bg-rose-500',    cellBg: 'bg-rose-50',     showTag: false },
+  holiday:      { label: 'Holiday',      bg: 'bg-sky-50',      text: 'text-sky-700',      border: 'border-sky-200',     dot: 'bg-sky-500',     cellBg: 'bg-sky-50',      showTag: true,  tag: 'Holiday' },
 };
 
 // KPI card accent config (ring color for active state)
@@ -399,6 +400,14 @@ export default function MyAttendance() {
     for (let day = 1; day <= daysInMonth; day++) {
       const ds = `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
       if (ds > todayStr) continue;
+
+      // A stored 'absent' row (auto-mark cron / holiday added late) on a declared holiday is a holiday, not an absence.
+      // A real check-in or approved leave on that day is left untouched.
+      const heldRow = map[ds];
+      if (holidaysSet.has(ds) && heldRow && heldRow.status === 'absent' && !heldRow.check_in) {
+        map[ds] = { ...heldRow, status: 'holiday' };
+        continue;
+      }
 
       const d = new Date(ds + 'T12:00:00');
       const dow = d.getDay();

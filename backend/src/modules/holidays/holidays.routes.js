@@ -49,7 +49,7 @@ async function resolveTargets(req, body) {
 
 /** Marks attendance as 'holiday' for the employees the holiday applies to. Fire-and-forget. */
 function markHolidayAttendance(oId, date, branchId) {
-  db.from('users').select('id, branch_id').eq('organization_id', oId).eq('role', 'employee').eq('employee_status', 'active')
+  db.from('users').select('id, branch_id').eq('organization_id', oId).eq('role', 'employee').not('employee_status', 'in', ['inactive', 'resigned', 'terminated'])
     .then(async ({ data: employees }) => {
       if (!employees?.length) return;
       let targets = employees;
