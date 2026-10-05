@@ -1,4 +1,3 @@
-const _bk1 = useBranch().selectedBranchId;
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
