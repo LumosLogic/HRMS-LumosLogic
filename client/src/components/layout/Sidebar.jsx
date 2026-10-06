@@ -15,7 +15,7 @@ import { apiGet } from '@/lib/api';
 import { STALE } from '@/lib/queryTiers';
 import { initials, cn } from '@/lib/utils';
 import { GlobalSearchModal } from '@/components/ui/GlobalSearchModal';
-import { canAccessAdminPath, permissionMatches } from '@/lib/adminAccess';
+import { canAccessAdminPath } from '@/lib/adminAccess';
 
 // ── Section definitions ──────────────────────────────────────────────────────
 
@@ -60,15 +60,6 @@ const PAYROLL_SUB_ITEMS = [
   { to: '/payroll/salary',    label: 'Salary Structures',  Icon: IndianRupee,  adminOnly: true, perm: 'payroll' },
   { to: '/payroll/settings',  label: 'Payroll Settings',   Icon: Settings,     adminOnly: true, perm: 'payroll' },
 ];
-
-// Custom-role users see a payroll sub-page only when their role grants what that page needs.
-const PAYROLL_SUB_PERMISSION = {
-  '/payroll/dashboard': 'payroll.view',
-  '/payroll/generate':  'payroll.generate',
-  '/payroll/reports':   'payroll.run_reports',
-  '/payroll/salary':    'payroll.manage_structures',
-  '/payroll/settings':  'payroll.manage_settings',
-};
 
 // Self-service links kept available to a custom-role user inside the admin shell (they are still employees)
 const MY_WORKSPACE_ITEMS = [
@@ -159,7 +150,7 @@ function PayrollGroup({ onClose, isAdmin, isRootAdmin, prefix = '', featureKey =
 
   const visibleSubs = PAYROLL_SUB_ITEMS.filter(item => {
     if (item.adminOnly && !isAdmin) return false;
-    if (customAccess && !permissionMatches(customAccess, PAYROLL_SUB_PERMISSION[item.to] || 'payroll.view')) return false;
+    if (customAccess && !canAccessAdminPath(customAccess, item.to)) return false;   // same map as the route guard (lib/adminAccess.js)
     return true;
   });
   if (customAccess && !visibleSubs.length) return null;

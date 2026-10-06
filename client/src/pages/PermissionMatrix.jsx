@@ -4,7 +4,6 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Shield, Lock, Pencil, X, AlertCircle, CheckCircle2, Users } from 'lucide-react';
 import { apiGet, apiPut } from '@/lib/api';
 import PermissionPicker, { flattenCatalog } from '@/components/rbac/PermissionPicker';
-import AssignUsersModal from '@/components/rbac/AssignUsersModal';
 import { cn } from '@/lib/utils';
 
 // ─── Edit Role Modal (name + description, custom roles only) ──────────────────
@@ -84,7 +83,6 @@ export default function PermissionMatrix() {
   const [dirty, setDirty]               = useState(false);
   const [toast, setToast]               = useState(null);
   const [showEditRole, setShowEditRole] = useState(false);
-  const [showAssign, setShowAssign]     = useState(false);
 
   const { data: role, isLoading: roleLoading, isError: roleError } = useQuery({
     queryKey: ['role', id],
@@ -189,12 +187,10 @@ export default function PermissionMatrix() {
             {role.description && <p className="text-sm text-[#777587] mt-0.5">{role.description}</p>}
           </div>
         </div>
-        {!isSystem && (
-          <button onClick={() => setShowAssign(true)}
-            className="flex items-center gap-1.5 border border-[#c7c4d8] rounded-lg px-3.5 py-2 text-xs font-bold text-[#464555] hover:bg-[#f0f3ff] whitespace-nowrap">
-            <Users size={13} /> Assign Users ({role.members?.length ?? 0})
-          </button>
-        )}
+        {/* Read-only: who has this role is managed from the Roles list ("Assign"), not from Manage. */}
+        <span className="flex items-center gap-1.5 text-xs font-semibold text-[#777587] whitespace-nowrap pt-2">
+          <Users size={13} /> {role.members?.length ?? 0} user{(role.members?.length ?? 0) === 1 ? '' : 's'}
+        </span>
       </div>
 
       {isSystem && (
@@ -242,13 +238,6 @@ export default function PermissionMatrix() {
       )}
 
       {showEditRole && !isSystem && <EditRoleModal role={role} onClose={() => setShowEditRole(false)} onSaved={() => showToast('Role updated')} />}
-      {showAssign && (
-        <AssignUsersModal
-          role={role}
-          onClose={() => setShowAssign(false)}
-          onSaved={(m) => { queryClient.invalidateQueries({ queryKey: ['role', id] }); showToast(m); }}
-        />
-      )}
     </div>
   );
 }

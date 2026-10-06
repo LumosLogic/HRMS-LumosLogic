@@ -66,7 +66,9 @@ function CreateRoleModal({ roles, templateRole, onClose, onCreated }) {
     } catch (e2) { setError(e2.message); } finally { setSaving(false); }
   }
 
-  const templates = roles.filter(r => r.slug !== 'root_admin');
+  // Templates are the predefined system roles only (Department Head / Employee / HR Admin). Root Admin has implicit full
+  // access and is never a template. Choosing one only COPIES its permissions into this new role — the source is read-only.
+  const templates = roles.filter(r => r.is_system_role && r.slug !== 'root_admin');
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(4,6,14,.6)', backdropFilter: 'blur(4px)' }}>
@@ -93,7 +95,7 @@ function CreateRoleModal({ roles, templateRole, onClose, onCreated }) {
               <select value={fromId} onChange={e => { setFromId(e.target.value); if (!e.target.value) setSelected(new Set()); }}
                 className="w-full border border-[#c7c4d8] rounded-lg px-3 py-2.5 text-sm bg-white focus:outline-none focus:border-[#3525cd]">
                 <option value="">Blank — no permissions</option>
-                {templates.map(r => <option key={r.id} value={r.id}>{r.name}{r.is_system_role ? ' (system)' : ''}</option>)}
+                {templates.map(r => <option key={r.id} value={r.id}>{r.name} (system)</option>)}
               </select>
             </div>
           </div>
@@ -234,7 +236,7 @@ export default function RoleManagement() {
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-2">
                         <button onClick={() => manage(role)} className="px-3 py-1.5 rounded-lg border border-[#c7c4d8] text-xs font-bold text-[#3525cd] hover:bg-[#f0f3ff]">Manage</button>
-                        <button onClick={() => setAssignRole(role)} className="px-3 py-1.5 rounded-lg border border-[#c7c4d8] text-xs font-bold text-[#464555] hover:bg-[#f0f3ff]">Assign</button>
+                        <button onClick={() => setAssignRole(role)} title="Assign Users" className="px-3 py-1.5 rounded-lg border border-[#c7c4d8] text-xs font-bold text-[#464555] hover:bg-[#f0f3ff]">Assign</button>
                         <button onClick={() => setDeleteRole(role)} disabled={members > 0}
                           title={members > 0 ? 'Remove all users from this role before deleting it' : 'Delete role'}
                           className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-red-50 disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed">

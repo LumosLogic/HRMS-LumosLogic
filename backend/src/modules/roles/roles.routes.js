@@ -646,9 +646,11 @@ router.put('/:id/permissions', auth, hasPermission('roles', 'manage'), withBranc
     const safeIds = permission_ids.map(id => parseInt(id, 10));
 
     // Verify role belongs to this org
+    // is_system_role MUST be selected: the protection below tests it, and without the column it was always undefined, so
+    // the predefined roles (HR Admin / Department Head / Employee) could be rewritten through this endpoint.
     const { data: role } = await db
       .from('roles')
-      .select('id, name, slug')
+      .select('id, name, slug, is_system_role')
       .eq('id', roleId)
       .eq('org_id', oId)
       .maybeSingle();
@@ -844,6 +846,21 @@ router.post('/:id/members', auth, hasPermission('roles', 'manage'), withBranchCo
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
+      // Baseline preservation. A user with NO explicit role row gets their baseline permissions from users.role, but that
+      // fallback is dropped as soon as ANY explicit role exists (permissionService, BUG_161). Assigning a custom role to
+      // such a user would therefore silently strip their Employee/HR baseline. Materialise the baseline role first so the
+      // custom role is purely additive.
+      if (!role.is_system_role) {
+        const { rows: has } = await client.query('SELECT 1 FROM user_roles WHERE user_id = $1 AND org_id = $2 LIMIT 1', [userId, oId]);
+        if (!has.length) {
+          const baseSlug = user.role === 'admin' ? 'hr_admin' : user.role === 'root_admin' ? 'root_admin' : 'employee';
+          await client.query(
+            `INSERT INTO user_roles (user_id, role_id, org_id, assigned_by)
+             SELECT $1, id, $2, $3 FROM roles WHERE org_id = $2 AND is_system_role = true AND slug = $4
+             ON CONFLICT (user_id, role_id, org_id) DO NOTHING`,
+            [userId, oId, req.user.id, baseSlug]);
+        }
+      }
       const ins = await client.query(
         `INSERT INTO user_roles (user_id, role_id, org_id, assigned_by)
          VALUES ($1, $2, $3, $4)

@@ -24,7 +24,14 @@ export const ADMIN_PATH_PERMISSIONS = [
   ['/shifts',           ['shifts.view']],
   ['/documents',        ['documents.view']],
   ['/payroll',          ['payroll.view']],
-  ['/statutory',        ['payroll.view', 'statutory.view']],
+  // Payroll sub-pages need the permission their API needs (longest prefix wins). Single source for the sidebar AND the
+  // direct-URL guard — before, only the sidebar knew these, so /payroll/salary opened for any payroll.view holder.
+  ['/payroll/dashboard', ['payroll.view']],
+  ['/payroll/generate',  ['payroll.generate']],
+  ['/payroll/reports',   ['payroll.run_reports']],
+  ['/payroll/salary',    ['payroll.manage_structures']],
+  ['/payroll/settings',  ['payroll.manage_settings']],
+  ['/statutory',        ['statutory.view']],   // the statutory API is gated by statutory.view — payroll.view does not open it
   ['/assets',           ['assets.view']],
   ['/expenses',         ['expenses.approve', 'expenses.manage']],
   ['/reports',          ['reports.view']],
