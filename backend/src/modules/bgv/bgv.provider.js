@@ -10,7 +10,14 @@
  *   getReport({ candidateId, storedUrl })  -> { kind:'pdf', base64, fileName } | { kind:'url', url }
  *   createCandidate({ employee, packageIdentifier, reference })
  *        -> { candidateId, requestId?, providerStatus?, raw? }   (throws BgvProviderError)
- *   verifyWebhook(req)                     -> true | throws BgvProviderError (auth/signature check)
+ *   submitBgv({ employee, documents, reference })
+ *        -> { candidateId, requestId?, providerStatus?, raw? }   (throws BgvProviderError)
+ *        HRMS-side submission of employee data + approved HRMS documents. Optional: providers without it are
+ *        reported as "not supported". springverify's implementation fails closed (contract unconfirmed).
+ *   refreshStatus({ candidateId, requestId })
+ *        -> { providerStatus, raw? }   (throws BgvProviderError). Optional fallback to the webhook; springverify's
+ *        implementation fails closed (status contract unconfirmed, no network call).
+ *   verifyWebhook(req)                    -> true | throws BgvProviderError (auth/signature check)
  *   parseWebhook(req)                      -> { eventId, candidateId, providerStatus, reportUrl?, raw }
  *   mapStatus(providerStatus)              -> 'pending'|'in_progress'|'completed'|'failed'|'cancelled'|null
  *

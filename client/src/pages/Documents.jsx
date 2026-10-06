@@ -1722,19 +1722,129 @@ const BGV_BADGE = {
   cancelled:   { label: 'BGV Cancelled',   cls: 'bg-slate-50 text-slate-600 border-slate-200' },
 };
 
-function BgvCell({ employeeId, latest }) {
+// Review step before submit: employee data + approved HRMS documents; HR fills only what is missing.
+// The employee never interacts with SpringVerify. The server's submit step is fail-closed until the contract is confirmed.
+function BgvReviewModal({ employeeId, onClose }) {
   const toast = useToast();
   const qc = useQueryClient();
+  const [fields, setFields] = useState({});
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [blockedMsg, setBlockedMsg] = useState('');
+
+  const { data, isLoading, error } = useQuery({
+    queryKey: ['bgv-review', employeeId],
+    queryFn: () => apiGet(`/bgv/employees/${employeeId}/review`),
+  });
+
+  const submit = useMutation({
+    // BGV is per employee (covers all their documents), not per document.
+    mutationFn: () => apiPost(`/bgv/employees/${employeeId}/submit`, { fields }),
+    onSuccess: () => { toast('BGV submitted', 'success'); qc.invalidateQueries({ queryKey: ['bgv-requests'] }); onClose(); },
+    onError: (e) => { setBlockedMsg(e?.message || 'Could not submit BGV'); qc.invalidateQueries({ queryKey: ['bgv-review', employeeId] }); },
+  });
+
+  const emp = data?.employee;
+  const val = (k) => fields[k] ?? emp?.[k] ?? '';
+  // An editable missing field counts as filled once HR types a value; the server re-validates on submit.
+  const blockers = (data?.missing || []).filter(m => !m.editable || !String(fields[m.field] || '').trim());
+  const canConfirm = !!data && !submit.isPending && blockers.length === 0 && !data.active_request;
+
+  return (
+    <div className="fixed inset-0 z-[1100] flex items-center justify-center p-4"
+      style={{ background: 'rgba(4,6,14,.6)', backdropFilter: 'blur(8px)' }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="bg-white rounded-2xl shadow-2xl border border-[#c7c4d8] w-full max-w-xl max-h-[90vh] flex flex-col overflow-hidden">
+        <div className="flex items-center gap-3 px-5 py-4 border-b border-[#f0f3ff] flex-shrink-0">
+          <div className="w-9 h-9 rounded-xl bg-[#f0f3ff] flex items-center justify-center"><ShieldCheck size={16} className="text-[#3525cd]" /></div>
+          <div className="flex-1">
+            <p className="font-black text-[#151c27] text-sm">Background Verification — Review</p>
+            <p className="text-xs text-[#777587]">One check per employee · uses their approved HRMS documents</p>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg text-[#777587] hover:bg-[#f0f3ff]"><X size={18} /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {isLoading && <div className="loading"><div className="spinner" /> Loading…</div>}
+          {error && <p className="text-xs text-rose-600 font-semibold">{error.message || 'Could not load the review.'}</p>}
+          {data && (<>
+            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 font-semibold">
+              {data.submit_blocked_reason} The employee will not receive any SpringVerify email or form.
+            </div>
+
+            <div>
+              <p className="text-xs font-black text-[#151c27] mb-2">Employee</p>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div><p className="text-[#777587]">Name</p><p className="font-semibold text-[#151c27]">{emp.name || '—'}</p></div>
+                <div><p className="text-[#777587]">Email</p><p className="font-semibold text-[#151c27] break-all">{emp.email || '—'}</p></div>
+                {data.editable_fields.map(f => (
+                  <div key={f.key} className={f.key === 'address' ? 'col-span-2' : ''}>
+                    <label className="text-[#777587]">{f.label}{f.required && <span className="text-rose-500"> *</span>}</label>
+                    <input className="form-control text-xs mt-1" value={val(f.key)}
+                      onChange={e => setFields(p => ({ ...p, [f.key]: e.target.value }))} />
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <p className="text-xs font-black text-[#151c27] mb-2">Approved documents ({data.documents.length})</p>
+              {data.documents.length === 0
+                ? <p className="text-xs text-[#777587]">No approved documents yet.</p>
+                : <div className="divide-y divide-[#f0f3ff] border border-[#f0f3ff] rounded-xl">
+                    {data.documents.map(d => (
+                      <div key={d.submission_id} className="flex items-center justify-between gap-3 px-3 py-2">
+                        <div className="min-w-0">
+                          <p className="text-xs font-bold text-[#151c27] truncate">{d.requirement_name}</p>
+                          <p className="text-[0.65rem] text-[#9ca3af] truncate">{d.file_name || d.file_type || 'file'}</p>
+                        </div>
+                        <CheckCircle size={14} className="text-emerald-600 flex-shrink-0" />
+                      </div>
+                    ))}
+                  </div>}
+            </div>
+
+            {blockers.length > 0 && (
+              <div className="p-3 rounded-xl bg-rose-50 border border-rose-200">
+                <p className="text-xs font-black text-rose-700 mb-1">Missing information</p>
+                <ul className="list-disc pl-4 text-xs text-rose-700 space-y-0.5">
+                  {blockers.map(m => <li key={m.field}>{m.reason}</li>)}
+                </ul>
+              </div>
+            )}
+            {data.active_request && <p className="text-xs text-blue-700 font-semibold">A BGV is already active for this employee.</p>}
+            {blockedMsg && <p className="text-xs text-rose-600 font-semibold">{blockedMsg}</p>}
+          </>)}
+        </div>
+
+        <div className="flex gap-3 px-5 py-4 border-t border-[#f0f3ff] flex-shrink-0">
+          <button className="btn btn-secondary flex-1" onClick={onClose}>Close</button>
+          <button className="btn btn-primary flex-1" disabled={!canConfirm}
+            onClick={() => { setBlockedMsg(''); setConfirmOpen(true); }}>
+            {submit.isPending ? 'Submitting…' : 'Confirm & Submit'}
+          </button>
+        </div>
+      </div>
+      <ConfirmModal open={confirmOpen} variant="warning" title="Submit BGV for this employee?" confirmLabel="Submit"
+        message="BGV verification may incur a charge. Do you want to continue?"
+        onConfirm={() => { setConfirmOpen(false); submit.mutate(); }} onCancel={() => setConfirmOpen(false)} />
+    </div>
+  );
+}
+
+function BgvCell({ employeeId, latest }) {
+  const toast = useToast();
+  const [reviewOpen, setReviewOpen] = useState(false);
   const active = latest && (latest.status === 'pending' || latest.status === 'in_progress');
   const badge = latest && BGV_BADGE[latest.status];
+  const qc = useQueryClient();
 
-  const run = useMutation({
-    // BGV is per employee (covers all their documents), not per document.
-    mutationFn: () => apiPost('/bgv/requests', { employee_id: employeeId }),
-    onSuccess: () => { toast('BGV request submitted', 'success'); qc.invalidateQueries({ queryKey: ['bgv-requests'] }); },
-    onError: (e) => { toast(e?.message || 'Could not start BGV', 'error'); qc.invalidateQueries({ queryKey: ['bgv-requests'] }); },
+  // Fallback to the webhook. The server is fail-closed until SpringVerify's status contract is confirmed.
+  const refresh = useMutation({
+    mutationFn: () => apiPost(`/bgv/requests/${latest.id}/refresh`, {}),
+    onSuccess: () => { toast('Status refreshed', 'success'); qc.invalidateQueries({ queryKey: ['bgv-requests'] }); },
+    onError: (e) => toast(e?.message || 'Could not refresh status', 'error'),
   });
+
   const openReport = async () => {
     try {
       const r = await apiGet(`/bgv/requests/${latest.id}/report`);
@@ -1755,18 +1865,22 @@ function BgvCell({ employeeId, latest }) {
         <span className={`inline-flex px-2 py-0.5 rounded-full text-[0.65rem] font-bold border ${badge.cls}`}
               title={latest.status === 'failed' ? (latest.error_message || '') : undefined}>{badge.label}</span>
       )}
+      {active && (
+        <button onClick={() => refresh.mutate()} disabled={refresh.isPending}
+          className="text-[0.65rem] font-bold text-[#3525cd] hover:underline disabled:opacity-50">
+          {refresh.isPending ? 'Refreshing…' : 'Refresh Status'}
+        </button>
+      )}
       {latest?.status === 'completed' && latest.has_report && (
         <button onClick={openReport} className="text-[0.65rem] font-bold text-[#3525cd] hover:underline">View report</button>
       )}
       {!active && (
-        <button onClick={() => setConfirmOpen(true)} disabled={run.isPending}
-          className="px-2.5 py-1 rounded-lg text-[0.65rem] font-bold border border-[#3525cd] text-[#3525cd] hover:bg-[#f0f3ff] disabled:opacity-50">
+        <button onClick={() => setReviewOpen(true)}
+          className="px-2.5 py-1 rounded-lg text-[0.65rem] font-bold border border-[#3525cd] text-[#3525cd] hover:bg-[#f0f3ff]">
           {latest?.status === 'failed' || latest?.status === 'cancelled' ? 'Retry BGV' : 'Run BGV'}
         </button>
       )}
-      <ConfirmModal open={confirmOpen} variant="warning" title="Run BGV for this employee?" confirmLabel="Continue"
-        message="BGV verification may incur a charge. Do you want to continue?"
-        onConfirm={() => run.mutate()} onCancel={() => setConfirmOpen(false)} />
+      {reviewOpen && <BgvReviewModal employeeId={employeeId} onClose={() => setReviewOpen(false)} />}
     </div>
   );
 }
@@ -2582,6 +2696,14 @@ function EmployeeDocumentsDashboard() {
   const [viewSub, setViewSub]     = useState(null);
   const [preview, setPreview]     = useState(null);
 
+  // Own BGV status (status only). Hidden entirely unless the org has BGV on and a request exists.
+  const bgvOn = useFeature('bgv');
+  const { data: myBgv } = useQuery({
+    queryKey: ['bgv-my-status'], enabled: bgvOn, refetchInterval: 60000,
+    queryFn: () => apiGet('/bgv/my-status'),
+  });
+  const myBgvBadge = myBgv?.request && BGV_BADGE[myBgv.request.status];
+
   const { data: requirements = [], isLoading } = useQuery({
     queryKey: ['doc-requirements-my'],
     queryFn:  () => apiGet('/doc-requirements'),
@@ -2666,6 +2788,16 @@ function EmployeeDocumentsDashboard() {
           </button>
         )}
       </div>
+
+      {myBgvBadge && (
+        <div className="bg-white rounded-xl border border-[#c7c4d8] px-5 py-3 mb-5 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-sm font-black text-[#151c27]">Background Verification</p>
+            <p className="text-[0.7rem] text-[#777587]">Managed by HR using your approved documents.</p>
+          </div>
+          <span className={`inline-flex px-2 py-0.5 rounded-full text-[0.65rem] font-bold border ${myBgvBadge.cls}`}>{myBgvBadge.label}</span>
+        </div>
+      )}
 
       {/* Stats + Completion Ring */}
       {totalRequired > 0 && (

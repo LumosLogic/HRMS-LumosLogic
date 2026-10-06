@@ -18,6 +18,8 @@ process.env.PAYROLL_SCHEDULER_ENABLED = 'false';
 // Hermetic: never let real SpringVerify credentials from .env reach this test (no live calls, ever).
 for (const k of ['SPRINGVERIFY_BASE_URL', 'SPRINGVERIFY_API_TOKEN', 'SPRINGVERIFY_PACKAGE_IDENTIFIER']) delete process.env[k];
 process.env.BGV_PROVIDER_MODE = 'mock';
+// The legacy invite route is disabled by default in the app; these older tests exercise it, so opt in here only.
+process.env.BGV_LEGACY_INVITE_ENABLED = 'true';
 process.env.SPRINGVERIFY_WEBHOOK_SECRET = 'whsec-test';
 delete process.env.NODE_ENV;
 
@@ -422,6 +424,114 @@ const bgvRow = (id) => one('SELECT * FROM bgv_requests WHERE id=$1', [id]);
     const n = (await S(`SELECT count(*)::int c FROM bgv_requests WHERE employee_doc_submission_id IN ($1,$2) AND requested_by IS NULL`, [ID.sub, ID.subB]))[0].c;
     assert.strictEqual(n, 0);
   });
+
+  console.log('\nScaffold: legacy disabled / review / submit / refresh (fail-closed, no network)');
+  {
+    const realFetch = global.fetch; const outbound = [];
+    global.fetch = async (url, opts) => {
+      if (/springverify\.com/i.test(String(url))) { outbound.push(String(url)); throw new Error('NO NETWORK ALLOWED IN SCAFFOLD TESTS'); }
+      return realFetch(url, opts);
+    };
+    Object.assign(process.env, { BGV_PROVIDER_MODE: 'springverify', SPRINGVERIFY_BASE_URL: 'https://api-acceptance-2-sa.in.springverify.com',
+      SPRINGVERIFY_API_TOKEN: 'tok-secret', SPRINGVERIFY_PACKAGE_IDENTIFIER: '525' });
+    await setFlag(ID.orgA, true);
+    const count = async () => (await S('SELECT 1 FROM bgv_requests WHERE organization_id=$1', [ID.orgA])).length;
+
+    await t('legacy POST /requests is disabled by default (410): no provider call, no row, even for a fully configured springverify', async () => {
+      delete process.env.BGV_LEGACY_INVITE_ENABLED;
+      const n = await count();
+      const r = await call('POST', '/api/bgv/requests', { as: ID.root, body: { employee_id: ID.empB } });
+      process.env.BGV_LEGACY_INVITE_ENABLED = 'true';
+      assert.strictEqual(r.status, 410); assert.strictEqual(r.body.code, 'LEGACY_INVITE_DISABLED');
+      assert.strictEqual(await count(), n); assert.deepStrictEqual(outbound, []);
+    });
+
+    await t('review: only APPROVED docs, no file URLs, employee-level, submit not enabled', async () => {
+      const r = await call('GET', `/api/bgv/employees/${ID.empB}/review`, { as: ID.root });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+      assert.strictEqual(r.body.documents.length, 1); assert.strictEqual(Number(r.body.documents[0].submission_id), ID.subB);
+      assert.ok(!JSON.stringify(r.body).includes('http://x'), 'file_url must not reach the browser');
+      assert.strictEqual(r.body.ready, true); assert.strictEqual(r.body.submit_enabled, false);
+      const d = await call('GET', `/api/bgv/employees/${ID.empD}/review`, { as: ID.root }); // its only doc is rejected
+      assert.strictEqual(d.body.documents.length, 0); assert.strictEqual(d.body.ready, false);
+      assert.ok(d.body.missing.some(m => m.field === 'documents'));
+    });
+
+    await t('review/submit RBAC: employee 403, HR of other branch 403, other org 403, BGV off 403', async () => {
+      for (const [m, u] of [['GET', `/api/bgv/employees/${ID.empB}/review`], ['POST', `/api/bgv/employees/${ID.empB}/submit`]]) {
+        assert.strictEqual((await call(m, u, { as: ID.empB })).status, 403);
+        assert.strictEqual((await call(m, u, { as: ID.hrD })).status, 403, 'Dalal HR vs Bhuj employee');
+        assert.strictEqual((await call(m, u, { as: ID.rootB })).status, 403);
+      }
+      assert.strictEqual((await call('GET', `/api/bgv/employees/${ID.empB}/review`)).status, 401);
+      await setFlag(ID.orgA, false);
+      assert.strictEqual((await call('GET', `/api/bgv/employees/${ID.empB}/review`, { as: ID.root })).status, 403);
+      await setFlag(ID.orgA, true);
+    });
+
+    await t('submit is FAIL-CLOSED (501): no network, no bgv_requests row, HR edits NOT saved to the profile, audited', async () => {
+      const before = await one('SELECT phone, address, date_of_birth FROM users WHERE id=$1', [ID.empB]);
+      const n = await count();
+      const r = await call('POST', `/api/bgv/employees/${ID.empB}/submit`, { as: ID.hrB,
+        body: { fields: { phone: '8888888888', address: 'Temp address', date_of_birth: '1990-01-01', is_admin: true } } });
+      assert.strictEqual(r.status, 501, JSON.stringify(r.body)); assert.strictEqual(r.body.code, 'SUBMIT_CONTRACT_NOT_CONFIRMED');
+      assert.deepStrictEqual(outbound, []); assert.strictEqual(await count(), n);
+      assert.deepStrictEqual(await one('SELECT phone, address, date_of_birth FROM users WHERE id=$1', [ID.empB]), before);
+      assert.ok(await one(`SELECT 1 x FROM bgv_events WHERE event_type='submit_blocked' AND actor_id=$1`, [ID.hrB]));
+    });
+
+    await t('submit with missing info / no approved docs => 400 listing what is missing (nothing sent)', async () => {
+      const r = await call('POST', `/api/bgv/employees/${ID.empD}/submit`, { as: ID.root, body: {} });
+      assert.strictEqual(r.status, 400); assert.ok(r.body.missing.some(m => m.field === 'documents'));
+      assert.deepStrictEqual(outbound, []);
+    });
+
+    await t('submit in mock mode (no submitBgv) is also blocked 501', async () => {
+      process.env.BGV_PROVIDER_MODE = 'mock';
+      const r = await call('POST', `/api/bgv/employees/${ID.empB}/submit`, { as: ID.root, body: {} });
+      process.env.BGV_PROVIDER_MODE = 'springverify';
+      assert.strictEqual(r.status, 501); assert.strictEqual(r.body.code, 'SUBMIT_CONTRACT_NOT_CONFIRMED');
+    });
+
+    let activeId;
+    await t('refresh is FAIL-CLOSED (501): no network, request state untouched, audited', async () => {
+      activeId = Number((await one(`INSERT INTO bgv_requests (organization_id, employee_id, provider, provider_candidate_id, status, provider_status)
+        VALUES ($1,$2,'springverify','888001','in_progress','0') RETURNING id`, [ID.orgA, ID.empB])).id);
+      const r = await call('POST', `/api/bgv/requests/${activeId}/refresh`, { as: ID.hrB });
+      assert.strictEqual(r.status, 501, JSON.stringify(r.body)); assert.strictEqual(r.body.code, 'STATUS_CONTRACT_NOT_CONFIRMED');
+      assert.deepStrictEqual(outbound, []);
+      const row = await bgvRow(activeId); assert.strictEqual(row.status, 'in_progress'); assert.strictEqual(row.provider_status, '0');
+      assert.ok(await one(`SELECT 1 x FROM bgv_events WHERE bgv_request_id=$1 AND event_type='refresh_blocked'`, [activeId]));
+    });
+    await t('refresh RBAC/scope: employee 403, other-branch HR 404, other org 403, unauth 401, BGV off 403', async () => {
+      assert.strictEqual((await call('POST', `/api/bgv/requests/${activeId}/refresh`, { as: ID.empB })).status, 403);
+      assert.strictEqual((await call('POST', `/api/bgv/requests/${activeId}/refresh`, { as: ID.hrD })).status, 404);
+      assert.strictEqual((await call('POST', `/api/bgv/requests/${activeId}/refresh`, { as: ID.rootB })).status, 403);
+      assert.strictEqual((await call('POST', `/api/bgv/requests/${activeId}/refresh`)).status, 401);
+      await setFlag(ID.orgA, false);
+      assert.strictEqual((await call('POST', `/api/bgv/requests/${activeId}/refresh`, { as: ID.root })).status, 403);
+      await setFlag(ID.orgA, true);
+    });
+    await t('refresh of a finished BGV => 409; webhook still applies (unchanged logic)', async () => {
+      process.env.SPRINGVERIFY_WEBHOOK_SECRET = 'whsec-sv';
+      const w = await call('POST', '/api/bgv/webhook', { body: { candidate_id: 888001, overall_status_code: 1 }, headers: { authorization: 'Bearer whsec-sv' } });
+      assert.strictEqual(w.status, 200); assert.strictEqual((await bgvRow(activeId)).status, 'completed');
+      assert.strictEqual((await call('POST', `/api/bgv/requests/${activeId}/refresh`, { as: ID.root })).status, 409);
+    });
+
+    await t('employee my-status: own latest status only (no error/report/provider fields); BGV off => enabled:false', async () => {
+      const r = await call('GET', '/api/bgv/my-status', { as: ID.empB });
+      assert.strictEqual(r.body.enabled, true); assert.deepStrictEqual(Object.keys(r.body.request).sort(), ['completed_at', 'requested_at', 'status']);
+      await setFlag(ID.orgA, false);
+      assert.strictEqual((await call('GET', '/api/bgv/my-status', { as: ID.empB })).body.enabled, false);
+      await setFlag(ID.orgA, true);
+    });
+
+    assert.deepStrictEqual(outbound, [], 'no outbound SpringVerify request happened anywhere in the scaffold tests');
+    global.fetch = realFetch;
+    process.env.BGV_PROVIDER_MODE = 'mock';
+    for (const k of ['SPRINGVERIFY_BASE_URL', 'SPRINGVERIFY_API_TOKEN', 'SPRINGVERIFY_PACKAGE_IDENTIFIER']) delete process.env[k];
+  }
 
   server.close();
   await cleanup();

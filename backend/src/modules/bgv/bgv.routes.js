@@ -2,7 +2,10 @@
  * bgv.routes.js — Background Verification (SpringVerify) — ADDITIVE module, mounted at /api/bgv.
  *
  *   GET  /requests                list BGV requests for employees the caller may access
- *   POST /requests                start a (paid) BGV for one employee            [feature `bgv` must be ON]
+ *   POST /requests                LEGACY invite-based start — DISABLED unless BGV_LEGACY_INVITE_ENABLED=true
+ *   GET  /employees/:id/review    employee-level review data (approved HRMS documents)
+ *   POST /employees/:id/submit    HRMS→SpringVerify submit — fail-closed until the contract is confirmed
+ *   POST /requests/:id/refresh    status refresh — fail-closed until the contract is confirmed
  *   GET  /requests/:id            one request
  *   GET  /requests/:id/report     authorised access to the report URL (audited)
  *   POST /webhook                 provider callback (authenticated by the provider's own scheme)
@@ -18,6 +21,7 @@ const { auth } = require('../../middleware/auth');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
 const { getProvider, BgvProviderError } = require('./bgv.provider');
+const { prepareEmployeeBgv, toReviewView } = require('./bgv.prepare');
 
 const ACTIVE = ['pending', 'in_progress'];
 const TERMINAL = ['completed', 'failed', 'cancelled'];
@@ -119,7 +123,15 @@ router.get('/requests/:id/report', auth, requireAdmin, withBranchContext, async 
 });
 
 // ── POST /requests  (start BGV — paid, manual only) ─────────────────────────────
+// DISABLED BY DEFAULT. This is the legacy invite flow: createCandidate() makes SpringVerify email the employee a form
+// link, which the HRMS-submit flow forbids. The code is kept (not deleted) but unreachable unless a server operator
+// deliberately sets BGV_LEGACY_INVITE_ENABLED=true. Use POST /employees/:employeeId/submit instead.
+const legacyInviteEnabled = () => String(process.env.BGV_LEGACY_INVITE_ENABLED || '').trim().toLowerCase() === 'true';
 router.post('/requests', auth, requireAdmin, withBranchContext, async (req, res) => {
+  if (!legacyInviteEnabled()) {
+    return res.status(410).json({ code: 'LEGACY_INVITE_DISABLED',
+      error: 'This BGV start method is disabled. Use the BGV review flow instead.' });
+  }
   const oId = req.user.organization_id;
   try {
     if (!(await isBgvEnabled(oId))) return res.status(403).json({ error: 'BGV is not enabled for your organization.' });
@@ -208,6 +220,139 @@ router.post('/requests', auth, requireAdmin, withBranchContext, async (req, res)
   } catch (err) {
     console.error('[bgv] start failed:', err.message);
     res.status(500).json({ error: 'Failed to start BGV' });
+  }
+});
+
+// ── Employee-level review + submit (HRMS → SpringVerify) ────────────────────────
+// Scaffold: the review data is real; the submit step is FAIL-CLOSED until SpringVerify's submit contract is
+// confirmed (provider.submitBgv throws SUBMIT_CONTRACT_NOT_CONFIRMED and makes no network call). No bgv_requests
+// row is reserved here, so a blocked attempt leaves nothing stuck as "pending".
+const CONTRACT_BLOCKED = { code: 'SUBMIT_CONTRACT_NOT_CONFIRMED',
+  error: 'BGV submission to SpringVerify is not enabled yet — the SpringVerify submit contract has not been confirmed. Nothing was sent.' };
+
+async function loadEmployeeGuard(req, res) {
+  const oId = req.user.organization_id;
+  if (!(await isBgvEnabled(oId))) { res.status(403).json({ error: 'BGV is not enabled for your organization.' }); return null; }
+  const employeeId = Number(req.params.employeeId);
+  if (!Number.isInteger(employeeId) || employeeId <= 0) { res.status(400).json({ error: 'Invalid employee' }); return null; }
+  if (!(await canAdminAccessUser(req.branchContext, employeeId, oId))) {
+    res.status(403).json({ error: 'You do not have access to this employee.' }); return null;
+  }
+  return { oId, employeeId };
+}
+
+// GET /employees/:employeeId/review — employee data + approved documents + what is missing
+router.get('/employees/:employeeId/review', auth, requireAdmin, withBranchContext, async (req, res) => {
+  try {
+    const g = await loadEmployeeGuard(req, res); if (!g) return;
+    const prepared = await prepareEmployeeBgv(pool, { orgId: g.oId, employeeId: g.employeeId });
+    if (!prepared) return res.status(404).json({ error: 'Employee not found' });
+    const { rows: active } = await pool.query(
+      `SELECT ${PUBLIC_COLS} FROM bgv_requests
+        WHERE organization_id = $1 AND employee_id = $2 AND status = ANY($3) ORDER BY created_at DESC LIMIT 1`,
+      [g.oId, g.employeeId, ACTIVE]);
+    res.json({ ...toReviewView(prepared), active_request: active[0] || null,
+               submit_enabled: false, submit_blocked_reason: CONTRACT_BLOCKED.error });
+  } catch (err) {
+    console.error('[bgv] review failed:', err.message);
+    res.status(500).json({ error: 'Failed to load BGV review' });
+  }
+});
+
+// POST /employees/:employeeId/submit — body { fields?: { phone?, date_of_birth?, address? } }
+router.post('/employees/:employeeId/submit', auth, requireAdmin, withBranchContext, async (req, res) => {
+  try {
+    const g = await loadEmployeeGuard(req, res); if (!g) return;
+
+    let provider;
+    try { provider = getProvider(); }
+    catch (e) { console.error('[bgv] provider unavailable:', e.code); return res.status(503).json({ error: 'BGV service is not configured. Please contact support.' }); }
+
+    // One BGV per employee: refuse while one is active.
+    const { rows: active } = await pool.query(
+      `SELECT ${PUBLIC_COLS} FROM bgv_requests
+        WHERE organization_id = $1 AND employee_id = $2 AND provider = $3 AND status = ANY($4) LIMIT 1`,
+      [g.oId, g.employeeId, provider.name, ACTIVE]);
+    if (active.length) return res.status(409).json({ error: 'A BGV request is already active for this employee.', existing: active[0] });
+
+    const prepared = await prepareEmployeeBgv(pool, { orgId: g.oId, employeeId: g.employeeId, overrides: req.body?.fields });
+    if (!prepared) return res.status(404).json({ error: 'Employee not found' });
+    if (!prepared.ready) return res.status(400).json({ error: 'Required information is missing.', missing: prepared.missing });
+
+    const blocked = async () => {
+      await audit(pool, { orgId: g.oId, requestId: null, provider: provider.name, type: 'submit_blocked', actorId: req.user.id,
+                          payload: { employee_id: g.employeeId, documents: prepared.documents.length, reason: CONTRACT_BLOCKED.code } }).catch(() => {});
+      return res.status(501).json(CONTRACT_BLOCKED);
+    };
+    if (typeof provider.submitBgv !== 'function') return blocked();
+    try {
+      await provider.submitBgv({ employee: prepared.employee, documents: prepared.documents, reference: `emp-${g.employeeId}` });
+    } catch (e) {
+      if (e instanceof BgvProviderError && e.code === 'SUBMIT_CONTRACT_NOT_CONFIRMED') return blocked();
+      console.error('[bgv] submit failed:', e.code || e.message);
+      return res.status(502).json({ error: 'Could not submit the BGV request. Please try again later.' });
+    }
+    // Unreachable until a real submitBgv exists. Persisting the request (reserve slot BEFORE the paid call, store
+    // candidate id, map status) must be written together with the real contract — never report success here.
+    console.error('[bgv] submitBgv returned but result handling is not implemented');
+    return res.status(501).json(CONTRACT_BLOCKED);
+  } catch (err) {
+    console.error('[bgv] submit failed:', err.message);
+    res.status(500).json({ error: 'Failed to submit BGV' });
+  }
+});
+
+// POST /requests/:id/refresh — pull the latest status from the provider (fallback to the webhook).
+// Scaffold: provider.refreshStatus() FAILS CLOSED (no network call) until the status contract is confirmed.
+const REFRESH_BLOCKED = { code: 'STATUS_CONTRACT_NOT_CONFIRMED',
+  error: 'Refreshing status from SpringVerify is not enabled yet — the SpringVerify status contract has not been confirmed. Nothing was sent.' };
+router.post('/requests/:id/refresh', auth, requireAdmin, withBranchContext, async (req, res) => {
+  try {
+    if (!(await isBgvEnabled(req.user.organization_id))) return res.status(403).json({ error: 'BGV is not enabled for your organization.' });
+    const r = await loadScopedRequest(req, req.params.id);
+    if (!r) return res.status(404).json({ error: 'BGV request not found' });
+    if (TERMINAL.includes(r.status)) return res.status(409).json({ error: 'This BGV is already finished.' });
+    if (!r.provider_candidate_id) return res.status(409).json({ error: 'This BGV has no provider reference to refresh.' });
+
+    let provider;
+    try { provider = getProvider(); if (provider.name !== r.provider) throw new Error('provider mismatch'); }
+    catch { return res.status(503).json({ error: 'BGV service is not configured. Please contact support.' }); }
+
+    const blocked = async () => {
+      await audit(pool, { orgId: r.organization_id, requestId: r.id, provider: r.provider, type: 'refresh_blocked',
+                          actorId: req.user.id, payload: { reason: REFRESH_BLOCKED.code } }).catch(() => {});
+      return res.status(501).json(REFRESH_BLOCKED);
+    };
+    if (typeof provider.refreshStatus !== 'function') return blocked();
+    try {
+      await provider.refreshStatus({ candidateId: r.provider_candidate_id, requestId: r.provider_request_id });
+    } catch (e) {
+      if (e instanceof BgvProviderError && e.code === 'STATUS_CONTRACT_NOT_CONFIRMED') return blocked();
+      console.error('[bgv] refresh failed:', e.code || e.message);
+      return res.status(502).json({ error: 'Could not refresh the status right now. Please try again later.' });
+    }
+    // Unreachable until a real refreshStatus exists. Applying the result (map status, same terminal guard as the
+    // webhook) must be written together with the real contract — never change state from here without it.
+    console.error('[bgv] refreshStatus returned but result handling is not implemented');
+    return res.status(501).json(REFRESH_BLOCKED);
+  } catch (err) {
+    console.error('[bgv] refresh failed:', err.message);
+    res.status(500).json({ error: 'Failed to refresh BGV status' });
+  }
+});
+
+// GET /my-status — the signed-in employee's OWN latest BGV status (status only; no report, no error detail)
+router.get('/my-status', auth, async (req, res) => {
+  try {
+    const oId = req.user.organization_id;
+    if (!(await isBgvEnabled(oId))) return res.json({ enabled: false });
+    const { rows } = await pool.query(
+      `SELECT status, requested_at, completed_at FROM bgv_requests
+        WHERE organization_id = $1 AND employee_id = $2 ORDER BY created_at DESC LIMIT 1`, [oId, req.user.id]);
+    res.json({ enabled: true, request: rows[0] || null });
+  } catch (err) {
+    console.error('[bgv] my-status failed:', err.message);
+    res.status(500).json({ error: 'Failed to load BGV status' });
   }
 });
 

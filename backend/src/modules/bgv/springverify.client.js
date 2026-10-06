@@ -130,6 +130,25 @@ module.exports = {
     };
   },
 
+  /**
+   * HRMS-submitted BGV (employee data + approved HRMS documents, no SpringVerify email/form for the employee).
+   * FAILS CLOSED: the official submit contract (endpoint, payload, document format, consent, package fields,
+   * no-invite candidate creation) has not been confirmed, so this makes NO network call and never reaches a paid API.
+   * Do not implement from guesswork — replace the body only once the contract is supplied. Until then
+   * createCandidate() above remains the (invite-based) legacy path and is not used by the review flow.
+   */
+  async submitBgv(/* { employee, documents, reference } */) {
+    throw new BgvProviderError('SUBMIT_CONTRACT_NOT_CONFIRMED', 'SpringVerify submit contract not confirmed');
+  },
+
+  /**
+   * Fallback status pull (the webhook is the primary channel). FAILS CLOSED: the official status endpoint/response
+   * contract has not been confirmed, so this makes NO network call. Replace the body only once it is supplied.
+   */
+  async refreshStatus(/* { candidateId, requestId } */) {
+    throw new BgvProviderError('STATUS_CONTRACT_NOT_CONFIRMED', 'SpringVerify status contract not confirmed');
+  },
+
   /** Report PDF is fetched on demand (webhook report_url expires). Returns base64 for the authenticated HRMS user. */
   async getReport({ candidateId }) {
     const json = await request('GET', '/external/v1/candidate/report/pdf', {
