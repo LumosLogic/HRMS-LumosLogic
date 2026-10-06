@@ -9,6 +9,17 @@ const { withBranchContext } = require('../../middleware/branchContext');
 const { getFilterState, getBranchUserSQLFilter, resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
 const { validateBranchAccess, getUserBranchAccess } = require('../../services/branchService');
 const { calculatePayroll, PayrollError } = require('../../services/payrollEngine');
+const { computeProbationDates } = require('../../utils/employeeStatus');
+
+// users.ctc / users.salary_effective_date are only a display cache of the ACTIVE employee_salary_structures row
+// (payroll never reads them). Keep the cache in step so the Employees/Profile screens cannot show a different salary.
+async function syncUserSalaryCache(oId, userId, rec) {
+  if (!rec || rec.ctc == null) return;
+  try {
+    await pool.query('UPDATE users SET ctc = $3, salary_effective_date = $4 WHERE id = $1 AND organization_id = $2',
+      [userId, oId, rec.ctc, rec.effective_from]);
+  } catch (e) { console.error('[payroll] syncUserSalaryCache:', e.message); }
+}
 const {
   generatePayrollRun,
   generateEmployeePayslip,
@@ -285,11 +296,7 @@ router.post('/apply-probation-bulk', auth, hasPermission('payroll', 'manage_sett
     let setToProbation = 0, setToActive = 0;
 
     for (const emp of employees) {
-      const startDate = emp.resolved_joining_date.slice(0, 10);
-
-      const endD = new Date(startDate + 'T12:00:00Z');
-      endD.setMonth(endD.getMonth() + months);
-      const endDate = endD.toISOString().split('T')[0];
+      const { start: startDate, end: endDate } = computeProbationDates(emp.resolved_joining_date, months);
 
       if (endDate > today) {
         // Still within probation window
@@ -616,6 +623,8 @@ router.post('/salary-structures', auth, hasPermission('payroll', 'manage_structu
       ip: req.ip,
     });
 
+    await syncUserSalaryCache(oId, user_id, newRecord);
+
     // Notify the employee their compensation has changed (fire-and-forget)
     db.from('notifications').insert({
       user_id:         parseInt(user_id),
@@ -734,6 +743,8 @@ router.put('/salary-structures/:id', auth, hasPermission('payroll', 'manage_stru
       newValues: updated[0],
       ip: req.ip,
     });
+
+    await syncUserSalaryCache(oId, existing[0].user_id, updated[0]);
 
     // Bug-101: notify employee of salary correction (fire-and-forget)
     db.from('notifications').insert({
@@ -2382,6 +2393,12 @@ router.get('/reports/adjustments', auth, hasPermission('payroll', 'run_reports')
 // PHASE 3.6F — BANK TRANSFER FILES
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// NOTE: declared BEFORE /bank-file/:runId — otherwise 'formats' is captured as a runId (NaN → 400).
+// GET /api/payroll/bank-file/formats — list supported formats
+router.get('/bank-file/formats', auth, hasPermission('payroll', 'bank_files'), (req, res) => {
+  res.json({ formats: SUPPORTED_FORMATS });
+});
+
 // GET /api/payroll/bank-file/:runId?format=generic|hdfc|icici|sbi|axis
 router.get('/bank-file/:runId', auth, hasPermission('payroll', 'bank_files'), async (req, res) => {
   try {
@@ -2412,9 +2429,5 @@ router.get('/bank-file/:runId', auth, hasPermission('payroll', 'bank_files'), as
   } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
 });
 
-// GET /api/payroll/bank-file/formats — list supported formats
-router.get('/bank-file/formats', auth, hasPermission('payroll', 'bank_files'), (req, res) => {
-  res.json({ formats: SUPPORTED_FORMATS });
-});
 
 module.exports = router;

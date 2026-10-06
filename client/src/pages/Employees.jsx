@@ -2384,7 +2384,8 @@ export default function Employees() {
   const isRootPage = location.pathname.startsWith('/root/');
 
   // BUG_059: default status filter — show active + probation, hide inactive/resigned/terminated
-  const DEFAULT_STATUS_FILTER = new Set(['active', 'probation']);
+  // on_leave is a working-headcount status (backend treats it as active everywhere) — it must not vanish from the default list.
+  const DEFAULT_STATUS_FILTER = new Set(['active', 'probation', 'on_leave']);
 
   // Search / filter / sort / view / selection state
   const [search,        setSearch]       = useState('');
@@ -2741,6 +2742,7 @@ export default function Employees() {
           const ALL_EMP_STATUSES = [
             { value: 'active',     label: 'Active'     },
             { value: 'probation',  label: 'Probation'  },
+            { value: 'on_leave',   label: 'On Leave'   },
             { value: 'inactive',   label: 'Inactive'   },
             { value: 'resigned',   label: 'Resigned'   },
             { value: 'terminated', label: 'Terminated' },

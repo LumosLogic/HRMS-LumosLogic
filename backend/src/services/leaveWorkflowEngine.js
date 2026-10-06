@@ -345,7 +345,45 @@ async function updateWorkflow(oId, workflowName, newLevels) {
   return getOrgWorkflow(oId);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// reresolvePendingApprovers
+// A leave stores its current approver (a user id) at submission. When the employee's manager, department or the
+// department head changes, in-flight leaves whose CURRENT level is person-based (reporting_manager /
+// department_head) must follow the change, otherwise the old person keeps the approval and the new one never
+// sees it. Unresolvable ⇒ NULL, which the existing fallback (BUG_169) turns into "any HR/Root admin may act", so
+// a request can never dead-end. employeeIds = null → every pending leave of the org.
+// ─────────────────────────────────────────────────────────────────────────────
+async function reresolvePendingApprovers(oId, employeeIds = null) {
+  const params = [oId];
+  let filter = '';
+  if (Array.isArray(employeeIds)) {
+    if (!employeeIds.length) return 0;
+    params.push(employeeIds.map(Number));
+    filter = 'AND l.user_id = ANY($2::bigint[])';
+  }
+  const { rows } = await pool.query(
+    `SELECT l.id, l.user_id, l.current_approver_id, wl.role_type, wl.role_reference, wl.level_label
+       FROM leaves l
+       JOIN leave_workflow_levels wl ON wl.workflow_id = l.workflow_id AND wl.level_number = l.current_level
+      WHERE l.organization_id = $1 AND l.status = 'pending_approval'
+        AND wl.role_type IN ('reporting_manager','department_head') ${filter}`, params);
+  let changed = 0;
+  for (const r of rows) {
+    const { userId } = await resolveApprover(r, r.user_id, oId);
+    if (String(userId ?? '') === String(r.current_approver_id ?? '')) continue;
+    await pool.query('UPDATE leaves SET current_approver_id = $1 WHERE id = $2 AND organization_id = $3', [userId, r.id, oId]);
+    if (userId) {
+      await pool.query(
+        `INSERT INTO notifications (user_id, title, message, type, organization_id) VALUES ($1,$2,$3,'leave',$4)`,
+        [userId, 'Leave Request Awaiting Your Approval', 'A pending leave request was re-assigned to you after an organisation change.', oId]).catch(() => {});
+    }
+    changed++;
+  }
+  return changed;
+}
+
 module.exports = {
+  reresolvePendingApprovers,
   getOrgWorkflow,
   resolveApprover,
   canUserApproveLevel,

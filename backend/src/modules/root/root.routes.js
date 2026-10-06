@@ -222,7 +222,7 @@ router.get('/dashboard', auth, rootAdminOnly, withBranchContext, async (req, res
       empIds.length === 0
         ? Promise.resolve({ count: 0 })
         : db.from('leaves').select('*', { count: 'exact', head: true })
-            .in('status', ['pending', 'pending_root', 'pending_approval'])
+            .in('status', ['pending', 'pending_dept', 'pending_root', 'pending_approval'])  // same set as the HR dashboard / Pending Approvals page
             .eq('organization_id', oid).in('user_id', empIds),
       empIds.length === 0
         ? Promise.resolve({ data: [] })
@@ -235,7 +235,7 @@ router.get('/dashboard', auth, rootAdminOnly, withBranchContext, async (req, res
         : db.from('leaves')
             .select('id, leave_type, leave_time, status, start_date, end_date, reason, created_at, users!leaves_user_id_fkey(name, email, department, avatar_color)')
             .eq('organization_id', oid).in('user_id', empIds)
-            .in('status', ['pending', 'pending_root', 'pending_approval'])
+            .in('status', ['pending', 'pending_dept', 'pending_root', 'pending_approval'])  // same set as the HR dashboard / Pending Approvals page
             .order('created_at', { ascending: false }).limit(15),
       empIds.length === 0
         ? Promise.resolve({ data: [] })

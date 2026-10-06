@@ -2,7 +2,8 @@ const express = require('express');
 const router  = express.Router();
 const { db, pool } = require('../../config/db');
 const { auth, adminOnly } = require('../../middleware/auth');
-const { hasPermission } = require('../../middleware/permissions');
+const { hasPermission, hasPermissionOrLegacyAdmin } = require('../../middleware/permissions');
+const reportsView = hasPermissionOrLegacyAdmin('reports', 'view');   // adminOnly (role) AND reports.view (permission matrix)
 const { getOrgPolicy } = require('../../utils/orgPolicy');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { resolveEmployeeIds, getFilterState, getBranchUserSQLFilter, canAdminAccessUser } = require('../../utils/branchFilter');
@@ -64,7 +65,7 @@ function nowIST() {
 function todayIST() { return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(new Date()); }
 
 // GET /api/reports/attendance?year=&month=&userId=&format=csv
-router.get('/attendance', auth, adminOnly, withBranchContext, async (req, res) => {
+router.get('/attendance', auth, adminOnly, reportsView, withBranchContext, async (req, res) => {
   try {
     const oId    = req.user.organization_id;
     const policy = await getOrgPolicy(oId);
@@ -316,7 +317,7 @@ router.get('/attendance', auth, adminOnly, withBranchContext, async (req, res) =
 });
 
 // GET /api/reports/leaves?year=&month=&format=csv
-router.get('/leaves', auth, adminOnly, withBranchContext, async (req, res) => {
+router.get('/leaves', auth, adminOnly, reportsView, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     const { year, month, format, status } = req.query;
@@ -377,7 +378,7 @@ router.get('/leaves', auth, adminOnly, withBranchContext, async (req, res) => {
 });
 
 // GET /api/reports/headcount — summary stats (role-scoped, branch-scoped)
-router.get('/headcount', auth, adminOnly, withBranchContext, async (req, res) => {
+router.get('/headcount', auth, adminOnly, reportsView, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
     // root_admin sees HR admins + employees; HR admin sees employees only
@@ -411,7 +412,7 @@ router.get('/headcount', auth, adminOnly, withBranchContext, async (req, res) =>
 // GET /api/reports/employees?format=csv
 // Always scoped to the caller's organization_id — root_admin is per-org, not platform-wide.
 // Uses adminOnly (not hasPermission) to avoid RBAC table dependency causing 500s.
-router.get('/employees', auth, adminOnly, withBranchContext, async (req, res) => {
+router.get('/employees', auth, adminOnly, reportsView, withBranchContext, async (req, res) => {
   try {
     const oId    = req.user.organization_id;
     const { format } = req.query;

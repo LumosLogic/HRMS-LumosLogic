@@ -2,13 +2,14 @@ const express = require('express');
 const router  = express.Router();
 const { db } = require('../../config/db');
 const { auth, adminOnly } = require('../../middleware/auth');
+const { hasPermissionOrLegacyAdmin } = require('../../middleware/permissions');
 const { orgId, getSettings, isWorkingDay } = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { resolveEmployeeIds } = require('../../utils/branchFilter');
 
 // ─── Analytics ───────────────────────────────────────────────────────────────
 // Root Admin: org-wide data. HR Admin: scoped to accessible branches.
-router.get('/', auth, adminOnly, withBranchContext, async (req, res) => {
+router.get('/', auth, adminOnly, hasPermissionOrLegacyAdmin('dashboard', 'view'), withBranchContext, async (req, res) => {
   try {
     const now   = new Date();
     const year  = now.getFullYear();

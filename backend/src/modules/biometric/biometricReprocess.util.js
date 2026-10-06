@@ -21,6 +21,39 @@ const { getEffectiveWorkSchedule } = require('../../utils/helpers');
  *   Today before shiftEnd → keep 'present' (employee may still punch; don't show Half Day prematurely)
  *   Today after  shiftEnd → finalise: work_hours ≥ halfDayHours → 'present', else 'half_day'
  */
+const toMin = (t) => { const [h, m] = String(t || '00:00').split(':').map(Number); return (h || 0) * 60 + (m || 0); };
+
+/**
+ * Late / early-exit flags for a biometric day — the SAME rule the web check-in/out applies
+ * (threshold + enable flag; shift overrides branch overrides org; no grace). Biometric ingestion never set these
+ * flags, so the dashboard "Late today", the Late/Early list and the attendance e-mails under-counted biometric orgs.
+ * Returns { isLate, isEarlyExit } (early-exit only judged when a check-out exists and the day is over).
+ */
+async function resolveAttendanceFlags(userId, orgId, date, checkIn, checkOut) {
+  try {
+    const u = await pool.query('SELECT branch_id FROM users WHERE id = $1 AND organization_id = $2 LIMIT 1', [userId, orgId]);
+    const sched = await getEffectiveWorkSchedule(orgId, u.rows[0]?.branch_id ?? null) || {};
+    let lateT = sched.late_threshold, earlyT = sched.early_exit_threshold;
+    let lateOn = sched.late_entry_threshold_enabled ?? true, earlyOn = sched.early_exit_threshold_enabled ?? true;
+    try {
+      const sr = await pool.query(
+        `SELECT s.* FROM shift_assignments sa JOIN shifts s ON s.id = sa.shift_id
+          WHERE sa.user_id = $1 AND sa.organization_id = $2 AND sa.date = $3 LIMIT 1`, [userId, orgId, String(date).slice(0, 10)]);
+      const sh = sr.rows[0];
+      if (sh) {
+        if (sh.late_threshold) lateT = sh.late_threshold;
+        if (sh.early_exit_threshold || sh.end_time) earlyT = sh.early_exit_threshold || sh.end_time;
+        if (sh.late_entry_threshold_enabled != null) lateOn = sh.late_entry_threshold_enabled;
+        if (sh.early_exit_threshold_enabled != null) earlyOn = sh.early_exit_threshold_enabled;
+      }
+    } catch { /* shifts unavailable — branch/org rule stands */ }
+    return {
+      isLate:      !!(checkIn && lateOn && lateT && toMin(checkIn) > toMin(lateT)),
+      isEarlyExit: !!(checkOut && earlyOn && earlyT && toMin(checkOut) < toMin(earlyT)),
+    };
+  } catch { return { isLate: false, isEarlyExit: false }; }
+}
+
 async function applyFILODay(userId, date, orgId, dayLogs, existingAtt, halfDayHours = 4.5, shiftEndTime = '17:30', fullDayHours = 8) {
   if (!dayLogs.length) return;
 
@@ -135,20 +168,23 @@ async function applyFILODay(userId, date, orgId, dayLogs, existingAtt, halfDayHo
       : 'half_day')
     : 'present';
 
+  const { isLate, isEarlyExit } = await resolveAttendanceFlags(userId, orgId, dateStr, checkInStr, dayFinished ? checkOutStr : null);
+
   if (existingAtt) {
     await pool.query(
       `UPDATE attendance
        SET check_in = $1, check_out = $2, gross_hours = $3, work_hours = $4,
-           total_break_minutes = $5, status = $6, source = 'biometric'
+           total_break_minutes = $5, status = $6, source = 'biometric',
+           is_late = $8, is_early_exit = $9
        WHERE id = $7`,
-      [checkInStr, checkOutStr, grossHours, workHours, gapMinutes, status, existingAtt.id]
+      [checkInStr, checkOutStr, grossHours, workHours, gapMinutes, status, existingAtt.id, isLate, isEarlyExit]
     );
   } else {
     await pool.query(
       `INSERT INTO attendance
          (user_id, date, check_in, check_out, gross_hours, work_hours,
-          total_break_minutes, status, source, organization_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'biometric', $9)
+          total_break_minutes, status, source, organization_id, is_late, is_early_exit)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'biometric', $9, $10, $11)
        ON CONFLICT (user_id, date, organization_id) DO UPDATE
          SET check_in            = EXCLUDED.check_in,
              check_out           = EXCLUDED.check_out,
@@ -156,8 +192,10 @@ async function applyFILODay(userId, date, orgId, dayLogs, existingAtt, halfDayHo
              work_hours          = EXCLUDED.work_hours,
              total_break_minutes = EXCLUDED.total_break_minutes,
              status              = EXCLUDED.status,
-             source              = 'biometric'`,
-      [userId, date, checkInStr, checkOutStr, grossHours, workHours, gapMinutes, status, orgId]
+             source              = 'biometric',
+             is_late             = EXCLUDED.is_late,
+             is_early_exit       = EXCLUDED.is_early_exit`,
+      [userId, date, checkInStr, checkOutStr, grossHours, workHours, gapMinutes, status, orgId, isLate, isEarlyExit]
     );
   }
 }
@@ -537,4 +575,4 @@ async function reprocessPinForDates(orgId, employeePin, fromDate, toDate, jobId 
   return { processed, total: logsRes.rows.length, noMapping: false, attendance_updated: attendanceUpdated };
 }
 
-module.exports = { reprocessPin, applyFILODay, reprocessPinForDates };
+module.exports = { reprocessPin, applyFILODay, reprocessPinForDates, resolveAttendanceFlags };

@@ -48,6 +48,30 @@ async function resolveTargets(req, body) {
 }
 
 /** Marks attendance as 'holiday' for the employees the holiday applies to. Fire-and-forget. */
+// markHolidayAttendance() writes attendance.status='holiday' rows. Removing or moving a holiday must remove them again,
+// otherwise the stale 'holiday' row on a normal working day is not recognised by payroll (falls through to absent/LOP).
+// Only rows nobody touched are removed: a real punch (check_in) or an edited row keeps its record, with the status
+// restored to what the day actually is.
+async function unmarkHolidayAttendance(oId, date, branchId) {
+  try {
+    const { pool } = require('../../config/db');
+    const scope = branchId ? 'AND u.branch_id = $3' : '';
+    const params = branchId ? [oId, date, branchId] : [oId, date];
+    // rows that only carry the holiday marker
+    await pool.query(
+      `DELETE FROM attendance a USING users u
+        WHERE a.user_id = u.id AND a.organization_id = $1 AND a.date = $2 AND a.status = 'holiday'
+          AND a.check_in IS NULL AND a.check_out IS NULL ${scope}
+          AND NOT EXISTS (SELECT 1 FROM holidays h WHERE h.organization_id = $1 AND h.date = $2 AND (h.branch_id IS NULL OR h.branch_id = u.branch_id))`, params);
+    // rows with a real punch keep their data; the holiday label becomes 'present'
+    await pool.query(
+      `UPDATE attendance a SET status = 'present' FROM users u
+        WHERE a.user_id = u.id AND a.organization_id = $1 AND a.date = $2 AND a.status = 'holiday'
+          AND (a.check_in IS NOT NULL OR a.check_out IS NOT NULL) ${scope}
+          AND NOT EXISTS (SELECT 1 FROM holidays h WHERE h.organization_id = $1 AND h.date = $2 AND (h.branch_id IS NULL OR h.branch_id = u.branch_id))`, params);
+  } catch (e) { console.error('[holidays] unmarkHolidayAttendance:', e.message); }
+}
+
 function markHolidayAttendance(oId, date, branchId) {
   db.from('users').select('id, branch_id').eq('organization_id', oId).eq('role', 'employee').not('employee_status', 'in', ['inactive', 'resigned', 'terminated'])
     .then(async ({ data: employees }) => {
@@ -127,11 +151,16 @@ router.put('/:id', auth, hasPermission('holidays', 'manage'), withBranchContext,
     if (!existing) return res.status(404).json({ error: 'Holiday not found' });
     if (!canModifyBranchRecord(req.branchContext, existing.branch_id))
       return res.status(403).json({ error: 'You do not have access to modify this holiday.' });
+    const { data: before } = await db.from('holidays').select('date').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
     const { data, error } = await db.from('holidays')
       .update({ name, date, type, description: description || '', specific_msg: specific_msg || '' })
       .eq('id', req.params.id).eq('organization_id', oId)
       .select().single();
     if (error) throw error;
+    if (before?.date && date && String(before.date).slice(0, 10) !== String(date).slice(0, 10)) {
+      await unmarkHolidayAttendance(oId, String(before.date).slice(0, 10), existing.branch_id);
+      markHolidayAttendance(oId, String(date).slice(0, 10), existing.branch_id);
+    }
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -145,9 +174,11 @@ router.delete('/:id', auth, hasPermission('holidays', 'manage'), withBranchConte
     if (!existing) return res.status(404).json({ error: 'Holiday not found' });
     if (!canModifyBranchRecord(req.branchContext, existing.branch_id))
       return res.status(403).json({ error: 'You do not have access to delete this holiday.' });
+    const { data: gone } = await db.from('holidays').select('date').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
     const { error } = await db.from('holidays')
       .delete().eq('id', req.params.id).eq('organization_id', oId);
     if (error) throw error;
+    if (gone?.date) await unmarkHolidayAttendance(oId, String(gone.date).slice(0, 10), existing.branch_id);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

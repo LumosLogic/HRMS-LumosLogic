@@ -16,7 +16,8 @@
 const { pool } = require('../../config/db-pg-adapter');
 const biometricEmitter = require('../../utils/biometricEmitter');
 const { getOrgPolicy }  = require('../../utils/orgPolicy');
-const { applyFILODay }  = require('./biometricReprocess.util');
+const { applyFILODay, resolveAttendanceFlags } = require('./biometricReprocess.util');
+const { ACCESS_BLOCKED_STATUSES } = require('../../utils/employeeStatus');
 const historicalSync    = require('./biometricHistoricalSync.handler');
 
 module.exports = async function biometricPushHandler(req, res) {
@@ -146,6 +147,19 @@ function extractAttlogLines(body, query = {}) {
   return lines;
 }
 
+// A LIVE punch from an inactive / terminated account is meaningless (the person no longer works here) and must not
+// create attendance. Only recent punches are gated — historical imports and re-processing of a leaver's real past
+// days are untouched. The raw log is kept (marked processed) as evidence.
+async function isLockedAccountPunch(userId, orgId, punchDate) {
+  try {
+    const todayIST = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
+    const y = new Date(todayIST + 'T12:00:00Z'); y.setUTCDate(y.getUTCDate() - 1);
+    if (punchDate < y.toISOString().slice(0, 10)) return false;   // older than yesterday → history, not a live punch
+    const r = await pool.query('SELECT employee_status FROM users WHERE id = $1 AND organization_id = $2', [userId, orgId]);
+    return ACCESS_BLOCKED_STATUSES.includes(r.rows[0]?.employee_status);
+  } catch { return false; }
+}
+
 // ─── Process a single ATTLOG line ─────────────────────────────────────────────
 async function processAttlogLine(line, orgId, deviceSerial, policy = 'standard', halfDayHours = 4.5, shiftEndTime = '17:30') {
   const parts = line.split('\t');
@@ -197,6 +211,10 @@ async function processAttlogLine(line, orgId, deviceSerial, policy = 'standard',
     if (!mapRes.rows.length) return; // no mapping — leave unprocessed for later
 
     const userId = mapRes.rows[0].user_id;
+    if (await isLockedAccountPunch(userId, orgId, punchDate)) {
+      await pool.query(`UPDATE biometric_raw_logs SET processed = true WHERE id = $1`, [rawLogId]);
+      return;
+    }
 
     // Leave guard
     const attRes = await pool.query(
@@ -234,6 +252,10 @@ async function processAttlogLine(line, orgId, deviceSerial, policy = 'standard',
   );
   if (!mapRes.rows.length) return;
   const userId = mapRes.rows[0].user_id;
+  if (await isLockedAccountPunch(userId, orgId, punchDate)) {
+    await pool.query(`UPDATE biometric_raw_logs SET processed = true WHERE id = $1`, [rawLogId]);
+    return;
+  }
 
   const attRes = await pool.query(
     `SELECT id, status, check_in, check_out, total_break_minutes FROM attendance
@@ -249,11 +271,12 @@ async function processAttlogLine(line, orgId, deviceSerial, policy = 'standard',
 
   if (punchType === 0) {
     if (!att) {
+      const { isLate } = await resolveAttendanceFlags(userId, orgId, punchDate, punchTimeStr, null);
       await pool.query(
-        `INSERT INTO attendance (user_id, date, check_in, status, source, organization_id)
-         VALUES ($1, $2, $3, 'present', 'biometric', $4)
+        `INSERT INTO attendance (user_id, date, check_in, status, source, organization_id, is_late)
+         VALUES ($1, $2, $3, 'present', 'biometric', $4, $5)
          ON CONFLICT (user_id, date, organization_id) DO NOTHING`,
-        [userId, punchDate, punchTimeStr, orgId]
+        [userId, punchDate, punchTimeStr, orgId, isLate]
       );
     }
   }
@@ -265,11 +288,12 @@ async function processAttlogLine(line, orgId, deviceSerial, policy = 'standard',
       const grossHours = parseFloat(((checkOutMs - checkInMs) / 3600000).toFixed(2));
       const breakMins  = att.total_break_minutes || 0;
       const workHours  = parseFloat(Math.max(0, grossHours - breakMins / 60).toFixed(2));
+      const { isEarlyExit } = await resolveAttendanceFlags(userId, orgId, punchDate, null, punchTimeStr);
       await pool.query(
         `UPDATE attendance
-         SET check_out = $1, gross_hours = $2, work_hours = $3, source = 'biometric'
+         SET check_out = $1, gross_hours = $2, work_hours = $3, source = 'biometric', is_early_exit = $5
          WHERE id = $4`,
-        [punchTimeStr, grossHours, workHours, att.id]
+        [punchTimeStr, grossHours, workHours, att.id, isEarlyExit]
       );
     } else if (!att) {
       await pool.query(

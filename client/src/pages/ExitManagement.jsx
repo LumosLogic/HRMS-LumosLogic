@@ -359,9 +359,10 @@ function ExitCard({ req, isAdmin }) {
             <div className="flex items-center gap-2 flex-wrap mb-1">
               <span className="font-black text-[#151c27]">{isAdmin ? req.user_name : 'My Resignation'}</span>
               <span className={`badge ${cfg.cls}`}>{cfg.label}</span>
+              {req.exit_type === 'termination' && <span className="badge badge-rejected">Termination</span>}
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-0.5 text-xs">
-              <div><span className="text-[#777587]">Resigned on</span> · <span className="font-semibold text-[#151c27]">{fmtDate(req.resignation_date)}</span></div>
+              <div><span className="text-[#777587]">{req.exit_type === 'termination' ? 'Terminated on' : 'Resigned on'}</span> · <span className="font-semibold text-[#151c27]">{fmtDate(req.resignation_date)}</span></div>
               {req.last_working_day && <div><span className="text-[#777587]">Last day</span> · <span className="font-semibold text-[#151c27]">{fmtDate(req.last_working_day)}</span></div>}
               <div><span className="text-[#777587]">Notice</span> · <span className="font-semibold text-[#151c27]">{noticeDays} days</span></div>
             </div>

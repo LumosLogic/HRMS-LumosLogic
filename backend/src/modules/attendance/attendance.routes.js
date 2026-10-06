@@ -95,17 +95,16 @@ router.get('/my-record', auth, async (req, res) => {
 // Fetch the employee's active shift config for a given date (including attendance rule columns).
 // Returns null when no shift assignment applies for that date.
 async function getActiveShiftConfig(userId, today) {
+  // shift_assignments is a PER-DATE roster (user_id, shift_id, date) — it has no effective_from/effective_to columns,
+  // so the previous range query never matched and web check-in/out silently ignored every shift-specific rule
+  // (payroll, the biometric path and the absent cron already read the per-date row).
   try {
-    const { data } = await db
-      .from('shift_assignments')
-      .select('shift:shifts(start_time, end_time, days_of_week, late_threshold, early_exit_threshold, half_day_hours, full_day_hours, max_early_leave_count, late_entry_threshold_enabled, early_exit_threshold_enabled)')
-      .eq('user_id', userId)
-      .lte('effective_from', today)
-      .or(`effective_to.is.null,effective_to.gte.${today}`)
-      .order('effective_from', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    return data?.shift || null;
+    const { rows } = await pool.query(
+      `SELECT s.start_time, s.end_time, s.days_of_week, s.late_threshold, s.early_exit_threshold, s.half_day_hours,
+              s.full_day_hours, s.max_early_leave_count, s.late_entry_threshold_enabled, s.early_exit_threshold_enabled
+         FROM shift_assignments sa JOIN shifts s ON s.id = sa.shift_id
+        WHERE sa.user_id = $1 AND sa.date = $2 LIMIT 1`, [userId, today]);
+    return rows[0] || null;
   } catch { return null; }
 }
 
@@ -670,3 +669,6 @@ router.get('/audit-log', auth, async (req, res) => {
 });
 
 module.exports = router;
+
+// exported for tests (the shift rule resolver is otherwise private to this router)
+module.exports.getActiveShiftConfig = getActiveShiftConfig;

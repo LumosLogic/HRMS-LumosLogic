@@ -12,6 +12,7 @@
 const { pool } = require('../config/db');
 const { calculatePayroll } = require('./payrollEngine');
 const { applyStatutoryCalculations } = require('./statutoryCalculationService');
+const { payrollEligibilitySql } = require('../utils/employeeStatus');
 
 // ─── Custom error ─────────────────────────────────────────────────────────────
 class GenerationError extends Error {
@@ -65,6 +66,10 @@ async function fetchEligibleEmployees(oId, month, year, employeeIds = null) {
   const params = employeeIds
     ? [oId, end, start, employeeIds]
     : [oId, end, start];
+  // Employment window, not just the current status: an employee who resigned/was terminated and whose last working
+  // day falls in (or after) this month still gets this month's payslip. Status alone dropped them at approval time.
+  params.push(start);
+  const periodStartParam = `$${params.length}::text`;
 
   const { rows } = await pool.query(
     `SELECT DISTINCT u.id, u.name, u.department, u.employee_id
@@ -76,7 +81,7 @@ async function fetchEligibleEmployees(oId, month, year, employeeIds = null) {
               AND (ess.effective_to IS NULL OR ess.effective_to >= $3)
       WHERE u.organization_id = $1
         AND u.role            = 'employee'
-        AND (u.employee_status IS NULL OR u.employee_status NOT IN ('inactive','resigned','terminated'))
+        AND ${payrollEligibilitySql(periodStartParam)}
         ${branchClause}
       ORDER BY u.name ASC`,
     params

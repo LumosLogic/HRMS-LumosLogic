@@ -440,15 +440,20 @@ async function leaveYearWindow(oId, yearParam) {
   return { year, fyStart, fyEnd };
 }
 
-/** balances[] for one employee from already-loaded policies / leaves / schedule / adjustments */
-function calcLeaveBalances({ policies, leaves, settings, adjustments, year }) {
+/**
+ * balances[] for one employee from already-loaded policies / leaves / schedule / adjustments.
+ *   holidays — Set of 'YYYY-MM-DD' that apply to THIS employee (org-wide + own branch). Day counting honours it, exactly
+ *              like the creation guard and attendance writing do (the view used to ignore holidays).
+ *   carry    — { leave_type: days } already capped carry-forward INTO this cycle (see computeCarryIn).
+ */
+function calcLeaveBalances({ policies, leaves, settings, adjustments, year, holidays = new Set(), carry = {} }) {
   const adjByType = {};
   (adjustments || []).forEach(a => { adjByType[a.leave_type] = (adjByType[a.leave_type] || 0) + Number(a.delta); });
   const own = (leaves || []).filter(l => l.leave_time !== 'wfh');
 
   function workDays(leave) {
     if (leave.leave_time === 'half') return 0.5;
-    return buildWorkingDates(leave.start_date, leave.end_date, settings).length;
+    return buildWorkingDates(leave.start_date, leave.end_date, settings, holidays).length;
   }
 
   return (policies || []).map(p => {
@@ -457,18 +462,105 @@ function calcLeaveBalances({ policies, leaves, settings, adjustments, year }) {
     const used     = approved.reduce((sum, l) => sum + workDays(l), 0);
     const inProg   = pending.reduce((sum, l) => sum + workDays(l), 0);
     const adj      = adjByType[p.leave_type] || 0;
+    const carried  = Number(carry[p.leave_type]) || 0;
     return {
       leave_type:  p.leave_type,
       label:       p.label || p.leave_type,
       allocated:   p.annual_quota,
+      carried_forward: Math.round(carried * 2) / 2,
       adjustment:  Math.round(adj   * 2) / 2,
       used:        Math.round(used  * 2) / 2,
       pending:     Math.round(inProg * 2) / 2,
-      remaining:   Math.max(0, p.annual_quota + adj - used),
+      remaining:   Math.max(0, p.annual_quota + carried + adj - used),
     };
   });
 }
 
+/**
+ * Carry-forward INTO the current cycle: for every policy with carry_forward=true and max_carry_forward>0, the unused
+ * APPROVED balance of the previous cycle, capped at max_carry_forward. (Both fields were stored and shown in the
+ * Leave Policies screen but never applied.) Pure: previous-cycle data is passed in.
+ */
+function computeCarryIn({ policies, prevLeaves, prevAdjustments, settings, prevHolidays, prevYear }) {
+  const cf = (policies || []).filter(p => p.carry_forward && Number(p.max_carry_forward) > 0);
+  if (!cf.length) return {};
+  const prev = calcLeaveBalances({
+    policies: cf, leaves: (prevLeaves || []).filter(l => l.status === 'approved'),
+    settings, adjustments: prevAdjustments, year: prevYear, holidays: prevHolidays || new Set(),
+  });
+  const out = {};
+  for (const b of prev) {
+    const max = Number(cf.find(p => p.leave_type === b.leave_type).max_carry_forward) || 0;
+    const c = Math.min(max, b.remaining);
+    if (c > 0) out[b.leave_type] = Math.round(c * 2) / 2;
+  }
+  return out;
+}
+
+/** The leave cycle (year number as used by leaveYearWindow) a calendar date belongs to. */
+async function cycleYearForDate(oId, dateStr) {
+  const { data: orgRow } = await db.from('organizations').select('leave_year_start_month').eq('id', oId).maybeSingle();
+  const startMonth = orgRow?.leave_year_start_month || 1;
+  const [y, m] = String(dateStr).slice(0, 10).split('-').map(Number);
+  return (startMonth > 1 && m < startMonth) ? y - 1 : y;
+}
+
+/** Holiday dates of a window, split per applicability: [{date, branch_id}] */
+async function holidayRowsBetween(oId, from, to) {
+  const { rows } = await pool.query(
+    `SELECT date::text AS date, branch_id FROM holidays WHERE organization_id = $1 AND date::text >= $2 AND date::text <= $3`, [oId, from, to]);
+  return rows;
+}
+const holidaySetFor = (rows, branchId) => new Set(rows.filter(h => holidayAppliesToBranch(h, branchId)).map(h => h.date));
+
+const POLICY_COLS = 'leave_type, label, annual_quota, carry_forward, max_carry_forward';
+
+/**
+ * THE balance computation for one employee (policies by branch → leaves → adjustments → carry-forward → holidays).
+ * Used by GET /balance AND by the POST /leaves guard, so the number an employee sees is the number that is enforced.
+ */
+async function loadUserBalances(oId, targetId, yearParam) {
+  const { year, fyStart, fyEnd } = await leaveYearWindow(oId, yearParam);
+  const prevWin = await leaveYearWindow(oId, year - 1);
+
+  const empBranchRow = await db.from('users').select('branch_id').eq('id', targetId).eq('organization_id', oId).maybeSingle();
+  const empBranchId = empBranchRow?.data?.branch_id ?? null;
+  const policyQuery = (branchId) => db.from('leave_policies').select(POLICY_COLS).eq('organization_id', oId)
+    .eq('active', true).gt('annual_quota', 0).order('leave_type');
+  let policies = [];
+  if (empBranchId) {
+    const { data: branchPols } = await policyQuery().eq('branch_id', empBranchId);
+    if (branchPols && branchPols.length > 0) policies = branchPols;
+  }
+  if (!policies.length) policies = (await policyQuery().is('branch_id', null)).data || [];
+
+  const leaveCols = 'leave_type, leave_time, start_date, end_date, status';
+  const leavesIn = (a, b, statuses) => db.from('leaves').select(leaveCols)
+    .eq('user_id', targetId).eq('organization_id', oId).in('status', statuses).gte('start_date', a).lte('end_date', b).neq('leave_type', 'wfh');
+  const needsCarry = policies.some(p => p.carry_forward && Number(p.max_carry_forward) > 0);
+
+  const [leavesRes, settings, adjRes, holRows, prevLeavesRes, prevAdjRes, prevHolRows] = await Promise.all([
+    leavesIn(fyStart, fyEnd, ['approved', ...BALANCE_PENDING_STATUSES]),
+    getSettingsForUser(oId, targetId),
+    db.from('leave_balance_adjustments').select('leave_type, delta').eq('user_id', targetId).eq('org_id', oId).eq('year', year),
+    holidayRowsBetween(oId, fyStart, fyEnd),
+    needsCarry ? leavesIn(prevWin.fyStart, prevWin.fyEnd, ['approved']) : Promise.resolve({ data: [] }),
+    needsCarry ? db.from('leave_balance_adjustments').select('leave_type, delta').eq('user_id', targetId).eq('org_id', oId).eq('year', year - 1) : Promise.resolve({ data: [] }),
+    needsCarry ? holidayRowsBetween(oId, prevWin.fyStart, prevWin.fyEnd) : Promise.resolve([]),
+  ]);
+
+  const carry = computeCarryIn({
+    policies, prevLeaves: prevLeavesRes.data, prevAdjustments: prevAdjRes.data, settings,
+    prevHolidays: holidaySetFor(prevHolRows, empBranchId), prevYear: year - 1,
+  });
+  const balances = calcLeaveBalances({
+    policies, leaves: leavesRes.data, settings, adjustments: adjRes.data, year,
+    holidays: holidaySetFor(holRows, empBranchId), carry,
+  });
+  return { year, fyStart, fyEnd, balances, policies };
+}
+
+// ─── ROUTE: GET /balance ──────────────────────────────────────────────────────
 router.get('/balance', auth, withBranchContext, async (req, res) => {
   try {
     const oId   = orgId(req);
@@ -482,52 +574,16 @@ router.get('/balance', auth, withBranchContext, async (req, res) => {
         return res.status(403).json({ error: "You do not have access to this employee's branch." });
     }
 
-    const { year, fyStart, fyEnd } = await leaveYearWindow(oId, req.query.year);
-
-    // Use branch-specific leave policies for this employee (if their branch has them),
-    // falling back to org-wide policies.
-    const empBranchRow = await db.from('users').select('branch_id').eq('id', targetId).eq('organization_id', oId).maybeSingle();
-    const empBranchId = empBranchRow?.data?.branch_id ?? null;
-    let policiesQuery;
-    if (empBranchId) {
-      const { data: branchPols } = await db.from('leave_policies')
-        .select('leave_type, label, annual_quota').eq('organization_id', oId)
-        .eq('branch_id', empBranchId).eq('active', true).gt('annual_quota', 0).order('leave_type');
-      if (branchPols && branchPols.length > 0) {
-        policiesQuery = Promise.resolve({ data: branchPols });
-      } else {
-        policiesQuery = db.from('leave_policies').select('leave_type, label, annual_quota')
-          .eq('organization_id', oId).is('branch_id', null).eq('active', true).gt('annual_quota', 0).order('leave_type');
-      }
-    } else {
-      policiesQuery = db.from('leave_policies').select('leave_type, label, annual_quota')
-        .eq('organization_id', oId).is('branch_id', null).eq('active', true).gt('annual_quota', 0).order('leave_type');
-    }
-
-    const [policiesRes, leavesRes, settings, adjRes] = await Promise.all([
-      policiesQuery,
-      db.from('leaves')
-        .select('leave_type, leave_time, start_date, end_date, status')
-        .eq('user_id', targetId).eq('organization_id', oId)
-        .in('status', ['approved', ...BALANCE_PENDING_STATUSES])
-        .gte('start_date', fyStart).lte('end_date', fyEnd)
-        .neq('leave_type', 'wfh'),
-      getSettingsForUser(oId, targetId),
-      db.from('leave_balance_adjustments')
-        .select('leave_type, delta')
-        .eq('user_id', targetId).eq('org_id', oId).eq('year', year),
-    ]);
-
-    const balances = calcLeaveBalances({ policies: policiesRes.data, leaves: leavesRes.data, settings, adjustments: adjRes.data, year });
+    const { year, balances } = await loadUserBalances(oId, targetId, req.query.year);
     res.json({ year, balances });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ─── ROUTE: GET /balance/batch?userIds=1,2,3&year=2026 ───────────────────────────────────────────────────────────────
 // The balances of many employees in ONE request (the Leaves page and the Employees list used to send one /balance request
-// per employee — 100+ requests per page load). Same calculation, same policy / schedule / adjustment rules as GET /balance;
-// admin callers only, and every requested employee must be inside the caller's organisation AND branch scope, otherwise the
-// whole request is refused (no partial answers that would reveal which ids exist).
+// per employee — 100+ requests per page load). Same calculation (calcLeaveBalances / computeCarryIn), same policy / schedule /
+// holiday / adjustment rules as GET /balance; admin callers only, and every requested employee must be inside the caller's
+// organisation AND branch scope, otherwise the whole request is refused (no partial answers that would reveal which ids exist).
 // Response: { year, balances: { "<userId>": [ …same objects as GET /balance… ] } }
 const BALANCE_BATCH_MAX = 500;
 router.get('/balance/batch', auth, withBranchContext, async (req, res) => {
@@ -542,17 +598,27 @@ router.get('/balance/batch', auth, withBranchContext, async (req, res) => {
     const ids = access.ids;
 
     const { year, fyStart, fyEnd } = await leaveYearWindow(oId, req.query.year);
+    const prevWin = await leaveYearWindow(oId, year - 1);
 
     // everything is loaded once for ALL employees, then split per employee in memory
-    const [usersRes, polRes, leavesRes, adjRes] = await Promise.all([
+    const [usersRes, polRes, leavesRes, adjRes, holRows] = await Promise.all([
       pool.query(`SELECT id, branch_id FROM users WHERE organization_id = $1 AND id = ANY($2::bigint[])`, [oId, ids]),
-      pool.query(`SELECT leave_type, label, annual_quota, branch_id FROM leave_policies WHERE organization_id = $1 AND active = true AND annual_quota > 0 ORDER BY leave_type`, [oId]),
+      pool.query(`SELECT leave_type, label, annual_quota, carry_forward, max_carry_forward, branch_id FROM leave_policies WHERE organization_id = $1 AND active = true AND annual_quota > 0 ORDER BY leave_type`, [oId]),
       pool.query(`SELECT user_id, leave_type, leave_time, start_date, end_date, status FROM leaves
                     WHERE organization_id = $1 AND user_id = ANY($2::bigint[]) AND status = ANY($3::text[])
                       AND start_date >= $4 AND end_date <= $5 AND leave_type <> 'wfh'`,
         [oId, ids, ['approved', ...BALANCE_PENDING_STATUSES], fyStart, fyEnd]),
       pool.query(`SELECT user_id, leave_type, delta FROM leave_balance_adjustments WHERE org_id = $1 AND year = $2 AND user_id = ANY($3::bigint[])`, [oId, year, ids]),
+      holidayRowsBetween(oId, fyStart, fyEnd),
     ]);
+    const needsCarry = polRes.rows.some(p => p.carry_forward && Number(p.max_carry_forward) > 0);
+    const [prevLeavesRes, prevAdjRes, prevHolRows] = needsCarry ? await Promise.all([
+      pool.query(`SELECT user_id, leave_type, leave_time, start_date, end_date, status FROM leaves
+                    WHERE organization_id = $1 AND user_id = ANY($2::bigint[]) AND status = 'approved'
+                      AND start_date >= $3 AND end_date <= $4 AND leave_type <> 'wfh'`, [oId, ids, prevWin.fyStart, prevWin.fyEnd]),
+      pool.query(`SELECT user_id, leave_type, delta FROM leave_balance_adjustments WHERE org_id = $1 AND year = $2 AND user_id = ANY($3::bigint[])`, [oId, year - 1, ids]),
+      holidayRowsBetween(oId, prevWin.fyStart, prevWin.fyEnd),
+    ]) : [{ rows: [] }, { rows: [] }, []];
 
     const branchOf = new Map(usersRes.rows.map(u => [Number(u.id), u.branch_id == null ? null : Number(u.branch_id)]));
     const orgPolicies = polRes.rows.filter(p => p.branch_id == null);
@@ -567,13 +633,18 @@ router.get('/balance/batch', auth, withBranchContext, async (req, res) => {
       return scheduleCache.get(k);
     };
     const group = (rows) => { const m = new Map(); for (const r of rows) { const k = Number(r.user_id); (m.get(k) || m.set(k, []).get(k)).push(r); } return m; };
-    const leavesBy = group(leavesRes.rows), adjBy = group(adjRes.rows);
+    const leavesBy = group(leavesRes.rows), adjBy = group(adjRes.rows), prevLeavesBy = group(prevLeavesRes.rows), prevAdjBy = group(prevAdjRes.rows);
 
     const balances = {};
     for (const id of ids) {
       if (!branchOf.has(id)) continue;                        // (assertUsersAccessible already guarantees membership)
       const b = branchOf.get(id);
-      balances[id] = calcLeaveBalances({ policies: policiesFor(b), leaves: leavesBy.get(id) || [], settings: await scheduleFor(b), adjustments: adjBy.get(id) || [], year });
+      const policies = policiesFor(b), settings = await scheduleFor(b);
+      const carry = computeCarryIn({
+        policies, prevLeaves: prevLeavesBy.get(id) || [], prevAdjustments: prevAdjBy.get(id) || [], settings,
+        prevHolidays: holidaySetFor(prevHolRows, b), prevYear: year - 1,
+      });
+      balances[id] = calcLeaveBalances({ policies, leaves: leavesBy.get(id) || [], settings, adjustments: adjBy.get(id) || [], year, holidays: holidaySetFor(holRows, b), carry });
     }
     res.json({ year, balances });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1125,57 +1196,54 @@ router.post('/', auth, withBranchContext, async (req, res) => {
     const targetUserId = (isAdminRole(req.user.role) && user_id) ? parseInt(user_id) : req.user.id;
     const isOnBehalf   = isAdminRole(req.user.role) && targetUserId !== req.user.id;
 
-    // ── LEAVE-002: Balance check for employee self-submissions ────────────────
-    // Skip for WFH, admin on-behalf, and leave types without a policy quota
+    // ── LEAVE-002: Balance + policy rules for employee self-submissions ─────────────────────────────
+    // Skip for WFH and admin on-behalf. The balance is the SAME computation the employee sees (loadUserBalances):
+    // leave cycle (not the calendar year), holiday-aware, carry-forward and adjustments included.
     if (!isOnBehalf && leave_time !== 'wfh' && leave_type !== 'wfh') {
+      const oId      = orgId(req);
+      const type     = leave_type || 'casual';
+      let ctx = null;
       try {
-        const oId        = orgId(req);
         const settings   = await getSettingsForUser(oId, targetUserId);
         const holidaySet = await fetchHolidaySet(oId, start_date, end_date, targetUserId);
         const newDays    = leave_time === 'half' ? 0.5 : buildWorkingDates(start_date, end_date, settings, holidaySet).length;
+        const year       = await cycleYearForDate(oId, start_date);
+        ctx = { newDays, ...(await loadUserBalances(oId, targetUserId, year)) };
+      } catch (balanceErr) {
+        // Non-critical: if the check cannot be computed, allow submission (avoid blocking employees)
+        console.warn('[leaves] balance check skipped:', balanceErr.message);
+      }
 
-        if (newDays > 0) {
-          // Fetch quota for this leave type
-          const [policy] = await getEffectivePolicies(oId, targetUserId, { leaveType: leave_type || 'casual' });
+      if (ctx) {
+        // Policy rules configured in Leave Policies (previously only stored, never enforced).
+        const [pol] = await getEffectivePolicies(oId, targetUserId, { leaveType: type });
+        if (pol) {
+          const { rows: ext } = await pool.query(
+            `SELECT half_day_allowed, min_notice_days, max_consecutive_days FROM leave_policies WHERE id = $1`, [pol.id]).catch(() => ({ rows: [] }));
+          const rule = ext[0] || {};
+          if (leave_time === 'half' && rule.half_day_allowed === false)
+            return res.status(400).json({ error: `Half-day is not allowed for "${pol.label || type}" leave.` });
+          const notice = Number(rule.min_notice_days) || 0;
+          if (notice > 0) {
+            const daysAhead = Math.round((new Date(start_date + 'T12:00:00Z') - new Date(localDateStr() + 'T12:00:00Z')) / 86400000);
+            if (daysAhead < notice)
+              return res.status(400).json({ error: `"${pol.label || type}" leave must be applied at least ${notice} day(s) in advance.` });
+          }
+          const maxRun = Number(rule.max_consecutive_days) || 0;
+          if (maxRun > 0 && leave_time !== 'half' && ctx.newDays > maxRun)
+            return res.status(400).json({ error: `"${pol.label || type}" leave cannot exceed ${maxRun} consecutive working day(s) per request (requested ${ctx.newDays}).` });
+        }
 
-          if (policy && policy.annual_quota > 0) {
-            const now     = new Date();
-            const year    = now.getFullYear();
-            const fyStart = `${year}-01-01`;
-            const fyEnd   = `${year}-12-31`;
-
-            // Count already used + pending days this year
-            const { data: existingLeaves } = await db.from('leaves')
-              .select('leave_time, start_date, end_date, status')
-              .eq('user_id', targetUserId).eq('organization_id', oId)
-              .eq('leave_type', leave_type || 'casual')
-              .in('status', ['approved', 'pending', 'pending_dept', 'pending_root', 'pending_approval'])
-              .gte('start_date', fyStart).lte('end_date', fyEnd);
-
-            let usedDays = 0;
-            for (const l of (existingLeaves || [])) {
-              if (l.leave_time === 'half') { usedDays += 0.5; continue; }
-              const hs = await fetchHolidaySet(oId, l.start_date, l.end_date, targetUserId);
-              usedDays += buildWorkingDates(l.start_date, l.end_date, settings, hs).length;
-            }
-
-            const { data: adj } = await db.from('leave_balance_adjustments')
-              .select('delta').eq('user_id', targetUserId).eq('org_id', oId)
-              .eq('year', year).eq('leave_type', leave_type || 'casual');
-            const adjTotal = (adj || []).reduce((s, r) => s + Number(r.delta), 0);
-            const quota    = policy.annual_quota + adjTotal;
-
-            if (usedDays + newDays > quota) {
-              const remaining = Math.max(0, quota - usedDays);
-              return res.status(400).json({
-                error: `Insufficient leave balance. You have ${remaining} day(s) available for "${leave_type || 'casual'}" leave but requested ${newDays} day(s). Please adjust your request or contact HR.`,
-              });
-            }
+        const bal = (ctx.balances || []).find(b => b.leave_type === type);
+        if (bal && ctx.newDays > 0 && Number(bal.allocated) > 0) {
+          const available = Number(bal.allocated) + Number(bal.carried_forward || 0) + Number(bal.adjustment || 0) - Number(bal.used) - Number(bal.pending);
+          if (ctx.newDays > available) {
+            const remaining = Math.max(0, available);
+            return res.status(400).json({
+              error: `Insufficient leave balance. You have ${remaining} day(s) available for "${type}" leave but requested ${ctx.newDays} day(s). Please adjust your request or contact HR.`,
+            });
           }
         }
-      } catch (balanceErr) {
-        // Non-critical: if balance check fails, allow submission (avoid blocking employees)
-        console.warn('[leaves] balance check skipped:', balanceErr.message);
       }
     }
 
@@ -1488,9 +1556,10 @@ router.put('/:id/approve', auth, withBranchContext, async (req, res) => {
             oId);
 
           if (nextInfo.approverId) {
+            const { data: _lu } = await db.from('users').select('name').eq('id', leave.user_id).maybeSingle();
             notify(nextInfo.approverId,
               `Leave Request Awaiting Your Approval`,
-              `A leave request from ${leave.user_id} requires your action.`,
+              `A leave request from ${_lu?.name || 'an employee'} (${leave.start_date} → ${leave.end_date}) requires your action.`,
               oId);
             const { data: nextApprover } = await db.from('users')
               .select('name, email').eq('id', nextInfo.approverId).maybeSingle();

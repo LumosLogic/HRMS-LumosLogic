@@ -6,6 +6,7 @@ const cloudinary = require('cloudinary').v2;
 const multer     = require('multer');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { getFilterState, validateBranchAccess, resolveEmployeeIds, getAdminsForEmployee, canAdminAccessUser, assertUsersAccessible } = require('../../utils/branchFilter');
+const { EXCLUDED_STATUSES } = require('../../utils/employeeStatus');
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -82,6 +83,31 @@ async function validateBranchIds(branchIds, orgId, userId, role) {
     }
   }
   return { valid: true };
+}
+
+/**
+ * Documents → Onboarding. The default onboarding checklist has a manual HR task "Verify Documents". When EVERY active,
+ * required requirement that applies to the employee has reached the final `approved` state, that task is completed
+ * (it was a separate, hand-ticked list that never knew about the Documents module). Forward-only: a later rejection
+ * does not un-tick it, and an employee with no applicable required requirements is left alone.
+ */
+async function syncOnboardingFromDocuments(userId, oId) {
+  try {
+    const { data: emp } = await db.from('users').select('id, branch_id').eq('id', userId).eq('organization_id', oId).maybeSingle();
+    if (!emp) return false;
+    const { data: reqs } = await db.from('document_requirements').select('*')
+      .eq('organization_id', oId).eq('is_active', true).eq('is_required', true);
+    const applicable = (reqs || []).filter(r => requirementAppliesTo(r, userId, emp.branch_id));
+    if (!applicable.length) return false;
+    const { data: subs } = await db.from('employee_doc_submissions').select('requirement_id, status')
+      .eq('organization_id', oId).eq('user_id', userId).in('requirement_id', applicable.map(r => r.id));
+    const approved = new Set((subs || []).filter(s => s.status === 'approved').map(s => String(s.requirement_id)));
+    if (!applicable.every(r => approved.has(String(r.id)))) return false;
+    const { data: done } = await db.from('onboarding_checklists')
+      .update({ completed: true, completed_at: new Date().toISOString() })
+      .eq('organization_id', oId).eq('user_id', userId).eq('title', 'Verify Documents').eq('completed', false).select('id');
+    return (done || []).length > 0;
+  } catch (e) { console.error('[doc_requirements] syncOnboardingFromDocuments:', e.message); return false; }
 }
 
 const ALLOWED_MIMES = [
@@ -186,7 +212,8 @@ router.get('/analytics', auth, withBranchContext, async (req, res) => {
     // Resolve accessible employee IDs for branch isolation
     const accessibleIds = await resolveEmployeeIds(req.branchContext, oId);
 
-    let empQuery = db.from('users').select('id').eq('organization_id', oId).eq('role', 'employee').eq('status', 'active');
+    // Working headcount = employee_status (the lifecycle source of truth), not the legacy users.status flag.
+    let empQuery = db.from('users').select('id').eq('organization_id', oId).eq('role', 'employee').not('employee_status', 'in', EXCLUDED_STATUSES);
     let subsQuery = db.from('employee_doc_submissions').select('id, status, uploaded_at, requirement_id, user_id, expiry_date').eq('organization_id', oId);
 
     if (accessibleIds !== null) {
@@ -209,8 +236,10 @@ router.get('/analytics', auth, withBranchContext, async (req, res) => {
     ]);
 
     const reqList  = requirements || [];
-    const subsList = subs        || [];
     const empList  = employees   || [];
+    // Submissions of exited employees must not inflate the numerators while the denominators exclude them.
+    const activeIds = new Set(empList.map(e => String(e.id)));
+    const subsList = (subs || []).filter(s => activeIds.has(String(s.user_id)));
 
     const totalRequirements = reqList.length;
     const activeRequired    = reqList.filter(r => r.is_required && r.is_active).length;
@@ -311,7 +340,7 @@ router.get('/verification-queue', auth, withBranchContext, async (req, res) => {
 
     let query = db
       .from('employee_doc_submissions')
-      .select('*, employee:users(id, name, email, avatar_color, department, position), requirement:document_requirements!employee_doc_submissions_requirement_id_fkey(id, name, description, category), reviewer:users!employee_doc_submissions_reviewed_by_fkey(name)')
+      .select('*, employee:users(id, name, email, avatar_color, department, position, employee_status), requirement:document_requirements!employee_doc_submissions_requirement_id_fkey(id, name, description, category), reviewer:users!employee_doc_submissions_reviewed_by_fkey(name)')
       .eq('organization_id', oId)
       .order('uploaded_at', { ascending: false });
 
@@ -325,7 +354,8 @@ router.get('/verification-queue', auth, withBranchContext, async (req, res) => {
 
     const { data, error } = await query;
     if (error) throw error;
-    res.json(data || []);
+    // Exited employees (inactive/resigned/terminated) have nothing left to verify — keep them out of the HR queue.
+    res.json((data || []).filter(r => !EXCLUDED_STATUSES.includes(r.employee?.employee_status)));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -450,6 +480,9 @@ router.patch('/submissions/:id/review', auth, withBranchContext, async (req, res
       user_id: sub.user_id, title: notifTitle, message: notifMsg,
       type: 'document', organization_id: oId,
     });
+
+    // Final approval may complete the onboarding "Verify Documents" task
+    if (action === 'approved') await syncOnboardingFromDocuments(sub.user_id, oId);
 
     // If HR approved, also notify root_admins to give final approval
     if (action === 'hr_approved') {
@@ -608,6 +641,12 @@ router.post('/:id/submit', auth, upload.single('file'), async (req, res) => {
 
     const { data: existing } = await db.from('employee_doc_submissions')
       .select('*').eq('requirement_id', reqId).eq('user_id', req.user.id).maybeSingle();
+
+    // allow_reupload=false: a submission that is already in the pipeline cannot be replaced by the employee, unless
+    // HR rejected it or asked for a re-upload (that is the explicit way to re-open it).
+    if (existing && requirement.allow_reupload === false && !['rejected', 're_upload_requested'].includes(existing.status)) {
+      return res.status(400).json({ error: `"${requirement.name}" has already been submitted and re-upload is not allowed. Ask HR to request a re-upload.` });
+    }
 
     // Upload to Cloudinary
     const result = await new Promise((resolve, reject) => {

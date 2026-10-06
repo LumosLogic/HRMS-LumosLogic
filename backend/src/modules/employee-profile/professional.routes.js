@@ -1,7 +1,10 @@
 const express = require('express');
 const router  = express.Router();
-const { db }              = require('../../config/db');
-const { auth, adminOnly, isAdminRole } = require('../../middleware/auth');
+const { db, pool }        = require('../../config/db');
+const { auth, isAdminRole } = require('../../middleware/auth');
+const { hasPermission }   = require('../../middleware/permissions');
+const { validateBranchIdList, clearBranchAccessCache } = require('../../services/branchService');
+const lifecycle           = require('../../services/employeeLifecycle');
 const { orgId }                 = require('../../utils/helpers');
 
 // GET /api/profile/:id/professional
@@ -58,10 +61,22 @@ router.get('/:id/professional', auth, async (req, res) => {
 // Only fields present in the request body are updated; absent fields are left
 // untouched.  This prevents partial section saves (e.g. Org Structure only)
 // from nulling out fields managed by the sibling section (Employment Details).
-router.put('/:id/professional', auth, adminOnly, async (req, res) => {
+//
+// Employee status / probation / department / branch go through the SAME shared helpers as the Employees form
+// (services/employeeLifecycle.js), so the two screens can no longer leave the data in different states.
+router.put('/:id/professional', auth, hasPermission('employees', 'edit'), async (req, res) => {
   try {
+    // hasPermission() is the RBAC gate; the role check keeps the historical rule that employees never edit this section.
+    if (!isAdminRole(req.user.role)) return res.status(403).json({ error: 'Admin access required' });
     const empId = parseInt(req.params.id);
+    const oId   = orgId(req);
     const body  = req.body;
+
+    const { rows: curRows } = await pool.query(
+      `SELECT employee_status, branch_id, role, reporting_to, joining_date, date_of_joining, probation_months
+         FROM users WHERE id = $1 AND organization_id = $2`, [empId, oId]);
+    if (!curRows.length) return res.status(404).json({ error: 'Employee not found' });
+    const cur = curRows[0];
 
     const NULLABLE_FIELDS = [
       'employee_id', 'department', 'position', 'grade', 'pay_cadre', 'cost_centre',
@@ -73,58 +88,75 @@ router.put('/:id/professional', auth, adminOnly, async (req, res) => {
       'device_enrollment_id',
     ];
 
-    const update = { updated_at: new Date().toISOString(), updated_by: req.user.id };
-
-    for (const key of NULLABLE_FIELDS) {
-      if (Object.hasOwn(body, key)) {
-        update[key] = body[key] || null;
-      }
+    // A destination branch must belong to the org and be inside the caller's access (the Employees form already
+    // enforced this; this path only guarded the *target employee*).
+    if (Object.hasOwn(body, 'branch_id') && body.branch_id && String(body.branch_id) !== String(cur.branch_id)) {
+      const v = await validateBranchIdList(req.user.id, oId, req.user.role, [body.branch_id]);
+      if (!v.ok) return res.status(403).json({ error: v.error });
     }
+
+    const update = { updated_at: new Date().toISOString(), updated_by: req.user.id };
+    for (const key of NULLABLE_FIELDS) {
+      if (Object.hasOwn(body, key)) update[key] = body[key] || null;
+    }
+
+    // salary fields here are only a cache of the active salary structure — see employees.routes.js
+    if ((Object.hasOwn(update, 'ctc') || Object.hasOwn(update, 'salary_effective_date')) && await lifecycle.hasActiveSalaryStructure(empId, oId)) {
+      delete update.ctc; delete update.salary_effective_date;
+    }
+
+    // department_id on its own (legacy callers) is the same thing as department_ids:[id] — keep ONE assignment model.
+    let deptIds = Array.isArray(body.department_ids) ? body.department_ids : null;
+    if (!deptIds && Object.hasOwn(body, 'department_id')) deptIds = body.department_id ? [body.department_id] : [];
+    if (deptIds) { delete update.department_id; delete update.department; }
 
     if (Object.hasOwn(body, 'probation_applicable')) {
       update.probation_applicable = body.probation_applicable;
-      // When probation is turned off, clear stale dates so payroll
-      // immediately treats the employee as active (mirrors employees.routes.js:299-301)
       if (body.probation_applicable === false) {
+        // turned off: clear stale dates so payroll immediately treats the employee as active
         update.probation_start_date = null;
         update.probation_end_date   = null;
+      } else if (body.probation_applicable === true) {
+        // turned on: identical rule to the Employees form — force status and derive the dates from joining date + months.
+        update.employee_status = 'probation';
+        const joining = update.joining_date ?? cur.joining_date ?? cur.date_of_joining;
+        const months  = update.probation_months ?? cur.probation_months;
+        const pd = lifecycle.computeProbationDates(joining, months);
+        if (pd) { update.probation_start_date = pd.start; update.probation_end_date = pd.end; }
       }
     }
 
+    // legacy users.status always follows employee_status
+    if (Object.hasOwn(update, 'employee_status')) update.status = lifecycle.legacyStatusFor(update.employee_status);
+
     const { data, error } = await db.from('users')
-      .update(update).eq('id', empId).eq('organization_id', orgId(req)).select().single();
+      .update(update).eq('id', empId).eq('organization_id', oId).select().single();
     if (error) throw error;
 
-    // Sync multi-department assignments if provided
-    if (Array.isArray(body.department_ids)) {
-      await db.from('user_departments').delete().eq('user_id', empId);
-      if (body.department_ids.length > 0) {
-        await db.from('user_departments').insert(
-          body.department_ids.map(did => ({ user_id: empId, department_id: did, organization_id: orgId(req) }))
-        );
+    // Multi-department assignment: junction + users.department + users.department_id together
+    if (deptIds) {
+      const dep = await lifecycle.syncUserDepartments({ orgId: oId, userId: empId, departmentIds: deptIds });
+      data.department = dep.primaryName;
+      data.department_id = dep.primaryId;
+    }
+    delete data.password;
 
-        // Keep users.department text in sync with the primary department name (M-12)
-        // so that reports, the employee portal, and attendance all read the correct value.
-        const { data: dRow } = await db.from('departments')
-          .select('name')
-          .eq('id', body.department_ids[0])
-          .eq('organization_id', orgId(req))
-          .maybeSingle();
-        if (dRow?.name) {
-          await db.from('users')
-            .update({ department: dRow.name })
-            .eq('id', empId)
-            .eq('organization_id', orgId(req));
-          data.department = dRow.name;
-        }
-      } else {
-        // Departments cleared — blank the text column too
-        await db.from('users')
-          .update({ department: null })
-          .eq('id', empId)
-          .eq('organization_id', orgId(req));
-        data.department = null;
-      }
+    if (Object.hasOwn(body, 'device_enrollment_id')) await lifecycle.syncBiometricPin({ orgId: oId, userId: empId, pin: body.device_enrollment_id });
+    if (Object.hasOwn(update, 'branch_id')) clearBranchAccessCache(empId, oId);
+
+    // session block/unblock, exit record + checklist for resigned/terminated, close stale exit on reactivation
+    if (Object.hasOwn(update, 'employee_status')) {
+      await lifecycle.afterStatusChange({
+        orgId: oId, userId: empId, prev: cur.employee_status || 'active',
+        next: update.employee_status || 'active', actorId: req.user.id,
+      });
+    }
+
+    // In-flight leave approvals follow a manager / department change (approver id is stored at submission).
+    const managerChanged = Object.hasOwn(update, 'reporting_to') && String(update.reporting_to ?? '') !== String(cur.reporting_to ?? '');
+    if (managerChanged || deptIds) {
+      try { await require('../../services/leaveWorkflowEngine').reresolvePendingApprovers(oId, [empId]); }
+      catch (e) { console.error('[professional] reresolvePendingApprovers:', e.message); }
     }
 
     res.json(data);

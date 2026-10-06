@@ -177,8 +177,8 @@ function raw(sql, p) {
     return { rows: DB.branches.filter(b => b.org_id === Number(p[0]) && p[1].map(Number).includes(b.id)).map(b => ({ id: b.id })) };
   if ((m = sql.match(/SELECT branch_id FROM users WHERE id = \$1 AND organization_id = \$2/)))
     return { rows: DB.users.filter(u => u.id === Number(p[0]) && u.organization_id === Number(p[1])).map(u => ({ branch_id: u.branch_id })) };
-  if (/SELECT id, role, branch_id FROM users WHERE id = \$1 AND organization_id = \$2/.test(sql))
-    return { rows: DB.users.filter(u => u.id === Number(p[0]) && u.organization_id === Number(p[1])).map(u => ({ id: u.id, role: u.role, branch_id: u.branch_id })) };
+  if (/SELECT id, role, branch_id(, employee_status, department)? FROM users WHERE id = \$1 AND organization_id = \$2/.test(sql))
+    return { rows: DB.users.filter(u => u.id === Number(p[0]) && u.organization_id === Number(p[1])).map(u => ({ id: u.id, role: u.role, branch_id: u.branch_id, employee_status: u.employee_status, department: u.department })) };
   if (/SELECT 1 FROM users WHERE id = \$1 AND organization_id = \$2/.test(sql))
     return { rows: DB.users.filter(u => u.id === Number(p[0]) && u.organization_id === Number(p[1])).map(() => ({ x: 1 })) };
   if (/SELECT id FROM users WHERE organization_id = \$1 AND id = ANY\(\$2::bigint\[\]\)/.test(sql)) {

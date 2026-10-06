@@ -233,9 +233,23 @@ router.post('/reviews', auth, hasPermission('performance', 'create'), withBranch
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/reviews/:id', auth, hasPermission('performance', 'manage'), withBranchContext, async (req, res) => {
+router.put('/reviews/:id', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
+    // Admin-level changes (manager rating, final rating, status…) need performance.manage; the employee who OWNS the
+    // review may submit their own self-rating/comments without it (the seeded employee role never had `manage`, so
+    // self-reviews were rejected with 403 even though the handler was written to accept them).
+    {
+      const { data: owner } = await db.from('performance_reviews').select('user_id').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
+      if (!owner) return res.status(404).json({ error: 'Review not found' });
+      const isOwner = sameId(owner.user_id, req.user.id);
+      if (!(isAdmin(req.user.role) || isOwner)) return res.status(403).json({ error: 'Access denied' });
+      if (isAdmin(req.user.role) && req.user.role !== 'root_admin' && !isOwner) {
+        const { resolvePermissions, hasPermissionCheck } = require('../../services/permissionService');
+        if (!hasPermissionCheck(await resolvePermissions(req.user.id, oId), 'performance', 'manage'))
+          return res.status(403).json({ error: "You don't have permission to perform this action", required_permission: 'performance.manage' });
+      }
+    }
     // Branch isolation: validate admin has access to the review owner's branch.
     if (req.user.role !== 'root_admin') {
       const { data: rev } = await db.from('performance_reviews')

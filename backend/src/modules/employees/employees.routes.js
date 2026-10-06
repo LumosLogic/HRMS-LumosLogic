@@ -22,6 +22,7 @@ async function validateDepartmentIds(ids, oId) {
 const { sendMail, welcomeEmployeeHtml, preOnboardingRequestHtml, credentialsEmailHtml } = require('../../services/emailService');
 const crypto = require('crypto');
 const { initOnboarding } = require('../onboarding/onboardingService');
+const lifecycle = require('../../services/employeeLifecycle');
 const upload     = require('../../middleware/upload');
 const cloudinary = require('../../config/cloudinary');
 
@@ -162,6 +163,7 @@ router.post('/', auth, hasPermission('employees', 'create'), withBranchContext, 
       device_enrollment_id, branch_id, grade, division, sub_division,
       salutation, middle_name, surname, location, pay_cadre,
       weekly_off_day, work_hours_per_day, designation_id, employment_type,
+      joining_date, phone, probation_applicable, probation_months,
     } = req.body;
 
     // Auto-assign the only active branch when none is supplied.
@@ -231,8 +233,9 @@ router.post('/', auth, hasPermission('employees', 'create'), withBranchContext, 
             date_of_birth, force_password_change, organization_id,
             device_enrollment_id, branch_id, grade, division, sub_division,
             salutation, middle_name, surname, location, pay_cadre,
-            weekly_off_day, work_hours_per_day, designation_id, employment_type)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+            weekly_off_day, work_hours_per_day, designation_id, employment_type,
+            joining_date, phone)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,TRUE,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
          RETURNING id, name, email, role, department, position, avatar_color, date_of_birth`,
         [name, email.toLowerCase(), hashed, role||'employee', resolvedDeptName,
          position||'Staff', avatar_color||'#4F46E5', date_of_birth||null, orgId(req),
@@ -240,19 +243,23 @@ router.post('/', auth, hasPermission('employees', 'create'), withBranchContext, 
          sub_division||null, salutation||null, middle_name||null, surname||null,
          location||null, pay_cadre||null, weekly_off_day||null, work_hours_per_day||null,
          designation_id ? parseInt(designation_id) : null,
-         employment_type || 'full_time']
+         employment_type || 'full_time',
+         joining_date || null, phone || null]
       );
       newUser = userRes.rows[0];
 
       if (Array.isArray(department_ids) && department_ids.length > 0) {
-        for (const dId of department_ids) {
-          await client.query(
-            `INSERT INTO user_departments (user_id, department_id, role_in_dept, organization_id)
-             VALUES ($1,$2,'Member',$3)
-             ON CONFLICT (user_id, department_id) DO NOTHING`,
-            [newUser.id, parseInt(dId), orgId(req)]
-          );
-        }
+        // junction + users.department + users.department_id (legacy FK) in one place
+        await lifecycle.syncUserDepartments({ client, orgId: orgId(req), userId: newUser.id, departmentIds: department_ids });
+      }
+
+      // Probation chosen on the Add form was previously dropped by the API (the form showed it, nothing stored it).
+      if (probation_applicable === true || probation_applicable === 'true') {
+        const pd = lifecycle.computeProbationDates(joining_date, probation_months);
+        await client.query(
+          `UPDATE users SET probation_applicable = TRUE, probation_months = $3, probation_start_date = $4,
+                  probation_end_date = $5, employee_status = 'probation' WHERE id = $1 AND organization_id = $2`,
+          [newUser.id, orgId(req), parseInt(probation_months, 10) || 0, pd?.start || null, pd?.end || null]);
       }
 
       await client.query('COMMIT');
@@ -274,6 +281,9 @@ router.post('/', auth, hasPermission('employees', 'create'), withBranchContext, 
         [newUser.id, orgId(req), resolvedBranchId, req.user.id]
       ).catch(() => {});
     }
+
+    // A PIN typed on the Add form must reach the biometric map just like it does on edit.
+    if (device_enrollment_id) await lifecycle.syncBiometricPin({ orgId: orgId(req), userId: newUser.id, pin: device_enrollment_id });
 
     // Fire-and-forget side effects after COMMIT.
     // Send account credentials using the server-generated temp password.
@@ -352,7 +362,7 @@ router.put('/:id', auth, hasPermission('employees', 'edit'), withBranchContext, 
     // other than their own record.
     const targetId = parseInt(req.params.id, 10);
     const { rows: tgtRows } = await pool.query(
-      'SELECT id, role, branch_id FROM users WHERE id = $1 AND organization_id = $2', [targetId, orgId(req)]);
+      'SELECT id, role, branch_id, employee_status, department FROM users WHERE id = $1 AND organization_id = $2', [targetId, orgId(req)]);
     if (!tgtRows.length) return res.status(404).json({ error: 'Employee not found in this organisation' });
     const tgt = tgtRows[0];
     if (req.user.role !== 'root_admin' && tgt.role !== 'employee' && targetId !== req.user.id) {
@@ -425,40 +435,51 @@ router.put('/:id', auth, hasPermission('employees', 'edit'), withBranchContext, 
       if (dupEmail) return res.status(400).json({ error: 'This email is already registered on the platform. Each user must have a unique email address.' });
     }
 
+    // PARTIAL-SAFE: only keys present in the body are written. (The previous `x || null` pattern turned every
+    // absent field into NULL, so a partial call such as the bulk "Change Status" tried to null name/email/phone/
+    // joining_date/ctc/…). Keys that ARE sent keep the old semantics: an empty value clears the column.
+    const has = (k) => Object.prototype.hasOwnProperty.call(req.body, k);
+    const nl = (k, v) => (has(k) ? (v || null) : undefined);
     const update = {
       name, email, role, department, position, avatar_color,
-      date_of_birth:        date_of_birth        || null,
-      phone:                phone                || null,
-      personal_email:       personal_email       || null,
-      joining_date:         joining_date         || null,
-      employment_type:      employment_type      || null,
-      work_mode:            work_mode            || null,
-      employee_status:      employee_status      || null,
-      ctc:                  ctc                  || null,
-      salary_effective_date: salary_effective_date || null,
+      date_of_birth:        nl('date_of_birth', date_of_birth),
+      phone:                nl('phone', phone),
+      personal_email:       nl('personal_email', personal_email),
+      joining_date:         nl('joining_date', joining_date),
+      employment_type:      nl('employment_type', employment_type),
+      work_mode:            nl('work_mode', work_mode),
+      employee_status:      nl('employee_status', employee_status),
+      ctc:                  nl('ctc', ctc),
+      salary_effective_date: nl('salary_effective_date', salary_effective_date),
       // new HRMS columns
-      device_enrollment_id: device_enrollment_id || null,
-      grade:                grade                || null,
-      division:             division             || null,
-      sub_division:         sub_division         || null,
-      salutation:           salutation           || null,
-      middle_name:          middle_name          || null,
-      surname:              surname              || null,
-      location:             location             || null,
-      pay_cadre:            pay_cadre            || null,
-      weekly_off_day:       weekly_off_day       || null,
-      work_hours_per_day:   work_hours_per_day   || null,
-      designation_id:       designation_id ? parseInt(designation_id) : null,
+      device_enrollment_id: nl('device_enrollment_id', device_enrollment_id),
+      grade:                nl('grade', grade),
+      division:             nl('division', division),
+      sub_division:         nl('sub_division', sub_division),
+      salutation:           nl('salutation', salutation),
+      middle_name:          nl('middle_name', middle_name),
+      surname:              nl('surname', surname),
+      location:             nl('location', location),
+      pay_cadre:            nl('pay_cadre', pay_cadre),
+      weekly_off_day:       nl('weekly_off_day', weekly_off_day),
+      work_hours_per_day:   nl('work_hours_per_day', work_hours_per_day),
+      designation_id:       has('designation_id') ? (designation_id ? parseInt(designation_id) : null) : undefined,
       // personal profile fields
-      gender:               gender               || null,
-      blood_group:          blood_group          || null,
-      marital_status:       marital_status       || null,
-      nationality:          nationality          || null,
-      religion:             religion             || null,
-      citizenship:          citizenship          || null,
-      height:               height               || null,
-      weight:               weight               || null,
+      gender:               nl('gender', gender),
+      blood_group:          nl('blood_group', blood_group),
+      marital_status:       nl('marital_status', marital_status),
+      nationality:          nl('nationality', nationality),
+      religion:             nl('religion', religion),
+      citizenship:          nl('citizenship', citizenship),
+      height:               nl('height', height),
+      weight:               nl('weight', weight),
     };
+    for (const k of Object.keys(update)) if (update[k] === undefined) delete update[k];   // never send absent keys as NULL
+    // users.ctc is a display cache of the active salary structure; a competing edit here would only create a second,
+    // silently-ignored salary (payroll reads employee_salary_structures). Structure wins; edit it in Payroll → Salary.
+    if ((update.ctc !== undefined || update.salary_effective_date !== undefined) && await lifecycle.hasActiveSalaryStructure(targetId, orgId(req))) {
+      delete update.ctc; delete update.salary_effective_date;
+    }
     if (password) update.password = bcrypt.hashSync(password, 10);
     // branch_id is only written when explicitly supplied (validated above) — a partial
     // update must never erase the employee's branch.
@@ -489,12 +510,8 @@ router.put('/:id', auth, hasPermission('employees', 'edit'), withBranchContext, 
         );
         effectiveJoining = jdRow[0]?.jd || null;
       }
-      if (effectiveJoining) {
-        update.probation_start_date = effectiveJoining;
-        const endDate = new Date(effectiveJoining + 'T12:00:00Z');
-        endDate.setMonth(endDate.getMonth() + parseInt(probation_months));
-        update.probation_end_date = endDate.toISOString().split('T')[0];
-      }
+      const pd = lifecycle.computeProbationDates(effectiveJoining, probation_months);
+      if (pd) { update.probation_start_date = pd.start; update.probation_end_date = pd.end; }
     } else if (probation_applicable === false) {
       update.probation_start_date = null;
       update.probation_end_date   = null;
@@ -502,9 +519,17 @@ router.put('/:id', auth, hasPermission('employees', 'edit'), withBranchContext, 
 
     // Sync the legacy `status` field with employee_status so the login check stays consistent.
     // login route blocks on `user.status === 'inactive'` independently of employee_status.
+    // 'resigned' keeps access during the notice period (same as the Exit flow); only inactive/terminated lock the account.
     const _finalEmpStatus = update.employee_status;
-    if (_finalEmpStatus !== undefined) {
-      update.status = ['inactive', 'resigned', 'terminated'].includes(_finalEmpStatus) ? 'inactive' : 'active';
+    if (_finalEmpStatus !== undefined) update.status = lifecycle.legacyStatusFor(_finalEmpStatus);
+
+    // The Employees-list bulk "Change Dept" (and Departments page move) sends only the department NAME.
+    // Resolve it to the real department so the junction table (source of truth) moves with it. A body whose name
+    // equals the current primary department (e.g. the birthday editor re-sending the whole row) changes nothing.
+    let deptIdsToApply = Array.isArray(department_ids) ? department_ids : null;
+    if (!deptIdsToApply && typeof department === 'string' && department.trim() && department !== tgt.department) {
+      const dm = await pool.query('SELECT id FROM departments WHERE organization_id = $1 AND lower(name) = lower($2) LIMIT 1', [orgId(req), department.trim()]);
+      if (dm.rows[0]) deptIdsToApply = [dm.rows[0].id];
     }
 
     // Auto-derive Work Location from branch when branch_id is being set and no explicit location provided.
@@ -529,49 +554,31 @@ router.put('/:id', auth, hasPermission('employees', 'edit'), withBranchContext, 
     }
     let data;
 
-    if (Array.isArray(department_ids)) {
+    if (deptIdsToApply) {
       const client = await pool.connect();
       try {
         await client.query('BEGIN');
 
-        // M-12: keep users.department text in sync with the primary department name.
-        // The text column is the legacy denormalized field consumed by leave emails and reports.
-        if (department_ids.length > 0) {
-          const dRes = await client.query(
-            'SELECT name FROM departments WHERE id = $1 AND organization_id = $2',
-            [department_ids[0], orgId(req)]
+        const entries = Object.entries(update).filter(([, v]) => v !== undefined);
+        if (entries.length) {
+          const setClauses = entries.map(([k], i) => `"${k}" = $${i + 3}`).join(', ');
+          const userRes = await client.query(
+            `UPDATE users SET ${setClauses} WHERE id = $1 AND organization_id = $2 RETURNING *`,
+            [empId, orgId(req), ...entries.map(([, v]) => v)]
           );
-          if (dRes.rows[0]?.name) update.department = dRes.rows[0].name;
+          data = userRes.rows[0];
         } else {
-          update.department = '';
+          data = (await client.query('SELECT * FROM users WHERE id = $1 AND organization_id = $2', [empId, orgId(req)])).rows[0];
         }
 
-        // Update user fields
-        const setClauses = Object.entries(update)
-          .filter(([, v]) => v !== undefined)
-          .map(([k], i) => `"${k}" = $${i + 3}`)
-          .join(', ');
-        const vals = Object.entries(update).filter(([, v]) => v !== undefined).map(([, v]) => v);
-        const userRes = await client.query(
-          `UPDATE users SET ${setClauses} WHERE id = $1 AND organization_id = $2 RETURNING *`,
-          [empId, orgId(req), ...vals]
-        );
-        data = userRes.rows[0];
+        // Guard: if nothing matched, empId belongs to another org — abort before touching the junction table.
+        if (!data) throw new Error('Employee not found in this organisation');
 
-        // Guard: if the UPDATE matched no rows the empId belongs to another org — abort now.
-        // Without this check the DELETE below would execute on a cross-tenant user and commit.
-        if (!userRes.rows[0]) throw new Error('Employee not found in this organisation');
-
-        // Replace department assignments atomically (org-scoped to prevent cross-tenant wipe)
-        await client.query(`DELETE FROM user_departments WHERE user_id = $1 AND organization_id = $2`, [empId, orgId(req)]);
-        for (const dId of department_ids) {
-          await client.query(
-            `INSERT INTO user_departments (user_id, department_id, role_in_dept, organization_id)
-             VALUES ($1,$2,'Member',$3)
-             ON CONFLICT (user_id, department_id) DO NOTHING`,
-            [empId, dId, orgId(req)]
-          );
-        }
+        // Department assignment: junction (source of truth) + users.department text + users.department_id, atomically.
+        const dep = await lifecycle.syncUserDepartments({ client, orgId: orgId(req), userId: empId, departmentIds: deptIdsToApply });
+        data.department = dep.primaryName;
+        data.department_id = dep.primaryId;
+        delete data.password;
 
         await client.query('COMMIT');
       } catch (err) {
@@ -583,51 +590,30 @@ router.put('/:id', auth, hasPermission('employees', 'edit'), withBranchContext, 
     } else {
       // No department change — plain user update
       const cols = isAdminRole(req.user.role) ? EMPLOYEE_ADMIN_COLS : EMPLOYEE_PUBLIC_COLS;
-      const { data: updated, error } = await db.from('users').update(update)
-        .eq('id', empId).eq('organization_id', orgId(req))
-        .select(cols).single();
+      const q = Object.keys(update).length
+        ? db.from('users').update(update).eq('id', empId).eq('organization_id', orgId(req))
+        : db.from('users');
+      const { data: updated, error } = await q.eq('id', empId).eq('organization_id', orgId(req)).select(cols).single();
       if (error) throw new Error(error.message);
       data = updated;
     }
 
-    // Auto-sync device_enrollment_id → biometric_employee_map
-    // Runs after user update succeeds so the mapping is always consistent with the stored PIN.
-    if (device_enrollment_id !== undefined) {
-      const cleanPin = device_enrollment_id ? String(device_enrollment_id).trim() : null;
-      try {
-        if (cleanPin) {
-          // Upsert: reassign PIN to this user if it was previously mapped to someone else
-          await pool.query(
-            `INSERT INTO biometric_employee_map (org_id, employee_pin, user_id)
-             VALUES ($1, $2, $3)
-             ON CONFLICT (org_id, employee_pin) DO UPDATE SET user_id = EXCLUDED.user_id`,
-            [orgId(req), cleanPin, empId]
-          );
-          // Remove any old mappings this user had under a different PIN
-          await pool.query(
-            `DELETE FROM biometric_employee_map
-             WHERE org_id = $1 AND user_id = $2 AND employee_pin != $3`,
-            [orgId(req), empId, cleanPin]
-          );
-        } else {
-          // PIN cleared — remove all mappings for this user
-          await pool.query(
-            `DELETE FROM biometric_employee_map WHERE org_id = $1 AND user_id = $2`,
-            [orgId(req), empId]
-          );
-        }
-      } catch (mapErr) {
-        console.error('[employees] biometric_employee_map sync error:', mapErr.message);
-      }
+    // Auto-sync device_enrollment_id → biometric_employee_map (shared with create).
+    if (device_enrollment_id !== undefined) await lifecycle.syncBiometricPin({ orgId: orgId(req), userId: empId, pin: device_enrollment_id });
+
+    // Status side-effects live in ONE place: session block/unblock, exit record + offboarding checklist when the
+    // employee becomes resigned/terminated, closing a stale exit on reactivation. No-op when the status did not change.
+    if (update.employee_status !== undefined) {
+      await lifecycle.afterStatusChange({
+        orgId: orgId(req), userId: empId, prev: tgt.employee_status || 'active',
+        next: update.employee_status || 'active', actorId: req.user.id,
+      });
     }
 
-    // Revoke active sessions for hard-inactive statuses only.
-    // 'resigned' is excluded — employees in notice period retain login access;
-    // the daily cron transitions them to 'inactive' once last_working_day passes.
-    if (employee_status && ['inactive', 'terminated'].includes(employee_status)) {
-      blockUser(empId);
-    } else if (employee_status === 'active' || employee_status === 'probation') {
-      unblockUser(empId);
+    // Department change ⇒ in-flight leave approvals follow the (new) department head.
+    if (deptIdsToApply) {
+      try { await require('../../services/leaveWorkflowEngine').reresolvePendingApprovers(orgId(req), [empId]); }
+      catch (e) { console.error('[employees] reresolvePendingApprovers:', e.message); }
     }
 
     // BUG_217: If the role actually changed, the user's existing JWT still carries
@@ -702,6 +688,13 @@ router.delete('/:id', auth, hasPermission('employees', 'delete'), withBranchCont
     if (!emp) return res.status(404).json({ error: 'Employee not found in this organisation' });
     if (req.user.role !== 'root_admin' && emp.role !== 'employee')
       return res.status(403).json({ error: 'Only root admins can delete HR admin or root admin accounts' });
+    // A hard delete cascades to attendance, leaves, payslips, documents, exit and performance history (ON DELETE CASCADE).
+    // An employee who has been paid must leave through the lifecycle (Resigned / Terminated → Exit → Exited) so payroll and
+    // statutory records survive; hard delete stays available for mistaken records that never reached payroll.
+    {
+      const { rows: paid } = await pool.query('SELECT 1 FROM payslips WHERE user_id = $1 AND organization_id = $2 LIMIT 1', [req.params.id, orgId(req)]);
+      if (paid.length) return res.status(409).json({ error: 'This employee has payroll history and cannot be deleted. Use Exit Management (resign / terminate) so the records are kept.' });
+    }
     await db.from('users').delete().eq('id', req.params.id).eq('organization_id', orgId(req));
     // Log member removed event
     if (emp) {

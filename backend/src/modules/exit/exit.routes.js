@@ -1,10 +1,13 @@
 const express = require('express');
 const router  = express.Router();
 const { sameId } = require('../../utils/ids');
-const { db } = require('../../config/db');
+const { db, pool } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { initOffboarding } = require('../offboarding/offboardingService');
+const lifecycle = require('../../services/employeeLifecycle');
+const engine = require('../../services/leaveWorkflowEngine');
+const { resolvePermissions, hasPermissionCheck } = require('../../services/permissionService');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { resolveEmployeeIds, getAdminsForEmployee, canAdminAccessUser } = require('../../utils/branchFilter');
 
@@ -56,8 +59,21 @@ router.get('/', auth, withBranchContext, async (req, res) => {
 router.post('/', auth, withBranchContext, async (req, res) => {
   try {
     const oId = req.user.organization_id;
-    const { resignation_date, reason, notice_period_days, user_id } = req.body;
+    const { resignation_date: rd, reason, notice_period_days, user_id, exit_type: rawType } = req.body;
+    const exitType = rawType === 'termination' ? 'termination' : 'resignation';
+    // For a termination the date is the effective date (defaults to today); a resignation always needs its date.
+    const resignation_date = rd || (exitType === 'termination' ? new Date().toISOString().split('T')[0] : null);
     if (!resignation_date) return res.status(400).json({ error: 'resignation_date is required' });
+    if (exitType === 'termination') {
+      // Termination is HR/Root-initiated only: needs exit.manage, an explicit target, never oneself.
+      if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Only HR/Root can terminate an employee.' });
+      if (req.user.role !== 'root_admin') {
+        const perms = await resolvePermissions(req.user.id, oId);
+        if (!hasPermissionCheck(perms, 'exit', 'manage')) return res.status(403).json({ error: "You don't have permission to perform this action", required_permission: 'exit.manage' });
+      }
+      if (!user_id) return res.status(400).json({ error: 'user_id is required for a termination' });
+      if (sameId(user_id, req.user.id)) return res.status(400).json({ error: 'You cannot terminate yourself.' });
+    }
 
     // Employees always submit for themselves; admins may specify a target employee.
     let targetUserId = req.user.id;
@@ -72,6 +88,11 @@ router.post('/', auth, withBranchContext, async (req, res) => {
         return res.status(403).json({ error: "You do not have access to this employee's branch." });
       targetUserId = targetUser.id;
       targetName   = targetUser.name;
+      if (exitType === 'termination') {
+        const { data: tr } = await db.from('users').select('role').eq('id', targetUser.id).maybeSingle();
+        if (tr?.role !== 'employee' && req.user.role !== 'root_admin')
+          return res.status(403).json({ error: 'Only root admins can terminate HR/admin accounts.' });
+      }
     }
 
     // Prevent a duplicate open resignation for the same employee.
@@ -80,19 +101,40 @@ router.post('/', auth, withBranchContext, async (req, res) => {
       .in('status', ['pending', 'approved']).maybeSingle();
     if (existing) return res.status(400).json({ error: 'An active resignation request already exists for this employee.' });
 
+    const noticeDays = exitType === 'termination' ? (Number(notice_period_days) || 0) : (Number(notice_period_days) || 30);
     const rDate = new Date(resignation_date);
     const lwd   = new Date(rDate);
-    lwd.setDate(lwd.getDate() + (Number(notice_period_days) || 30));
+    lwd.setDate(lwd.getDate() + noticeDays);
 
     const { data, error } = await db.from('exit_requests')
       .insert({
         user_id: targetUserId, resignation_date,
-        reason: reason || '', notice_period_days: Number(notice_period_days) || 30,
+        reason: reason || '', notice_period_days: noticeDays,
         last_working_day: lwd.toISOString().split('T')[0],
         organization_id: oId,
+        exit_type: exitType,
+        ...(exitType === 'termination' && { status: 'approved', reviewed_by: req.user.id, reviewed_at: new Date().toISOString() }),
       })
       .select().single();
     if (error) throw error;
+
+    if (exitType === 'termination') {
+      // Same effect as approving: status flips (access revoked immediately), offboarding checklist is created.
+      const { rows: pr } = await pool.query('SELECT employee_status FROM users WHERE id = $1 AND organization_id = $2', [targetUserId, oId]);
+      await db.from('users').update({ employee_status: 'terminated', status: lifecycle.legacyStatusFor('terminated') })
+        .eq('id', targetUserId).eq('organization_id', oId);
+      await lifecycle.afterStatusChange({ orgId: oId, userId: targetUserId, prev: pr[0]?.employee_status || 'active', next: 'terminated', actorId: req.user.id });
+      await initOffboarding(targetUserId, oId);
+      const adminIds = (await getAdminsForEmployee(targetUserId, oId)).filter(id => !sameId(id, req.user.id));
+      if (adminIds.length) {
+        await db.from('notifications').insert(adminIds.map(id => ({
+          user_id: id, title: 'Employee Terminated — Action Required',
+          message: `${targetName} was terminated (effective ${lwd.toISOString().split('T')[0]}). Please complete: IT access revocation, asset return, and final settlement.`,
+          type: 'exit', organization_id: oId,
+        })));
+      }
+      return res.json(data);
+    }
 
     // Notify only branch-scoped HR admins and root admins
     const adminIds = await getAdminsForEmployee(targetUserId, oId);
@@ -107,13 +149,8 @@ router.post('/', auth, withBranchContext, async (req, res) => {
     // Notify the employee's department head — they need to plan for the departure (fire-and-forget)
     ;(async () => {
       try {
-        const { data: emp } = await db.from('users')
-          .select('department_id').eq('id', targetUserId).maybeSingle();
-        if (!emp?.department_id) return;
-        const { data: dept } = await db.from('departments')
-          .select('head_user_id').eq('id', emp.department_id).maybeSingle();
-        const dhId = dept?.head_user_id;
-        if (!dhId || dhId === targetUserId) return;
+        const { userId: dhId } = await engine.resolveApprover({ role_type: 'department_head' }, targetUserId, oId);
+        if (!dhId || sameId(dhId, targetUserId)) return;
         await db.from('notifications').insert({
           user_id: dhId, title: 'Team Member Resignation',
           message: `${targetName} has submitted a resignation. Last working day: ${lwd.toISOString().split('T')[0]}. Please plan for handover.`,
@@ -183,10 +220,11 @@ router.put('/:id', auth, hasPermission('exit', 'manage'), withBranchContext, asy
       return res.json(current || {});
     }
 
+    let current = null;   // read again after the update (approval side-effects) — must outlive this block
     if (isStatusChange) {
       // Fetch current state to enforce idempotency — prevent double-approval
-      const { data: current } = await db.from('exit_requests')
-        .select('id, status, user_id').eq('id', req.params.id).eq('organization_id', oId).single();
+      ({ data: current } = await db.from('exit_requests')
+        .select('*').eq('id', req.params.id).eq('organization_id', oId).single());
       if (!current) return res.status(404).json({ error: 'Exit request not found' });
       if (current.status === updates.status) {
         // Already in the target status — return current record idempotently
@@ -244,10 +282,14 @@ router.put('/:id', auth, hasPermission('exit', 'manage'), withBranchContext, asy
       // A daily cron will transition resigned→inactive once last_working_day passes.
       if (updates.status === 'approved') {
         // BUG_218: await this update so the status change is guaranteed before responding.
+        // exit_type decides the resulting status; everything else (legacy status, session, checklist) is shared.
+        const nextStatus = current.exit_type === 'termination' ? 'terminated' : 'resigned';
+        const { rows: pr } = await pool.query('SELECT employee_status FROM users WHERE id = $1 AND organization_id = $2', [current.user_id, oId]);
         await db.from('users')
-          .update({ employee_status: 'resigned' })
+          .update({ employee_status: nextStatus, status: lifecycle.legacyStatusFor(nextStatus) })
           .eq('id', current.user_id)
           .eq('organization_id', oId);
+        await lifecycle.afterStatusChange({ orgId: oId, userId: current.user_id, prev: pr[0]?.employee_status || 'active', next: nextStatus, actorId: req.user.id });
 
         // Notify branch-scoped admins of the approved exit — rewritten to avoid messy chaining
         ;(async () => {

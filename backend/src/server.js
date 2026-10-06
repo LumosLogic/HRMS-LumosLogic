@@ -314,6 +314,12 @@ async function runStartupMigrations() {
     )`,
     `CREATE INDEX IF NOT EXISTS offboarding_checklists_user_idx ON offboarding_checklists(user_id)`,
     `CREATE INDEX IF NOT EXISTS offboarding_checklists_org_idx  ON offboarding_checklists(organization_id)`,
+    // Termination is a type of the existing exit flow (no second exit table)
+    `ALTER TABLE exit_requests ADD COLUMN IF NOT EXISTS exit_type TEXT NOT NULL DEFAULT 'resignation'`,
+    // users.department_id (legacy FK) follows the primary user_departments row — see migrations/employee_lifecycle_2026_10_06.sql
+    `UPDATE users u SET department_id = x.department_id
+       FROM (SELECT DISTINCT ON (user_id) user_id, department_id FROM user_departments ORDER BY user_id, created_at ASC, department_id ASC) x
+      WHERE x.user_id = u.id AND u.department_id IS DISTINCT FROM x.department_id`,
     // Bug-004/048: backfill regularization actual check-in/out from attendance (idempotent)
     `ALTER TABLE attendance_regularization ADD COLUMN IF NOT EXISTS actual_check_in  VARCHAR(8)`,
     `ALTER TABLE attendance_regularization ADD COLUMN IF NOT EXISTS actual_check_out VARCHAR(8)`,

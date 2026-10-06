@@ -696,7 +696,18 @@ async function fetchAllData(oId, uId, month, year) {
     } catch { /* table not yet migrated — use org-wide schedule */ }
   }
 
+  // Last working day of an approved/completed exit: an employee who has already been moved to 'inactive' after the
+  // last working day is still payable for the month that contains it (final settlement month).
+  let employmentEnd = null;
+  try {
+    const xr = await pool.query(
+      `SELECT MAX(last_working_day) AS lwd FROM exit_requests
+        WHERE user_id = $1 AND organization_id = $2 AND status IN ('approved','completed')`, [uId, oId]);
+    employmentEnd = xr.rows[0]?.lwd || null;
+  } catch { /* exit_requests unavailable — behave as before */ }
+
   return {
+    employmentEnd,
     employee:         empRes.rows[0]      ?? null,
     settings:         settingsRes.rows[0] ?? null,
     salary:           salaryRes.rows[0]   ?? null,
@@ -747,7 +758,7 @@ async function calculatePayroll({ organizationId, userId, month, year }) {
       'EMPLOYEE_NOT_FOUND'
     );
   }
-  if (data.employee.status === 'inactive') {
+  if (data.employee.status === 'inactive' && !(data.employmentEnd && data.employmentEnd >= data.start)) {
     throw new PayrollError(
       `Employee "${data.employee.name}" is inactive and cannot be included in payroll`,
       'EMPLOYEE_INACTIVE'

@@ -1,5 +1,6 @@
 const { db, pool } = require('../config/db');
-const { localDateStr, getRecipients, getOrgContext } = require('./helpers');
+const { localDateStr, getRecipients, getOrgContext, getSettings } = require('./helpers');
+const { EXCLUDED_STATUSES, computeProbationDates } = require('./employeeStatus');
 const { sendMail, birthdayWishHtml, birthdayReminderHtml, holidayReminderHtml } = require('../services/emailService');
 const { sendPushToUsers } = require('../services/pushService');
 
@@ -17,6 +18,33 @@ function scheduleDailyAt(hour, minute, fn) {
   }, msUntilNext());
 }
 
+// Document expiry reminders. document_requirements.expiry_reminder_days (and expiry_date on every approved submission)
+// were stored and shown in the Documents UI, but nothing ever reminded anyone — only an "expiring soon" counter existed.
+// Fires on the configured lead time and again at 7 days, 1 day and on the day itself (exact-day match ⇒ no duplicates
+// without any extra state). Recipients: the employee + the HR/Root admins responsible for that employee (branch-aware).
+async function runDocumentExpiryReminders(oId, today) {
+  const { rows } = await pool.query(
+    `SELECT s.user_id, s.expiry_date::text AS expiry_date, r.name AS doc_name, u.name AS emp_name,
+            (s.expiry_date::date - $2::date) AS days_left
+       FROM employee_doc_submissions s
+       JOIN document_requirements r ON r.id = s.requirement_id
+       JOIN users u ON u.id = s.user_id
+      WHERE s.organization_id = $1 AND s.status = 'approved' AND s.expiry_date IS NOT NULL
+        AND (u.employee_status IS NULL OR u.employee_status NOT IN ('inactive','resigned','terminated'))
+        AND (s.expiry_date::date - $2::date) IN (0, 1, 7, COALESCE(r.expiry_reminder_days, 30))`, [oId, today]);
+  const { getAdminsForEmployee } = require('./branchFilter');
+  let sent = 0;
+  for (const r of rows) {
+    const when = Number(r.days_left) === 0 ? 'expires today' : `expires in ${r.days_left} day(s) (${String(r.expiry_date).slice(0, 10)})`;
+    const rowsToInsert = [{ user_id: r.user_id, title: 'Document Expiring', message: `Your "${r.doc_name}" ${when}. Please upload a renewed copy.` }];
+    for (const adminId of await getAdminsForEmployee(r.user_id, oId))
+      rowsToInsert.push({ user_id: adminId, title: 'Employee Document Expiring', message: `${r.emp_name}'s "${r.doc_name}" ${when}.` });
+    await db.from('notifications').insert(rowsToInsert.map(n => ({ ...n, type: 'document', organization_id: oId })));
+    sent += rowsToInsert.length;
+  }
+  return sent;
+}
+
 async function runDailyNotifications() {
   const today    = localDateStr();
   const todayMD  = today.slice(5);
@@ -29,9 +57,12 @@ async function runDailyNotifications() {
   for (const org of orgs || []) {
     const oId = org.id;
     const { orgName, orgEmail } = await getOrgContext(oId);
+    try { await runDocumentExpiryReminders(oId, today); }
+    catch (e) { console.error(`[Cron] document expiry reminders failed for org ${oId}:`, e.message); }
     const { data: employees } = await db.from('users')
       .select('id, name, email, department, date_of_birth, joining_date')
-      .eq('role', 'employee').eq('organization_id', oId);
+      .eq('role', 'employee').eq('organization_id', oId)
+      .not('employee_status', 'in', EXCLUDED_STATUSES);   // no wishes/holiday mails to exited staff
 
     for (const emp of employees || []) {
       if (emp.date_of_birth && emp.date_of_birth.slice(5) === todayMD) {
@@ -112,9 +143,9 @@ async function runAutoMarkAbsent() {
   for (const org of (orgs || [])) {
     const oId = org.id;
     try {
-      // Fetch org work schedule to know working days
-      const { data: sched } = await db.from('organization_settings')
-        .select('work_days').eq('organization_id', oId).maybeSingle();
+      // Working days come from work_schedule (the same source leave/payroll use). The old lookup targeted an
+      // `organization_settings` table that no migration creates, so every org silently fell back to Mon–Fri.
+      const sched = await getSettings(oId);
       const workDays = sched?.work_days
         ? sched.work_days.split(',').map(Number)
         : [1, 2, 3, 4, 5]; // Mon–Fri default
@@ -196,7 +227,9 @@ async function runAutoMarkAbsent() {
         user_id: uid, organization_id: oId, date: today, status: 'absent',
         check_in: null, check_out: null,
       }));
-      await db.from('attendance').upsert(absentRecords, { onConflict: 'user_id,date', ignoreDuplicates: true });
+      // the unique key of attendance is (user_id, date, organization_id) — the 2-column target matched no constraint, so
+      // every night this upsert failed silently while the log still said "Marked N absent".
+      await db.from('attendance').upsert(absentRecords, { onConflict: 'user_id,date,organization_id', ignoreDuplicates: true });
       console.log(`[AutoAbsent] Marked ${absentIds.length} absent for org ${oId} on ${today}`);
     } catch (err) {
       console.error(`[AutoAbsent] Error for org ${oId}:`, err.message);
@@ -226,9 +259,15 @@ async function runProbationExpiryCheck() {
       if (expired?.length) {
         for (const emp of expired) {
           await db.from('users')
-            .update({ employee_status: 'active', employment_type: 'full_time' })
+            .update({ employee_status: 'active', employment_type: 'full_time', confirmation_date: today })
             .eq('id', emp.id)
             .eq('organization_id', oId);
+          // The employee is told too (previously only HR/Root were notified).
+          await db.from('notifications').insert({
+            user_id: emp.id, title: 'Probation Completed',
+            message: 'Congratulations! Your probation period has ended and you are now a confirmed Full Time employee.',
+            type: 'general', organization_id: oId,
+          });
 
           const { data: admins } = await db.from('users')
             .select('id').eq('organization_id', oId).in('role', ['admin', 'root_admin']);
@@ -273,11 +312,7 @@ async function runProbationExpiryCheck() {
       `, [oId]);
 
       for (const emp of newEmps) {
-        const startDate = emp.resolved_joining_date.slice(0, 10);
-
-        const endD = new Date(startDate + 'T12:00:00Z');
-        endD.setMonth(endD.getMonth() + months);
-        const endDate = endD.toISOString().split('T')[0];
+        const { start: startDate, end: endDate } = computeProbationDates(emp.resolved_joining_date, months);
 
         if (endDate > today) {
           // Still within probation window
@@ -316,7 +351,7 @@ async function runResignationExpiry() {
   // Find approved exit requests whose last_working_day is today or earlier
   const { data: expiredExits } = await db.from('exit_requests')
     .select('user_id, organization_id, last_working_day')
-    .eq('status', 'approved')
+    .in('status', ['approved', 'completed'])   // 'completed' offboarding must not stop the deactivation
     .lte('last_working_day', today);
 
   if (!expiredExits?.length) return;
@@ -466,6 +501,7 @@ function scheduleEveryMinutes(min, fn) {
 }
 
 module.exports = {
+  runDocumentExpiryReminders,
   scheduleDailyAt,
   scheduleEveryMinutes,
   runDailyNotifications,

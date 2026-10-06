@@ -480,13 +480,24 @@ router.put('/:id/review', auth, hasPermission('attendance', 'approve_regularizat
           );
         }
 
-        // 4. Cancel any approved leaves overlapping this date
-        await client.query(
+        // 4. Cancel any approved leaves overlapping this date, and remove the leave attendance rows that leave had
+        //    written for its OTHER days (they would otherwise stay as orphan on_leave/half_day/wfh rows that no
+        //    approved leave backs any more). The corrected day itself was just set to 'present' above.
+        const { rows: cancelled } = await client.query(
           `UPDATE leaves SET status = 'cancelled'
            WHERE user_id = $1 AND organization_id = $2 AND status = 'approved'
-             AND start_date <= $3 AND end_date >= $3`,
+             AND start_date <= $3 AND end_date >= $3
+           RETURNING start_date, end_date`,
           [reg.user_id, oId, reg.date]
         );
+        for (const c of cancelled) {
+          await client.query(
+            `DELETE FROM attendance
+              WHERE user_id = $1 AND organization_id = $2 AND date >= $3 AND date <= $4 AND date <> $5
+                AND status IN ('on_leave','half_day','wfh') AND check_in IS NULL AND check_out IS NULL`,
+            [reg.user_id, oId, String(c.start_date).slice(0, 10), String(c.end_date).slice(0, 10), reg.date]
+          );
+        }
       }
     }
 

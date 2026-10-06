@@ -61,7 +61,7 @@ router.post('/login', rateLimiter(LIMITS.LOGIN), async (req, res) => {
     if (user.employee_status === 'resigned') {
       const today = new Date().toISOString().split('T')[0];
       const { data: exitReq } = await db.from('exit_requests')
-        .select('last_working_day').eq('user_id', user.id).eq('status', 'approved')
+        .select('last_working_day').eq('user_id', user.id).in('status', ['approved', 'completed'])
         .order('created_at', { ascending: false }).limit(1);
       const lwd = exitReq?.[0]?.last_working_day;
       if (lwd && lwd < today) {

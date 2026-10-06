@@ -68,7 +68,7 @@ async function auth(req, res, next) {
         const { rows } = await pool.query(
           `SELECT u.employee_status,
                   (SELECT last_working_day FROM exit_requests
-                    WHERE user_id = u.id AND status = 'approved'
+                    WHERE user_id = u.id AND status IN ('approved','completed')
                     ORDER BY created_at DESC LIMIT 1) AS last_working_day
            FROM users u WHERE u.id = $1 LIMIT 1`,
           [decoded.id]
