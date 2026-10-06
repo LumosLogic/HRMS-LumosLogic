@@ -37,7 +37,7 @@ const STATUS_FILTERS = { all: undefined, pending: PENDING_STATUSES, approved: ['
 const HIGHLIGHT_PAGE_SIZE = 500;   // a notification deep link must find its leave wherever it sits in the list
 
 export default function Leaves() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, hasCustomAccess } = useAuth();
   const toast = useToast();
   const qc = useQueryClient();
   const { selectedBranchId } = useBranch();
@@ -238,9 +238,12 @@ export default function Leaves() {
           <div className="page-subtitle">Track and manage employee leaves</div>
         </div>
         <div className="flex gap-2">
-          <button className="btn btn-primary" onClick={() => setApplyModal(true)}>
-            <Plus size={14} /> {isAdmin ? 'Add Employee Leave' : 'Apply Leave'}
-          </button>
+          {/* Recording leave on someone's behalf stays an HR/Root action; custom roles apply from My Leaves */}
+          {!(isAdmin && hasCustomAccess) && (
+            <button className="btn btn-primary" onClick={() => setApplyModal(true)}>
+              <Plus size={14} /> {isAdmin ? 'Add Employee Leave' : 'Apply Leave'}
+            </button>
+          )}
         </div>
       </div>
 
@@ -543,6 +546,10 @@ const STATUS_CARD = {
 };
 
 function LeaveCard({ leave: l, isAdmin, user, onApprove, onReject, onRevert, onCancel, onEdit, onDelete, balanceMap, isHighlighted }) {
+  const { adminCan } = useAuth();
+  // HR/Root: true (unchanged). Custom-role user: only with the matching leaves permission (the API enforces the same).
+  const canDecide = adminCan('leaves', 'approve');
+  const canManage = adminCan('leaves', 'manage');
   const sc = STATUS_CARD[l.status] || {};
   const isRootAdmin = user?.role === 'root_admin';
   // BUG_094: show highlight ring; fade out after 3 seconds
@@ -694,14 +701,14 @@ function LeaveCard({ leave: l, isAdmin, user, onApprove, onReject, onRevert, onC
 
         <div className="flex gap-2 mt-2.5 flex-wrap">
           {/* Old-flow pending — both HR Admin and Root Admin can approve */}
-          {isAdmin && l.status === 'pending' && (
+          {isAdmin && canDecide && l.status === 'pending' && (
             <>
               <button className="btn btn-success btn-sm text-xs" onClick={() => onApprove(l.id)}><CheckCircle size={12} /> Approve</button>
               <button className="btn btn-danger btn-sm text-xs"  onClick={() => onReject(l.id)}><X size={12} /> Reject</button>
             </>
           )}
           {/* New workflow: pending_approval — show actions only when user can approve this level */}
-          {isAdmin && l.status === 'pending_approval' && canApproveNow && (
+          {isAdmin && canDecide && l.status === 'pending_approval' && canApproveNow && (
             <>
               <button className="btn btn-success btn-sm text-xs" onClick={() => onApprove(l.id)}><CheckCircle size={12} /> Approve</button>
               <button className="btn btn-danger btn-sm text-xs"  onClick={() => onReject(l.id)}><X size={12} /> Reject</button>
@@ -725,7 +732,7 @@ function LeaveCard({ leave: l, isAdmin, user, onApprove, onReject, onRevert, onC
             </span>
           )}
           {/* Legacy-flow: Root Admin final decision */}
-          {isAdmin && l.status === 'pending_root' && isRootAdmin && (
+          {isAdmin && canDecide && l.status === 'pending_root' && isRootAdmin && (
             <>
               <button className="btn btn-success btn-sm text-xs" onClick={() => onApprove(l.id)}><CheckCircle size={12} /> Approve</button>
               <button className="btn btn-danger btn-sm text-xs"  onClick={() => onReject(l.id)}><X size={12} /> Reject</button>
@@ -736,7 +743,7 @@ function LeaveCard({ leave: l, isAdmin, user, onApprove, onReject, onRevert, onC
               Awaiting Root Admin Decision
             </span>
           )}
-          {l.status === 'approved' && (isAdmin || l.user_id === user?.id) && (
+          {l.status === 'approved' && ((isAdmin && canManage) || l.user_id === user?.id) && (
             <button className="btn btn-outline btn-sm text-xs border-amber-300 text-amber-800 hover:bg-amber-50" onClick={() => onRevert(l.id)}>
               <RotateCcw size={12} /> Revert Leave
             </button>
@@ -752,10 +759,10 @@ function LeaveCard({ leave: l, isAdmin, user, onApprove, onReject, onRevert, onC
         <button className="btn btn-outline btn-sm text-xs py-1 px-2 flex items-center gap-1" onClick={() => setShowComments(c => !c)}>
           💬 {comments.length > 0 ? `${comments.length} ` : ''}Comments
         </button>
-        {(isAdmin || l.status !== 'approved') && (
+        {((isAdmin && canManage) || l.status !== 'approved') && (
           <button className="btn btn-outline btn-sm text-xs py-1 px-2" onClick={onEdit}><Edit size={12} /> Edit</button>
         )}
-        {isAdmin && (
+        {isAdmin && canManage && (
           <button className="btn btn-danger btn-sm text-xs py-1 px-2" onClick={onDelete}><Trash2 size={12} /></button>
         )}
       </div>

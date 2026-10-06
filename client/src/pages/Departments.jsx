@@ -81,7 +81,7 @@ export default function Departments() {
   const qc       = useQueryClient();
   const navigate = useNavigate();
   const location = useLocation();
-  const { isRootAdmin } = useAuth();
+  const { isRootAdmin, adminCan } = useAuth();
   const { selectedBranchId } = useBranch();
   const employeesPath = location.pathname.startsWith('/root/') ? '/root/employees' : '/employees';
   const [searchParams, setSearchParams] = useSearchParams();
@@ -123,9 +123,11 @@ export default function Departments() {
           <h1 className="page-title">Departments</h1>
           <p className="page-subtitle">{depts.length} department{depts.length !== 1 ? 's' : ''} · manage teams and reporting structure</p>
         </div>
-        <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
-          <Plus size={16} /> Add Department
-        </button>
+        {adminCan('departments', 'create') && (
+          <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
+            <Plus size={16} /> Add Department
+          </button>
+        )}
       </div>
 
       {/* Stats bar */}
@@ -183,8 +185,8 @@ export default function Departments() {
                       <Building2 size={20} style={{ color }} />
                     </div>
                     <div className="flex gap-1">
-                      <button className="btn btn-ghost btn-icon text-[#777587] hover:text-[#3525cd]" onClick={() => setEditDept(d)}><Pencil size={14} /></button>
-                      <button className="btn btn-ghost btn-icon text-[#777587] hover:text-rose-500" onClick={() => setConfirmDel({ id: d.id, name: d.name })}><Trash2 size={14} /></button>
+                      {adminCan('departments', 'edit') && <button className="btn btn-ghost btn-icon text-[#777587] hover:text-[#3525cd]" onClick={() => setEditDept(d)}><Pencil size={14} /></button>}
+                      {adminCan('departments', 'delete') && <button className="btn btn-ghost btn-icon text-[#777587] hover:text-rose-500" onClick={() => setConfirmDel({ id: d.id, name: d.name })}><Trash2 size={14} /></button>}
                     </div>
                   </div>
 

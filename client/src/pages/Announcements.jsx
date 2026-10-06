@@ -368,12 +368,12 @@ function AnnouncementCard({ a, isAdmin, today, onEdit, onDelete, onPreview, onDu
   const isImage = a.file_url && (a.file_type?.startsWith('image/') || /\.(png|jpg|jpeg|webp|gif)$/i.test(a.file_url));
   const toast   = useToast();
   const qc      = useQueryClient();
-  const { user, isRootAdmin } = useAuth();
+  const { user, isRootAdmin, adminCan } = useAuth();
 
   // Root Admin can manage any org announcement.
   // Other admins can only manage announcements they created (non-null created_by matching own id).
   // Legacy announcements with created_by = null are root-admin-only.
-  const canManageThis = isAdmin && (isRootAdmin || (a.created_by != null && Number(a.created_by) === Number(user?.id)));
+  const canManageThis = isAdmin && adminCan('announcements', 'manage') && (isRootAdmin || (a.created_by != null && Number(a.created_by) === Number(user?.id)));
   // BUG_094: fade highlight out after 3 seconds
   const [lit, setLit] = useState(!!isHighlighted);
   const [markedRead, setMarkedRead] = useState(!!a.is_read_by_me);

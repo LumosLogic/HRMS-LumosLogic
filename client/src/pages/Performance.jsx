@@ -364,7 +364,7 @@ function GoalDetailsPanel({ goalId, isAdmin, newComment, setNewComment, onCommen
 }
 
 export default function Performance() {
-  const { isAdmin, isEmployee } = useAuth();
+  const { isAdmin, isEmployee, adminCan } = useAuth();
   const { selectedBranchId } = useBranch();
   const wrap = '';
   const toast = useToast();
@@ -462,7 +462,7 @@ export default function Performance() {
             <button onClick={() => setCycle(c => String(Number(c) + 1))} className="w-7 h-7 flex items-center justify-center rounded text-[#777587] hover:text-[#3525cd] hover:bg-[#f0f3ff]">›</button>
           </div>
           {tab === 'goals' && <button className="btn btn-primary" onClick={() => setAddGoal(true)}><Plus size={15} />Add Goal</button>}
-          {tab === 'reviews' && isAdmin && (
+          {tab === 'reviews' && isAdmin && adminCan('performance', 'create') && (
             <select className="form-control w-auto" defaultValue="" onChange={e => { if (e.target.value) { initReview.mutate(e.target.value); e.target.value = ''; } }}>
               <option value="">Start Review for…</option>
               {employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}

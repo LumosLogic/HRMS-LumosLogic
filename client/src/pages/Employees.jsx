@@ -201,7 +201,8 @@ function EmployeeProfile({ emp, onBack, onEdit }) {
   const [adjForm,        setAdjForm]        = useState({ leave_type: '', direction: 'add', amount: '', reason: '' });
   const [adjHistoryModal, setAdjHistoryModal] = useState(false);
 
-  const { isAdmin }  = useAuth();
+  const { isAdmin, adminCan }  = useAuth();
+  const canEdit = adminCan('employees', 'edit');
   const toast        = useToast();
   const qc           = useQueryClient();
 
@@ -400,10 +401,10 @@ function EmployeeProfile({ emp, onBack, onEdit }) {
           <ArrowLeft size={16} /> Back
         </button>
         <div className="w-px h-6 bg-[#e7eefe] mx-1 flex-shrink-0" />
-        <button onClick={() => onEdit(emp)}
+        {canEdit && (<button onClick={() => onEdit(emp)}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#c7c4d8] bg-white text-xs font-bold text-[#464555] hover:bg-[#f0f3ff] hover:text-[#3525cd] hover:border-[#3525cd]/40 transition-all">
           <Pencil size={13} /> Edit Profile
-        </button>
+        </button>)}
         <button onClick={() => jumpTo('attendance')}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#c7c4d8] bg-white text-xs font-bold text-[#464555] hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 transition-all">
           <UserCheck size={13} /> Attendance
@@ -416,15 +417,15 @@ function EmployeeProfile({ emp, onBack, onEdit }) {
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#c7c4d8] bg-white text-xs font-bold text-[#464555] hover:bg-indigo-50 hover:text-indigo-600 hover:border-indigo-200 transition-all">
           <Home size={13} /> WFH
         </button>
-        <button onClick={() => onEdit(emp, 'account')}
+        {canEdit && (<button onClick={() => onEdit(emp, 'account')}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#c7c4d8] bg-white text-xs font-bold text-[#464555] hover:bg-[#f0f3ff] hover:text-[#3525cd] hover:border-[#3525cd]/40 transition-all">
           <Key size={13} /> Reset Password
-        </button>
-        <button onClick={() => onEdit(emp, 'documents')}
+        </button>)}
+        {canEdit && (<button onClick={() => onEdit(emp, 'documents')}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#c7c4d8] bg-white text-xs font-bold text-[#464555] hover:bg-[#f0f3ff] hover:text-[#3525cd] hover:border-[#3525cd]/40 transition-all">
           <FileText size={13} /> Documents
-        </button>
-        {emp.ctc && (
+        </button>)}
+        {emp.ctc && canEdit && (
           <button onClick={() => onEdit(emp, 'salary')}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#c7c4d8] bg-white text-xs font-bold text-[#464555] hover:bg-emerald-50 hover:text-emerald-700 hover:border-emerald-200 transition-all">
             <BarChart3 size={13} /> Payroll
@@ -552,10 +553,10 @@ function EmployeeProfile({ emp, onBack, onEdit }) {
             <div className="bg-white rounded-2xl border border-[#e7eefe] shadow-sm p-5">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-black text-[#151c27] text-sm">Personal Information</h3>
-                <button onClick={() => onEdit(emp, 'personal')}
+                {canEdit && (<button onClick={() => onEdit(emp, 'personal')}
                   className="text-xs font-semibold text-[#3525cd] hover:text-[#4f46e5] flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[#c7c4d8] hover:bg-[#f0f3ff] transition-all">
                   <Pencil size={11} /> Edit
-                </button>
+                </button>)}
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3">
                 {[
@@ -577,10 +578,10 @@ function EmployeeProfile({ emp, onBack, onEdit }) {
             <div className="bg-white rounded-2xl border border-[#e7eefe] shadow-sm p-5">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-black text-[#151c27] text-sm">Employment Details</h3>
-                <button onClick={() => onEdit(emp, 'employment')}
+                {canEdit && (<button onClick={() => onEdit(emp, 'employment')}
                   className="text-xs font-semibold text-[#3525cd] hover:text-[#4f46e5] flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[#c7c4d8] hover:bg-[#f0f3ff] transition-all">
                   <Pencil size={11} /> Edit
-                </button>
+                </button>)}
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3">
                 {[
@@ -607,10 +608,10 @@ function EmployeeProfile({ emp, onBack, onEdit }) {
             <div className="bg-white rounded-2xl border border-[#e7eefe] shadow-sm p-5">
               <div className="flex items-center justify-between mb-4">
                 <h3 className="font-black text-[#151c27] text-sm">Salary Overview</h3>
-                <button onClick={() => onEdit(emp, 'salary')}
+                {canEdit && (<button onClick={() => onEdit(emp, 'salary')}
                   className="text-xs font-semibold text-[#3525cd] hover:text-[#4f46e5] flex items-center gap-1 px-3 py-1.5 rounded-lg border border-[#c7c4d8] hover:bg-[#f0f3ff] transition-all">
                   <Pencil size={11} /> Edit
-                </button>
+                </button>)}
               </div>
               <div className="grid grid-cols-2 gap-x-8 gap-y-3">
                 <div className="border-b border-[#f5f5f9] pb-3">
@@ -642,7 +643,7 @@ function EmployeeProfile({ emp, onBack, onEdit }) {
                   { label: 'Edit Profile',     icon: <Pencil size={13} />,     cls: 'border-[#c7c4d8] text-[#464555] hover:bg-[#f0f3ff]',       onClick: () => onEdit(emp, 'personal')    },
                   { label: 'Reset Password',   icon: <Key size={13} />,        cls: 'border-orange-200 text-orange-700 hover:bg-orange-50',      onClick: () => onEdit(emp, 'account')     },
                   { label: 'Documents',        icon: <FileText size={13} />,   cls: 'border-[#c7c4d8] text-[#464555] hover:bg-[#f0f3ff]',       onClick: () => onEdit(emp, 'documents')   },
-                ].map(a => (
+                ].filter(a => canEdit || !/Edit|Reset|Documents/.test(a.label)).map(a => (
                   <button key={a.label} onClick={a.onClick}
                     className={`flex items-center justify-center gap-1.5 py-2.5 px-3 rounded-xl border text-xs font-bold transition-all ${a.cls}`}>
                     {a.icon} {a.label}
@@ -2339,7 +2340,10 @@ function exportEmployeesCSV(rows, filename = 'employees.csv') {
 
 // ── Main Employees Page ───────────────────────────────────────────────────────
 export default function Employees() {
-  const { user } = useAuth();
+  const { user, adminCan } = useAuth();
+  const canCreate = adminCan('employees', 'create');
+  const canEditEmp = adminCan('employees', 'edit');
+  const canDelete = adminCan('employees', 'delete');
   const toast    = useToast();
   const qc       = useQueryClient();
   const navigate = useNavigate();
@@ -2700,9 +2704,11 @@ export default function Employees() {
           <button className="btn btn-outline btn-sm" onClick={() => exportEmployeesCSV(filtered)}>
             <Download size={14} /> Export CSV
           </button>
-          <button className="btn btn-primary" onClick={() => { setAddDefaultRole('employee'); setAddOpen(true); }}>
-            <Plus size={16} /> Add Employee
-          </button>
+          {canCreate && (
+            <button className="btn btn-primary" onClick={() => { setAddDefaultRole('employee'); setAddOpen(true); }}>
+              <Plus size={16} /> Add Employee
+            </button>
+          )}
         </div>
       </div>
 
@@ -2896,12 +2902,14 @@ export default function Employees() {
               className="flex items-center gap-1.5 text-xs font-bold bg-white/15 hover:bg-white/25 text-white px-3 py-1.5 rounded-lg border border-white/30 transition-all">
               <Download size={13} /> Export Selected
             </button>
-            <button
-              onClick={() => setBulkDelConf(true)}
-              disabled={isBulkDel}
-              className="flex items-center gap-1.5 text-xs font-bold bg-rose-500 hover:bg-rose-600 text-white px-3 py-1.5 rounded-lg transition-all disabled:opacity-50">
-              <Trash2 size={13} /> Delete Selected
-            </button>
+            {canDelete && (
+              <button
+                onClick={() => setBulkDelConf(true)}
+                disabled={isBulkDel}
+                className="flex items-center gap-1.5 text-xs font-bold bg-rose-500 hover:bg-rose-600 text-white px-3 py-1.5 rounded-lg transition-all disabled:opacity-50">
+                <Trash2 size={13} /> Delete Selected
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -3007,12 +3015,14 @@ export default function Employees() {
                   onClick={() => openProfile(emp)}>
                   <User size={12} /> View
                 </button>
-                <button
-                  className="py-2 px-3 rounded-lg text-xs font-bold text-[#3525cd] bg-white border border-[#c7c4d8] hover:bg-[#f0f3ff] hover:border-[#3525cd]/50 transition-all"
-                  onClick={() => openProfile(emp)}>
-                  <Pencil size={12} />
-                </button>
-                {emp.id !== user?.id && (
+                {canEditEmp && (
+                  <button
+                    className="py-2 px-3 rounded-lg text-xs font-bold text-[#3525cd] bg-white border border-[#c7c4d8] hover:bg-[#f0f3ff] hover:border-[#3525cd]/50 transition-all"
+                    onClick={() => openProfile(emp)}>
+                    <Pencil size={12} />
+                  </button>
+                )}
+                {canDelete && emp.id !== user?.id && (
                   <button
                     className="py-2 px-3 rounded-lg text-xs font-bold text-rose-600 bg-rose-50 border border-rose-200 hover:bg-rose-100 transition-all disabled:opacity-40"
                     onClick={() => handleDelete(emp)}
@@ -3111,11 +3121,13 @@ export default function Employees() {
                             className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-[#464555] hover:bg-[#f0f3ff] hover:text-[#3525cd] transition-colors">
                             <User size={12} /> View Profile
                           </button>
-                          <button onClick={() => openProfile(emp)}
-                            className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-[#464555] hover:bg-[#f0f3ff] hover:text-[#3525cd] transition-colors">
-                            <Pencil size={12} /> Edit Employee
-                          </button>
-                          {emp.id !== user?.id && (
+                          {canEditEmp && (
+                            <button onClick={() => openProfile(emp)}
+                              className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-[#464555] hover:bg-[#f0f3ff] hover:text-[#3525cd] transition-colors">
+                              <Pencil size={12} /> Edit Employee
+                            </button>
+                          )}
+                          {canDelete && emp.id !== user?.id && (
                             <button onClick={() => handleDelete(emp)} disabled={deleteMut.isPending}
                               className="w-full flex items-center gap-2 px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 transition-colors disabled:opacity-40">
                               <Trash2 size={12} /> Delete
@@ -3383,12 +3395,14 @@ export default function Employees() {
               >
                 <Eye size={13} /> View Full Profile
               </button>
-              <button
-                onClick={() => { setEditEmp(profileDrawerEmp); setEditInitialTab('personal'); setProfileDrawerEmp(null); }}
-                className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold bg-[#3525cd] text-white hover:bg-[#2a1eb0] transition-colors shadow-sm"
-              >
-                <Pencil size={13} /> Edit Employee
-              </button>
+              {canEditEmp && (
+                <button
+                  onClick={() => { setEditEmp(profileDrawerEmp); setEditInitialTab('personal'); setProfileDrawerEmp(null); }}
+                  className="flex-1 flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold bg-[#3525cd] text-white hover:bg-[#2a1eb0] transition-colors shadow-sm"
+                >
+                  <Pencil size={13} /> Edit Employee
+                </button>
+              )}
             </div>
           </div>
         </div>

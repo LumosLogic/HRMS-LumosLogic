@@ -7,13 +7,13 @@
  *   router.get('/', auth, hasPermission('leaves', 'view'), handler);
  *   router.post('/', auth, hasPermission('leaves', 'create'), handler);
  *
- * Phase 1: All existing adminOnly() calls remain unchanged.
- *           This middleware is only used on new RBAC-managed routes.
- *
- * Phase 4: Will replace adminOnly() across all existing routes.
+ * Phase 4: a permission granted by a CUSTOM role also satisfies the handler-level admin checks on the
+ *          route it guards (see middleware/effectiveAccess.js); adminOnly()/isAdminRole routes are covered
+ *          by the explicit table in middleware/accessMap.js.
  */
 
 const { resolvePermissions, hasPermissionCheck } = require('../services/permissionService');
+const { elevateForPermissions } = require('./effectiveAccess');
 
 /**
  * Returns an Express middleware that checks if the authenticated user
@@ -40,6 +40,7 @@ function hasPermission(module, action) {
       );
 
       if (hasPermissionCheck(permissions, module, action)) {
+        await elevateForPermissions(req, [[module, action]]); // custom-role holders pass handler-level admin checks
         return next();
       }
 
@@ -76,7 +77,10 @@ function hasAnyPermission(permissionList) {
       );
 
       const hasOne = permissionList.some(p => permissions.includes(p));
-      if (hasOne) return next();
+      if (hasOne) {
+        await elevateForPermissions(req, permissionList.map(p => p.split('.')));
+        return next();
+      }
 
       return res.status(403).json({
         error: 'You don\'t have permission to perform this action',
@@ -123,7 +127,10 @@ function hasPermissionOrLegacyAdmin(module, action) {
     if (req.user.role === 'root_admin') return next();
     try {
       const permissions = await resolvePermissions(req.user.id, req.user.organization_id);
-      if (hasPermissionCheck(permissions, module, action)) return next();
+      if (hasPermissionCheck(permissions, module, action)) {
+        await elevateForPermissions(req, [[module, action]]);
+        return next();
+      }
       if (req.user.role === 'admin' && !(await hrRoleHasPermission(req.user.organization_id, module, action))) {
         return next(); // legacy behaviour until the hr_admin grant is provisioned
       }

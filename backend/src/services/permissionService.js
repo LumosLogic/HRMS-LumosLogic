@@ -5,8 +5,8 @@
  * Phase 1: DB lookup with in-memory TTL cache.
  * Phase 4: Will be replaced with JWT-embedded permissions.
  *
- * DOES NOT modify auth.js or any existing middleware.
- * Existing adminOnly() checks remain untouched.
+ * Custom-role grants feed middleware/effectiveAccess.js, which lets a custom-role holder pass
+ * the legacy admin-role checks on exactly the routes their permissions cover.
  */
 
 const { pool } = require('../config/db');
@@ -14,6 +14,7 @@ const { pool } = require('../config/db');
 // ─── In-memory cache ─────────────────────────────────────────────────────────
 // key: `${userId}:${orgId}`   value: { permissions: string[], expiresAt: number }
 const _cache    = new Map();
+const _customCache = new Map(); // permissions granted by CUSTOM (non-system) roles only
 const CACHE_TTL_MS  = 60 * 1000;       // 60 seconds — reduced from 5 min for faster revocation
 const CACHE_MAX     = 5000;            // evict oldest when over this size
 const CLEANUP_EVERY = 10 * 60 * 1000; // periodic full sweep every 10 minutes
@@ -134,6 +135,40 @@ async function resolvePermissions(userId, orgId) {
   }
 }
 
+// ─── Custom-role permissions ──────────────────────────────────────────────────
+/**
+ * Permissions granted by the user's CUSTOM (non-system) roles only.
+ *
+ * System roles (hr_admin / dept_head / employee) keep their existing, legacy-role based
+ * access paths. A custom role is what lets an `employee` account reach admin-grade routes,
+ * so only custom-role grants are ever used to elevate access (see middleware/accessMap.js).
+ */
+async function resolveCustomPermissions(userId, orgId) {
+  if (!userId || !orgId) return [];
+  const key = _cacheKey(userId, orgId);
+  const hit = _customCache.get(key);
+  if (hit && Date.now() <= hit.expiresAt) return hit.permissions;
+  try {
+    const { rows } = await pool.query(
+      `SELECT DISTINCT p.module_key || '.' || p.action AS permission
+         FROM user_roles ur
+         JOIN roles r             ON r.id = ur.role_id AND r.org_id = ur.org_id AND r.is_system_role = false
+         JOIN role_permissions rp ON rp.role_id = r.id
+         JOIN permissions p       ON p.id = rp.permission_id
+        WHERE ur.user_id = $1 AND ur.org_id = $2`,
+      [userId, orgId]
+    );
+    const permissions = rows.map(r => r.permission);
+    if (_customCache.size >= CACHE_MAX) _customCache.delete(_customCache.keys().next().value);
+    _customCache.set(key, { permissions, expiresAt: Date.now() + CACHE_TTL_MS });
+    return permissions;
+  } catch (err) {
+    if (err.message && err.message.includes('does not exist')) return [];
+    console.error('[permissionService] resolveCustomPermissions error:', err.message);
+    return [];
+  }
+}
+
 // ─── Pure permission check ─────────────────────────────────────────────────────
 
 /**
@@ -171,6 +206,7 @@ function hasPermissionCheck(permissions, module, action) {
  */
 function clearUserCache(userId, orgId) {
   _cache.delete(_cacheKey(userId, orgId));
+  _customCache.delete(_cacheKey(userId, orgId));
 }
 
 /**
@@ -180,6 +216,9 @@ function clearUserCache(userId, orgId) {
 function clearOrgCache(orgId) {
   for (const key of _cache.keys()) {
     if (key.endsWith(`:${orgId}`)) _cache.delete(key);
+  }
+  for (const key of _customCache.keys()) {
+    if (key.endsWith(`:${orgId}`)) _customCache.delete(key);
   }
 }
 
@@ -310,6 +349,7 @@ async function seedSystemRolesForOrg(orgId, rootUserId, client) {
 
 module.exports = {
   resolvePermissions,
+  resolveCustomPermissions,
   hasPermissionCheck,
   clearUserCache,
   clearOrgCache,

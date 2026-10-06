@@ -322,6 +322,8 @@ function EmployeeResignationJourney({ req }) {
 
 // ── Admin ExitCard (enhanced) ─────────────────────────────────────────────────
 function ExitCard({ req, isAdmin }) {
+  const { adminCan } = useAuth();
+  const canAct = isAdmin && adminCan('exit', 'manage');   // HR/Root unchanged; custom-role users need exit.manage
   const toast = useToast();
   const qc    = useQueryClient();
   const [open, setOpen] = useState(false);
@@ -451,11 +453,11 @@ function ExitCard({ req, isAdmin }) {
 
             {/* Offboarding checklist — only for approved exits */}
             {req.status === 'approved' && (
-              <OffboardingTasks userId={req.user_id} isAdmin={isAdmin} />
+              <OffboardingTasks userId={req.user_id} isAdmin={canAct} />
             )}
 
             {/* Admin actions */}
-            {isAdmin && (
+            {canAct && (
               <div className="flex flex-wrap gap-2 pt-2">
                 {req.status === 'pending' && (
                   <>

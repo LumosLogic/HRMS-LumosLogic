@@ -2,6 +2,7 @@ const express = require('express');
 const router  = express.Router();
 const { db } = require('../../config/db');
 const { auth, isAdminRole } = require('../../middleware/auth');
+const { sectionGuard } = require('../../middleware/effectiveAccess');
 const { localDateStr, flat, orgId, getSettings } = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { getFilterState } = require('../../utils/branchFilter');
@@ -151,7 +152,16 @@ router.get('/', auth, withBranchContext, async (req, res) => {
     const pendingLeaveList = plRes ? flat(plRes.data) : [];
     const myToday = myTodayRes?.data ?? null;
 
-    res.json({ totalEmployees, presentToday, onLeaveToday, lateToday, earlyExitToday, halfDayToday, wfhToday, checkedInToday, newThisMonth, pendingLeaves, recentActivity, pendingLeaveList, myToday, today, isToday, newJoiners });
+    const payload = { totalEmployees, presentToday, onLeaveToday, lateToday, earlyExitToday, halfDayToday, wfhToday, checkedInToday, newThisMonth, pendingLeaves, recentActivity, pendingLeaveList, myToday, today, isToday, newJoiners };
+    // Custom-role caller: only the sections their custom role covers (Root / HR / system roles are never trimmed).
+    const can = await sectionGuard(req);
+    if (!can('attendance')) Object.assign(payload, { presentToday: 0, onLeaveToday: 0, lateToday: 0, earlyExitToday: 0, halfDayToday: 0, wfhToday: 0, checkedInToday: 0, recentActivity: [] });
+    if (!can('employees')) Object.assign(payload, { totalEmployees: 0, newThisMonth: 0, newJoiners: [] });
+    if (!can('leaves')) Object.assign(payload, { pendingLeaveList: [] });
+    payload.pendingLeaves = (can('leaves') ? pendingLeaveCount : 0)
+      + (can('attendance', 'approve_regularization') ? pendingRegCount : 0)
+      + (can('expenses', 'approve') ? pendingExpCount : 0);
+    res.json(payload);
   } catch (err) {
     console.error(`[Dashboard] step="${_step}" error:`, err.message, err.stack);
     res.status(500).json({ error: err.message });

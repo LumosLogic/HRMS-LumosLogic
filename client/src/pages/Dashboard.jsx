@@ -748,7 +748,12 @@ function DashboardSkeleton() {
 
 // ── Main Dashboard ─────────────────────────────────────────────────────────────
 export default function Dashboard() {
-  const { user, isAdmin } = useAuth();
+  const { user, isAdmin, adminCan, hasCustomAccess } = useAuth();
+  // Which modules this user may see on the dashboard. HR / Root: everything (unchanged). A custom-role user:
+  // only the modules their custom role grants — widgets for other modules are not rendered, and the API
+  // trims the same sections from its response.
+  const can = (module, action = 'view') => adminCan(module, action);
+  const showAtt = can('attendance'), showEmp = can('employees'), showLeaves = can('leaves'), showDepts = can('departments');
   const toast    = useToast();
   const navigate = useNavigate();
   const qc       = useQueryClient();
@@ -787,7 +792,7 @@ export default function Dashboard() {
     meta: BRANCH_KEYED,
     placeholderData: keepPreviousData,
     queryFn: () => apiGet('/analytics').catch(() => null),
-    enabled: isAdmin,
+    enabled: isAdmin && can('dashboard'),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -799,7 +804,7 @@ export default function Dashboard() {
     meta: BRANCH_KEYED,
     placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/onboarding/overview').catch(() => []),
-    enabled:  isAdmin,
+    enabled:  isAdmin && can('onboarding'),
     staleTime: 3 * 60 * 1000,
   });
   const { data: exitRequestsDash = [] } = useQuery({
@@ -807,7 +812,7 @@ export default function Dashboard() {
     meta: BRANCH_KEYED,
     placeholderData: keepPreviousData,
     queryFn:  () => apiGet('/exit').catch(() => []),
-    enabled:  isAdmin,
+    enabled:  isAdmin && can('exit'),
     staleTime: 3 * 60 * 1000,
   });
 
@@ -857,54 +862,56 @@ export default function Dashboard() {
 
   const kpiCards = [
     {
-      label: 'Total Employees', value: total,
+      perm: 'employees', label: 'Total Employees', value: total,
       hint: newThis > 0 ? `↑${newThis} this month` : 'No new this month', hintGreen: newThis > 0,
       icon: <Users size={18} />, iconBg: 'bg-[#eef0ff]', iconColor: 'text-[#3525cd]',
       onClick: () => navigate('/employees'),
     },
     {
-      label: 'Present Today', value: present, hint: pct(present), hintGreen: false,
+      perm: 'attendance', label: 'Present Today', value: present, hint: pct(present), hintGreen: false,
       icon: <UserCheck size={18} />, iconBg: 'bg-emerald-50', iconColor: 'text-emerald-600',
       onClick: () => setAttModal({ date: todayStr(), filter: 'present' }),
     },
     {
-      label: 'On Leave', value: onLeave, hint: pct(onLeave), hintGreen: false,
+      perm: 'attendance', label: 'On Leave', value: onLeave, hint: pct(onLeave), hintGreen: false,
       icon: <Umbrella size={18} />, iconBg: 'bg-amber-50', iconColor: 'text-amber-600',
       onClick: () => setAttModal({ date: todayStr(), filter: 'on_leave' }),
     },
     {
-      label: 'WFH Today', value: wfh, hint: pct(wfh), hintGreen: false,
+      perm: 'attendance', label: 'WFH Today', value: wfh, hint: pct(wfh), hintGreen: false,
       icon: <Home size={18} />, iconBg: 'bg-sky-50', iconColor: 'text-sky-600',
       onClick: () => setAttModal({ date: todayStr(), filter: 'wfh' }),
     },
     {
-      label: 'Checked In', value: checked, hint: pct(checked), hintGreen: false,
+      perm: 'attendance', label: 'Checked In', value: checked, hint: pct(checked), hintGreen: false,
       icon: <Clock size={18} />, iconBg: 'bg-teal-50', iconColor: 'text-teal-600',
       onClick: () => setAttModal({ date: todayStr(), filter: 'present' }),
     },
     {
-      label: 'Pending Approvals', value: pending,
+      perm: 'leaves', label: 'Pending Approvals', value: pending,
       hint: pending === 0 ? 'No pending' : 'Needs attention', hintGreen: false, alert: pending > 0,
       icon: <ClipboardList size={18} />, iconBg: pending > 0 ? 'bg-rose-50' : 'bg-slate-50', iconColor: pending > 0 ? 'text-rose-500' : 'text-slate-400',
       onClick: () => {
         if (pending === 0) { toast('No pending approvals at this time.', 'info'); return; }
-        navigate('/pending-approvals');
+        navigate(hasCustomAccess ? '/leaves?status=pending' : '/pending-approvals');
       },
     },
   ];
 
+  const visibleKpiCards = kpiCards.filter(c => can(c.perm));
+
   const { birthdaysToday = [], upcomingBirthdays = [], holidays = [] } = culture || {};
 
   const quickActions = [
-    { label: 'Add Employee',     icon: <UserPlus size={15} />,     color: 'text-[#3525cd] bg-[#eef0ff]',    onClick: () => navigate('/employees?action=add') },
-    { label: 'Apply Leave',      icon: <Umbrella size={15} />,     color: 'text-emerald-600 bg-emerald-50', onClick: () => navigate('/leaves') },
-    { label: 'Mark Attendance',  icon: <UserCheck size={15} />,    color: 'text-amber-600 bg-amber-50',     onClick: () => navigate('/calendar') },
-    { label: 'Regularization',   icon: <Pencil size={15} />,       color: 'text-orange-600 bg-orange-50',   onClick: () => navigate('/regularization') },
-    { label: 'Announcement',     icon: <Megaphone size={15} />,    color: 'text-purple-600 bg-purple-50',   onClick: () => navigate('/announcements') },
-    { label: 'View Reports',     icon: <BarChart2 size={15} />,    color: 'text-sky-600 bg-sky-50',         onClick: () => navigate('/reports') },
-    { label: 'Assign Shift',     icon: <Clock size={15} />,        color: 'text-indigo-600 bg-indigo-50',   onClick: () => navigate('/shifts') },
-    { label: 'Manage Holidays',  icon: <CalendarDays size={15} />, color: 'text-rose-600 bg-rose-50',       onClick: () => navigate('/holidays') },
-    { label: 'Document Manager', icon: <FolderOpen size={15} />,   color: 'text-teal-600 bg-teal-50',       onClick: () => navigate('/documents') },
+    { module: 'employees', action: 'create', label: 'Add Employee',     icon: <UserPlus size={15} />,     color: 'text-[#3525cd] bg-[#eef0ff]',    onClick: () => navigate('/employees?action=add') },
+    { module: 'leaves', action: 'view', label: 'Apply Leave',      icon: <Umbrella size={15} />,     color: 'text-emerald-600 bg-emerald-50', onClick: () => navigate('/leaves') },
+    { module: 'attendance', action: 'edit', label: 'Mark Attendance',  icon: <UserCheck size={15} />,    color: 'text-amber-600 bg-amber-50',     onClick: () => navigate('/calendar') },
+    { module: 'attendance', action: 'approve_regularization', label: 'Regularization',   icon: <Pencil size={15} />,       color: 'text-orange-600 bg-orange-50',   onClick: () => navigate('/regularization') },
+    { module: 'announcements', action: 'create', label: 'Announcement',     icon: <Megaphone size={15} />,    color: 'text-purple-600 bg-purple-50',   onClick: () => navigate('/announcements') },
+    { module: 'reports', action: 'view', label: 'View Reports',     icon: <BarChart2 size={15} />,    color: 'text-sky-600 bg-sky-50',         onClick: () => navigate('/reports') },
+    { module: 'shifts', action: 'manage', label: 'Assign Shift',     icon: <Clock size={15} />,        color: 'text-indigo-600 bg-indigo-50',   onClick: () => navigate('/shifts') },
+    { module: 'holidays', action: 'manage', label: 'Manage Holidays',  icon: <CalendarDays size={15} />, color: 'text-rose-600 bg-rose-50',       onClick: () => navigate('/holidays') },
+    { module: 'documents', action: 'view', label: 'Document Manager', icon: <FolderOpen size={15} />,   color: 'text-teal-600 bg-teal-50',       onClick: () => navigate('/documents') },
   ];
 
   return (
@@ -968,8 +975,10 @@ export default function Dashboard() {
       </div>
 
       {/* ─── 6 KPI CARDS ────────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        {kpiCards.map((card, i) => (
+      {visibleKpiCards.length > 0 && (
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3"
+        style={visibleKpiCards.length < 6 ? { gridTemplateColumns: `repeat(${Math.min(visibleKpiCards.length, 3)}, minmax(0, 1fr))` } : undefined}>
+        {visibleKpiCards.map((card, i) => (
           <div key={i} onClick={card.onClick}
             className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm p-4 cursor-pointer transition-all duration-200 hover:shadow-md hover:border-[#3525cd]/30 hover:-translate-y-0.5 group">
             <div className="flex items-center gap-3 mb-3">
@@ -988,9 +997,10 @@ export default function Dashboard() {
           </div>
         ))}
       </div>
+      )}
 
       {/* ─── HR INSIGHTS ─────────────────────────────────────────────────── */}
-      {isAdmin && <HRInsightsRow d={d} culture={culture} navigate={navigate} />}
+      {isAdmin && showAtt && showEmp && showLeaves && <HRInsightsRow d={d} culture={culture} navigate={navigate} />}
 
       {/* ─── PENDING WORK ITEMS — actionable, admin-only, conditional ────── */}
       {isAdmin && (onboardingPending > 0 || exitClearancePending > 0) && (
@@ -1033,10 +1043,11 @@ export default function Dashboard() {
       )}
 
       {/* ─── LIVE ATTENDANCE | TREND | LEAVE REQUESTS ──────────────────── */}
-      <div className="grid lg:grid-cols-[1fr_300px_280px] gap-4">
+      {(showAtt || showLeaves) && (
+      <div className={`grid gap-4 ${showAtt && showLeaves ? 'lg:grid-cols-[1fr_300px_280px]' : showAtt ? 'lg:grid-cols-[1fr_300px]' : 'lg:grid-cols-1'}`}>
 
         {/* Live Attendance */}
-        <div className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm overflow-hidden flex flex-col">
+        {showAtt && <div className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm overflow-hidden flex flex-col">
           <div className="flex items-center justify-between px-5 py-4 border-b border-[#e7eefe]">
             <div>
               <h2 className="text-sm font-black text-[#151c27] flex items-center gap-2">
@@ -1080,18 +1091,18 @@ export default function Dashboard() {
               View full attendance <ChevronRight size={13} />
             </button>
           </div>
-        </div>
+        </div>}
 
         {/* Attendance Trend */}
-        {isAdmin && analytics
+        {showAtt && (isAdmin && analytics
           ? <AttendanceTrendChart analytics={analytics} navigate={navigate} />
           : <div className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm flex items-center justify-center text-sm text-[#9ca3af] p-6 text-center">
               Attendance trend available for admins
             </div>
-        }
+        )}
 
         {/* Leave Requests */}
-        <div className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm overflow-hidden flex flex-col">
+        {showLeaves && <div className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm overflow-hidden flex flex-col">
           <div className="flex items-center justify-between px-5 py-4 border-b border-[#e7eefe]">
             <div>
               <h2 className="text-sm font-black text-[#151c27] flex items-center gap-2">
@@ -1122,7 +1133,7 @@ export default function Dashboard() {
                   <div className="text-xs font-bold text-[#151c27]">{l.name}</div>
                   <div className="text-[0.6rem] text-[#9ca3af] mt-0.5">{fmtDateRange(l.start_date, l.end_date)}</div>
                   <LeaveTypeBadge type={l.leave_type} />
-                  {isAdmin && l.status === 'pending' && (
+                  {isAdmin && can('leaves', 'approve') && l.status === 'pending' && (
                     <div className="flex gap-1 mt-1.5" onClick={e => e.stopPropagation()}>
                       <button className="flex items-center gap-0.5 px-2 py-0.5 rounded text-[0.6rem] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-all"
                         onClick={() => handleApprove(l.id)}>
@@ -1134,7 +1145,7 @@ export default function Dashboard() {
                       </button>
                     </div>
                   )}
-                  {isAdmin && l.status === 'pending_root' && user?.role === 'root_admin' && (
+                  {isAdmin && can('leaves', 'approve') && l.status === 'pending_root' && user?.role === 'root_admin' && (
                     <div className="flex gap-1 mt-1.5" onClick={e => e.stopPropagation()}>
                       <button className="flex items-center gap-0.5 px-2 py-0.5 rounded text-[0.6rem] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 hover:bg-emerald-100 transition-all"
                         onClick={() => handleApprove(l.id)}>
@@ -1160,14 +1171,15 @@ export default function Dashboard() {
               </div>
             ))}
           </div>
-        </div>
+        </div>}
       </div>
+      )}
 
       {/* ─── ORG OVERVIEW | LEAVE BALANCE | QUICK ACTIONS ──────────────── */}
       {isAdmin && analytics && (
-        <div className="grid lg:grid-cols-[1fr_1fr_280px] gap-4">
-          <OrgOverviewSection analytics={analytics} navigate={navigate} />
-          <LeaveBalanceSection analytics={analytics} navigate={navigate} />
+        <div className={`grid gap-4 ${showEmp && showLeaves ? 'lg:grid-cols-[1fr_1fr_280px]' : 'lg:grid-cols-2'}`}>
+          {(showEmp || showDepts) && <OrgOverviewSection analytics={analytics} navigate={navigate} />}
+          {showLeaves && <LeaveBalanceSection analytics={analytics} navigate={navigate} />}
 
           {/* Quick Actions — 3×3 grid */}
           <div className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm overflow-hidden">
@@ -1175,7 +1187,7 @@ export default function Dashboard() {
               <h2 className="text-sm font-black text-[#151c27]">Quick Actions</h2>
             </div>
             <div className="p-4 grid grid-cols-3 gap-2.5">
-              {quickActions.map((action, i) => (
+              {quickActions.filter(a => can(a.module, a.action)).map((action, i) => (
                 <button key={i} onClick={action.onClick}
                   className="flex flex-col items-center gap-1.5 p-2.5 rounded-xl border border-[#f0f3ff] hover:border-[#3525cd]/25 hover:shadow-sm hover:-translate-y-0.5 transition-all duration-150 text-center bg-white">
                   <div className={`w-8 h-8 rounded-xl flex items-center justify-center ${action.color}`}>{action.icon}</div>
@@ -1196,7 +1208,7 @@ export default function Dashboard() {
             <h2 className="text-sm font-black text-[#151c27] flex items-center gap-2">
               <CalendarDays size={14} className="text-[#3525cd]" /> Upcoming Holidays
             </h2>
-            {isAdmin && <ManageHolidaysBtn onRefresh={refetch} />}
+            {isAdmin && can('holidays', 'manage') && <ManageHolidaysBtn onRefresh={refetch} />}
           </div>
           {holidays.length === 0 ? (
             <div className="py-8 text-center flex-1 flex flex-col items-center justify-center gap-2">
@@ -1281,7 +1293,7 @@ export default function Dashboard() {
             <h2 className="text-sm font-black text-[#151c27] flex items-center gap-2">
               <Cake size={14} className="text-pink-500" /> Upcoming Birthdays
             </h2>
-            {isAdmin && <ManageBirthdaysBtn onRefresh={refetch} />}
+            {isAdmin && can('employees', 'edit') && <ManageBirthdaysBtn onRefresh={refetch} />}
           </div>
           <div className="p-4">
             {(birthdaysToday.length + upcomingBirthdays.length) === 0 ? (

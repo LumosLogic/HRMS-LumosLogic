@@ -1,6 +1,8 @@
 // @refresh reset
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useMemo } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
+import { firstAdminPath, permissionMatches } from '@/lib/adminAccess';
 
 export const AuthContext = createContext(null);
 
@@ -29,11 +31,19 @@ function loadStoredAuth() {
     localStorage.removeItem('lt_token');
     localStorage.removeItem('lt_user');
     localStorage.removeItem('lt_permissions');
+    localStorage.removeItem('lt_custom_permissions');
     return { token: null, user: null };
   }
   try {
     return { token, user: JSON.parse(localStorage.getItem('lt_user')) };
   } catch { return { token, user: null }; }
+}
+
+function loadStoredCustomPermissions() {
+  try {
+    const p = localStorage.getItem('lt_custom_permissions');
+    return p ? JSON.parse(p) : [];
+  } catch { return []; }
 }
 
 function loadStoredPermissions() {
@@ -45,19 +55,28 @@ function loadStoredPermissions() {
 
 export function AuthProvider({ children }) {
   const queryClient = useQueryClient();
+  const { pathname } = useLocation();
   const initial = loadStoredAuth();
   const [user,        setUser]        = useState(initial.user);
   const [token,       setToken]       = useState(initial.token);
   const [permissions, setPermissions] = useState(loadStoredPermissions);
+  // Grants from CUSTOM roles only (employee accounts). Drives the permission-based admin shell.
+  const [customPermissions, setCustomPermissions] = useState(loadStoredCustomPermissions);
+  // false until /permissions/me has answered for the current token (decides where an employee lands)
+  const [permissionsReady, setPermissionsReady] = useState(false);
 
   // Fetch the user's effective RBAC permissions whenever the token changes.
   // Results are stored in localStorage so they survive page refreshes.
   useEffect(() => {
     if (!token) {
       setPermissions([]);
+      setCustomPermissions([]);
+      setPermissionsReady(false);
       localStorage.removeItem('lt_permissions');
+      localStorage.removeItem('lt_custom_permissions');
       return;
     }
+    setPermissionsReady(false);
     fetch('/api/permissions/me', {
       headers: { Authorization: `Bearer ${token}` },
     })
@@ -66,9 +85,13 @@ export function AuthProvider({ children }) {
         if (Array.isArray(data?.permissions)) {
           setPermissions(data.permissions);
           localStorage.setItem('lt_permissions', JSON.stringify(data.permissions));
+          const custom = Array.isArray(data.custom_permissions) ? data.custom_permissions : [];
+          setCustomPermissions(custom);
+          localStorage.setItem('lt_custom_permissions', JSON.stringify(custom));
         }
       })
-      .catch(() => {});
+      .catch(() => {})
+      .finally(() => setPermissionsReady(true));
   }, [token]);
 
   const saveAuth = useCallback((newToken, newUser) => {
@@ -83,9 +106,11 @@ export function AuthProvider({ children }) {
     setToken(null);
     setUser(null);
     setPermissions([]);
+    setCustomPermissions([]);
     localStorage.removeItem('lt_token');
     localStorage.removeItem('lt_user');
     localStorage.removeItem('lt_permissions');
+    localStorage.removeItem('lt_custom_permissions');
     queryClient.clear();
   }, [queryClient]);
 
@@ -136,8 +161,15 @@ export function AuthProvider({ children }) {
   const isRootAdmin = user?.role === 'root_admin';
   const isHR        = user?.role === 'admin';
   const isEmployee  = user?.role === 'employee';
-  // isAdmin = true for both HR admin and root admin (both can manage HR operations)
-  const isAdmin = isHR || isRootAdmin;
+  // Custom-role employee: an employee account whose custom role grants permissions for admin modules.
+  // They get the permission-driven admin shell (sidebar / routes / actions) in addition to the employee portal.
+  const adminLanding = isEmployee ? firstAdminPath(customPermissions) : null;
+  const hasCustomAccess = !!adminLanding;
+  // isAdmin = true for HR admin, root admin, and custom-role users inside the admin shell (their pages are limited
+  // by permission, see adminCan). In the employee portal a custom-role user is a plain employee, so the shared
+  // pages (payslips, documents, expenses …) keep rendering their self-service view.
+  const inPortal = pathname.startsWith('/portal');
+  const isAdmin = isHR || isRootAdmin || (hasCustomAccess && !inPortal);
 
   // RBAC permission check — use this instead of raw role checks for fine-grained control.
   // Falls back gracefully: if permissions haven't loaded yet (empty array),
@@ -166,6 +198,20 @@ export function AuthProvider({ children }) {
     return false;
   }, [permissions]);
 
+  // Admin-module permission check for UI actions (buttons/menus). Root and HR Admin are unchanged —
+  // the API remains the authority for them; custom-role users are limited to their custom-role grants.
+  const adminCan = useCallback((module, action) => {
+    if (isRootAdmin || isHR) return true;
+    if (!hasCustomAccess) return false;
+    return permissionMatches(customPermissions, `${module}.${action}`);
+  }, [isRootAdmin, isHR, hasCustomAccess, customPermissions]);
+
+  // True only for a custom-role user holding the permission. Use `isRootAdmin || customCan(...)` where the
+  // existing UI is Root-only but the API honours the permission (payroll approve/lock, …) — HR stays unchanged.
+  const customCan = useCallback((module, action) => (
+    hasCustomAccess && permissionMatches(customPermissions, `${module}.${action}`)
+  ), [hasCustomAccess, customPermissions]);
+
   // Organization context
   const organization = user ? {
     id:   user.organization_id   || 1,
@@ -174,15 +220,19 @@ export function AuthProvider({ children }) {
     logo: user.organization_logo || '',
   } : null;
 
-  return (
-    <AuthContext.Provider value={{
+  const value = useMemo(() => ({
       user, token, saveAuth, logout,
       isAdmin, isHR, isRootAdmin, isEmployee,
+      hasCustomAccess, customPermissions, permissionsReady, adminLanding, adminCan, customCan,
       organization,
       permissions,
       hasPermission,
       can: hasPermission,
-    }}>
+    }), [user, token, saveAuth, logout, isAdmin, isHR, isRootAdmin, isEmployee, hasCustomAccess, customPermissions,
+    permissionsReady, adminLanding, adminCan, customCan, organization?.id, permissions, hasPermission]);
+
+  return (
+    <AuthContext.Provider value={value}>
       {children}
     </AuthContext.Provider>
   );

@@ -771,7 +771,8 @@ function fmtUpdated(dateStr) {
 }
 
 export default function Regularization() {
-  const { isAdmin, isEmployee, isRootAdmin } = useAuth();
+  const { isAdmin, isEmployee, isRootAdmin, adminCan } = useAuth();
+  const canReview = adminCan('attendance', 'approve_regularization');
   const { selectedBranchId } = useBranch();
   const wrap = '';
   const [searchParams] = useSearchParams();
@@ -1290,12 +1291,12 @@ export default function Regularization() {
                     >
                       <Eye size={14} />
                     </button>
-                    {isAdmin && r.status === 'pending' && (
+                    {isAdmin && canReview && r.status === 'pending' && (
                       <button className="btn btn-outline btn-sm" onClick={() => setReviewReq(r)}>
                         Review <ChevronRight size={13} />
                       </button>
                     )}
-                    {isAdmin && (
+                    {isAdmin && canReview && (
                       <button
                         className="p-1.5 rounded-lg text-[#c7c4d8] hover:text-rose-500 hover:bg-rose-50 transition-colors"
                         title="Delete request"

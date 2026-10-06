@@ -752,7 +752,8 @@ function AssignEmployeesModal({ open, onClose, shift, employees, assignments }) 
 // ── Main Shifts Page ──────────────────────────────────────────────────────────
 
 export default function Shifts() {
-  const { isAdmin } = useAuth();
+  const { isAdmin, adminCan } = useAuth();
+  const canManageShifts = isAdmin && adminCan('shifts', 'manage');
   const toast = useToast();
   const qc    = useQueryClient();
   const { selectedBranchId } = useBranch();
@@ -809,7 +810,7 @@ export default function Shifts() {
           <div className="page-title">Shifts & Roster</div>
           <div className="page-subtitle">Define shifts and manage employee assignments</div>
         </div>
-        {isAdmin && tab === 'shifts' && (
+        {canManageShifts && tab === 'shifts' && (
           <button className="btn btn-primary" onClick={() => setAddOpen(true)}>
             <Plus size={16} /> New Shift
           </button>
@@ -840,7 +841,7 @@ export default function Shifts() {
               <div className="empty-state">
                 <Clock size={36} className="mx-auto mb-2 opacity-30" />
                 <p>No shifts defined yet</p>
-                {isAdmin && (
+                {canManageShifts && (
                   <button className="btn btn-primary mt-4" onClick={() => setAddOpen(true)}>
                     <Plus size={14} /> Create First Shift
                   </button>
@@ -862,7 +863,7 @@ export default function Shifts() {
                           style={{ background: s.color + '20' }}>
                           <Clock size={18} style={{ color: s.color }} />
                         </div>
-                        {isAdmin && (
+                        {canManageShifts && (
                           <div className="flex gap-1">
                             <button
                               className="p-1.5 rounded-lg text-[#777587] hover:text-[#3525cd] hover:bg-[#f0f3ff] transition-colors"

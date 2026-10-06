@@ -3,6 +3,7 @@ const router  = express.Router();
 const { db } = require('../../config/db');
 const { auth, adminOnly } = require('../../middleware/auth');
 const { hasPermissionOrLegacyAdmin } = require('../../middleware/permissions');
+const { sectionGuard } = require('../../middleware/effectiveAccess');
 const { orgId, getSettings, isWorkingDay } = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { resolveEmployeeIds } = require('../../utils/branchFilter');
@@ -153,7 +154,14 @@ router.get('/', auth, adminOnly, hasPermissionOrLegacyAdmin('dashboard', 'view')
       type, label: info.label, used: approvedByType[type] || 0, total: info.quota || 20, color: LEAVE_COLORS[type] || '#94a3b8',
     }));
 
-    res.json({ leaveByStatus, leaveByType, attByStatus, month, year, weeklyTrend, monthlyTrend, avgPct7, attendanceChange, deptDistribution, roleDistribution, leaveBalanceByType, totalDepts: deptDistribution.length, totalEmpCount });
+    const payload = { leaveByStatus, leaveByType, attByStatus, month, year, weeklyTrend, monthlyTrend, avgPct7, attendanceChange, deptDistribution, roleDistribution, leaveBalanceByType, totalDepts: deptDistribution.length, totalEmpCount };
+    // Custom-role caller: only the charts their custom role covers (Root / HR / system roles are never trimmed).
+    const can = await sectionGuard(req);
+    if (!can('leaves')) Object.assign(payload, { leaveByStatus: { approved: 0, pending: 0, rejected: 0, cancelled: 0 }, leaveByType: {}, leaveBalanceByType: [] });
+    if (!can('attendance')) Object.assign(payload, { attByStatus: { present: 0, on_leave: 0, absent: 0, wfh: 0, half_day: 0 }, weeklyTrend: [], monthlyTrend: [], avgPct7: 0, attendanceChange: 0 });
+    if (!can('employees')) Object.assign(payload, { roleDistribution: [], totalEmpCount: 0 });
+    if (!can('departments')) Object.assign(payload, { deptDistribution: [], totalDepts: 0 });
+    res.json(payload);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

@@ -69,6 +69,17 @@ async function _resolveUserBranchAccess(userId, orgId, role) {
     return { isRootAdmin: true, hasAllBranches: true, branchIds: null };
   }
 
+  // A custom-role employee can be processed as 'admin' for one request (middleware/effectiveAccess.js).
+  // Branch scope must follow the account's REAL role, so that elevation can never widen it:
+  // only a stored users.role = 'admin' is resolved through hr_branch_access.
+  if (role === 'admin') {
+    try {
+      const real = await pool.query('SELECT role FROM users WHERE id = $1 AND organization_id = $2', [userId, orgId]);
+      if (real.rows.length && real.rows[0].role !== 'admin') role = real.rows[0].role === 'root_admin' ? 'root_admin' : 'employee';
+    } catch { /* fall through with the token role */ }
+    if (role === 'root_admin') return { isRootAdmin: true, hasAllBranches: true, branchIds: null };
+  }
+
   // Branches feature OFF → no branch isolation: existing org-wide behaviour is untouched for everyone.
   if (!(await isBranchFeatureEnabled(orgId))) {
     return { isRootAdmin: false, hasAllBranches: true, branchIds: null };

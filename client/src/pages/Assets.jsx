@@ -153,7 +153,7 @@ function AssetModal({ open, onClose, asset, employees, allAssets = [] }) {
 }
 
 export default function Assets() {
-  const { isAdmin, isEmployee }  = useAuth();
+  const { isAdmin, isEmployee, adminCan }  = useAuth();
   const { selectedBranchId } = useBranch();
   const wrap = '';
   const toast        = useToast();
@@ -186,7 +186,7 @@ export default function Assets() {
           <h1 className="page-title">Asset Management</h1>
           <p className="page-subtitle">{assets.length} asset{assets.length !== 1 ? 's' : ''} · track company-issued equipment</p>
         </div>
-        {isAdmin && <button className="btn btn-primary" onClick={() => setAddOpen(true)}><Plus size={16} />Add Asset</button>}
+        {isAdmin && adminCan('assets', 'create') && <button className="btn btn-primary" onClick={() => setAddOpen(true)}><Plus size={16} />Add Asset</button>}
       </div>
 
       {/* Stats */}
@@ -223,7 +223,7 @@ export default function Assets() {
           <Package size={48} className="mx-auto mb-3 text-[#c7c4d8]" />
           <p className="font-semibold text-[#464555] mb-1">No assets found</p>
           <p className="text-sm">{filter !== 'all' ? `No ${filter.replace('_', ' ')} assets` : 'Start tracking company equipment by adding assets'}</p>
-          {isAdmin && filter === 'all' && <button className="btn btn-primary mt-4" onClick={() => setAddOpen(true)}><Plus size={14} />Add First Asset</button>}
+          {isAdmin && adminCan('assets', 'create') && filter === 'all' && <button className="btn btn-primary mt-4" onClick={() => setAddOpen(true)}><Plus size={14} />Add First Asset</button>}
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -250,7 +250,7 @@ export default function Assets() {
                     </div>
                   )}
                 </div>
-                {isAdmin && (
+                {isAdmin && adminCan('assets', 'manage') && (
                   <div className="flex items-center gap-2 px-4 py-3 border-t border-[#f0f3ff] bg-[#f9f9ff]">
                     <button className="flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-xs font-bold text-[#3525cd] hover:bg-[#f0f3ff] transition-colors"
                       onClick={() => setEditAsset(a)}><Pencil size={12} />Edit</button>

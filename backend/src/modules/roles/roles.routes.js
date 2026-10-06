@@ -334,10 +334,12 @@ router.put('/user/:userId', auth, hasPermission('roles', 'manage'), withBranchCo
 });
 
 // ─── 4. POST /api/roles — create a custom role ────────────────────────────────
+// Optional: `permission_ids` (initial permission set) or `copy_from_role_id` (start from an
+// existing role's permissions). Cloning only READS the source role — it is never modified.
 router.post('/', auth, hasPermission('roles', 'manage'), withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
-    const { name, description } = req.body;
+    const { name, description, copy_from_role_id } = req.body;
 
     if (!name || !name.trim()) {
       return res.status(400).json({ error: 'Role name is required' });
@@ -350,31 +352,72 @@ router.post('/', auth, hasPermission('roles', 'manage'), withBranchContext, asyn
     const roleBranch = resolveWriteBranch(req.branchContext);
     if (!roleBranch.ok) return res.status(roleBranch.status).json({ error: roleBranch.error });
 
-    const slug = slugify(trimmedName) + '_' + Date.now();
+    // Resolve the initial permission set: explicit ids win, otherwise copy from a source role.
+    let initialIds = [];
+    if (req.body.permission_ids !== undefined) {
+      const validationError = validatePermissionIds(req.body.permission_ids);
+      if (validationError) return res.status(400).json({ error: validationError });
+      initialIds = req.body.permission_ids.map(id => parseInt(id, 10));
+    } else if (copy_from_role_id !== undefined && copy_from_role_id !== null) {
+      const srcId = parseId(copy_from_role_id);
+      if (!srcId) return res.status(400).json({ error: 'Invalid copy_from_role_id' });
+      const { rows: src } = await pool.query(
+        'SELECT id, slug FROM roles WHERE id = $1 AND org_id = $2', [srcId, oId]);
+      if (!src.length) return res.status(404).json({ error: 'Source role not found' });
+      if (src[0].slug === 'root_admin') return res.status(400).json({ error: 'The Root Admin role cannot be used as a template.' });
+      const { rows: srcPerms } = await pool.query(
+        'SELECT permission_id FROM role_permissions WHERE role_id = $1', [srcId]);
+      initialIds = srcPerms.map(r => Number(r.permission_id));
+    }
+    initialIds = [...new Set(initialIds)];
 
-    const { data, error } = await db
-      .from('roles')
-      .insert({
-        org_id:         oId,
-        name:           trimmedName,
-        slug,
-        description:    (description || '').slice(0, 500),
-        is_system_role: false,
-        created_by:     req.user.id,
-        // BUG-117: scope custom roles to the currently selected branch
-        branch_id:      roleBranch.branchId,
-      })
-      .select()
-      .single();
-
-    if (error) {
-      if (error.code === '23505') {
-        return res.status(400).json({ error: `A role named "${trimmedName}" already exists in this organization` });
+    if (initialIds.length) {
+      // Every id must be a real permission; non-root callers can only grant what they hold.
+      const { rows: permRows } = await pool.query(
+        'SELECT id, module_key, action FROM permissions WHERE id = ANY($1::bigint[])', [initialIds]);
+      if (permRows.length !== initialIds.length) return res.status(400).json({ error: 'One or more permissions do not exist' });
+      if (req.user.role !== 'root_admin') {
+        const mine = new Set(await resolvePermissions(req.user.id, oId));
+        const denied = permRows.find(r => !mine.has(`${r.module_key}.${r.action}`));
+        if (denied) return res.status(403).json({ error: `You cannot grant a permission you do not hold (${denied.module_key}.${denied.action}).` });
       }
-      throw error;
     }
 
-    res.json({ ...data, permission_count: 0, member_count: 0 });
+    const slug = slugify(trimmedName) + '_' + Date.now();
+
+    const client = await pool.connect();
+    let data;
+    try {
+      await client.query('BEGIN');
+      const ins = await client.query(
+        `INSERT INTO roles (org_id, name, slug, description, is_system_role, created_by, branch_id)
+         VALUES ($1, $2, $3, $4, false, $5, $6)
+         RETURNING *`,
+        // BUG-117: scope custom roles to the currently selected branch
+        [oId, trimmedName, slug, (description || '').slice(0, 500), req.user.id, roleBranch.branchId]
+      );
+      data = ins.rows[0];
+      if (initialIds.length) {
+        const values = initialIds.map((_, i) => `($1, $${i + 2})`).join(', ');
+        await client.query(
+          `INSERT INTO role_permissions (role_id, permission_id) VALUES ${values}
+           ON CONFLICT (role_id, permission_id) DO NOTHING`,
+          [data.id, ...initialIds]
+        );
+      }
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK');
+      if (err.code === '23505') {
+        return res.status(400).json({ error: `A role named "${trimmedName}" already exists in this organization` });
+      }
+      throw err;
+    } finally {
+      client.release();
+    }
+
+    clearOrgCache(oId);
+    res.json({ ...data, permission_count: initialIds.length, member_count: 0 });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -445,7 +488,7 @@ router.put('/:id', auth, hasPermission('roles', 'manage'), async (req, res) => {
 
     if (!existing) return res.status(404).json({ error: 'Role not found' });
     if (existing.is_system_role) {
-      return res.status(400).json({ error: 'System roles cannot be renamed. You can adjust their permissions.' });
+      return res.status(400).json({ error: 'System roles are predefined and cannot be renamed.' });
     }
 
     const update = {};
@@ -507,6 +550,15 @@ router.delete('/:id', auth, hasPermission('roles', 'manage'), async (req, res) =
       'SELECT user_id FROM user_roles WHERE role_id = $1 AND org_id = $2',
       [roleId, oId]
     );
+
+    // A role that is still assigned must not silently strip access from its members.
+    if (affectedUsers.length > 0) {
+      const n = affectedUsers.length;
+      return res.status(409).json({
+        error: `"${role.name}" is assigned to ${n} user${n === 1 ? '' : 's'}. Remove them from the role (Assign Users) before deleting it.`,
+        member_count: n,
+      });
+    }
 
     // Cascade everything in a single transaction
     const client = await pool.connect();
@@ -622,84 +674,10 @@ router.put('/:id/permissions', auth, hasPermission('roles', 'manage'), withBranc
       return res.status(400).json({ error: 'The Root Admin role always has all permissions and cannot be restricted.' });
     }
 
-    // BUG_160: Employee system role is limited to self-service permissions only.
-    // Any permission not in this allowlist is silently filtered out to prevent
-    // admin-level access being granted to the employee role.
-    if (role.is_system_role && role.slug === 'employee') {
-      const EMPLOYEE_ALLOWED = new Set([
-        'dashboard:view',
-        'attendance:view',
-        'leaves:view', 'leaves:create',
-        'documents:view', 'documents:upload',
-        'announcements:view',
-        'holidays:view',
-        'expenses:view', 'expenses:create',
-        'performance:view', 'performance:create',
-        'onboarding:view', 'onboarding:complete_task',
-        'notifications:view',
-        'regularization:view', 'regularization:create',
-        'payroll:view_own',
-      ]);
-      // Map requested permission IDs to module_key:action and filter
-      const { rows: permRows } = await pool.query(
-        `SELECT id, module_key, action FROM permissions WHERE id = ANY($1::bigint[])`,
-        [safeIds]
-      );
-      const allowedIds = permRows
-        .filter(p => EMPLOYEE_ALLOWED.has(`${p.module_key}:${p.action}`))
-        .map(p => p.id);
-      const blockedCount = safeIds.length - allowedIds.length;
-      if (blockedCount > 0) {
-        // Replace the requested list with only the allowed subset
-        safeIds.splice(0, safeIds.length, ...allowedIds);
-      }
-    }
-
-    // BUG_193: System roles now allow full permission editing EXCEPT for a small
-    // set of minimum core permissions that are protected per slug.
-    // Admin can remove any non-core permission (e.g. remove payroll from HR Admin).
+    // System roles (HR Admin, Department Head, Employee) are predefined and protected.
+    // To vary their access, create a custom role from them instead.
     if (role.is_system_role) {
-      // Fetch the permission IDs for this role's minimum core set
-      const CORE_PERMS = {
-        hr_admin:   [['dashboard','view'],['employees','view'],['leaves','view'],['attendance','view']],
-        dept_head:  [['dashboard','view'],['leaves','view'],['leaves','forward']],
-        employee:   [['dashboard','view'],['leaves','view'],['leaves','create'],['attendance','view']],
-        root_admin: [], // root_admin is fully managed separately
-      };
-      const coreList = CORE_PERMS[role.slug] || [];
-      let coreIds = new Set();
-      if (coreList.length) {
-        const coreRes = await pool.query(
-          `SELECT id FROM permissions WHERE (module_key, action) IN (${coreList.map((_, i) => `($${i*2+1},$${i*2+2})`).join(',')})`,
-          coreList.flat()
-        );
-        coreIds = new Set(coreRes.rows.map(r => r.id));
-      }
-      // Final set: everything the admin requested + core permissions (always kept)
-      const finalIds = new Set([...safeIds, ...coreIds]);
-
-      const client2 = await pool.connect();
-      try {
-        await client2.query('BEGIN');
-        await client2.query('DELETE FROM role_permissions WHERE role_id = $1', [roleId]);
-        if (finalIds.size > 0) {
-          const finalArr = Array.from(finalIds);
-          const values   = finalArr.map((_, i) => `($1, $${i + 2})`).join(', ');
-          await client2.query(
-            `INSERT INTO role_permissions (role_id, permission_id)
-             VALUES ${values}
-             ON CONFLICT (role_id, permission_id) DO NOTHING`,
-            [roleId, ...finalArr]
-          );
-        }
-        await client2.query('COMMIT');
-      } catch (err2) {
-        await client2.query('ROLLBACK');
-        throw err2;
-      } finally { client2.release(); }
-      clearOrgCache(oId);
-      const { data: result } = await db.from('role_permissions').select('permission_id, permissions(id, module_key, action, label)').eq('role_id', roleId);
-      return res.json((result || []).map(r => r.permissions).filter(Boolean));
+      return res.status(400).json({ error: 'System role permissions are predefined and cannot be edited. Create a custom role from it instead.' });
     }
 
     const client = await pool.connect();

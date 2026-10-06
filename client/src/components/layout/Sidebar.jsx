@@ -15,6 +15,7 @@ import { apiGet } from '@/lib/api';
 import { STALE } from '@/lib/queryTiers';
 import { initials, cn } from '@/lib/utils';
 import { GlobalSearchModal } from '@/components/ui/GlobalSearchModal';
+import { canAccessAdminPath, permissionMatches } from '@/lib/adminAccess';
 
 // ── Section definitions ──────────────────────────────────────────────────────
 
@@ -58,6 +59,23 @@ const PAYROLL_SUB_ITEMS = [
   { to: '/payroll/reports',   label: 'Payroll Reports',    Icon: FileBarChart, adminOnly: true, perm: 'payroll' },
   { to: '/payroll/salary',    label: 'Salary Structures',  Icon: IndianRupee,  adminOnly: true, perm: 'payroll' },
   { to: '/payroll/settings',  label: 'Payroll Settings',   Icon: Settings,     adminOnly: true, perm: 'payroll' },
+];
+
+// Custom-role users see a payroll sub-page only when their role grants what that page needs.
+const PAYROLL_SUB_PERMISSION = {
+  '/payroll/dashboard': 'payroll.view',
+  '/payroll/generate':  'payroll.generate',
+  '/payroll/reports':   'payroll.run_reports',
+  '/payroll/salary':    'payroll.manage_structures',
+  '/payroll/settings':  'payroll.manage_settings',
+};
+
+// Self-service links kept available to a custom-role user inside the admin shell (they are still employees)
+const MY_WORKSPACE_ITEMS = [
+  { to: '/portal/home',       label: 'My Dashboard',  Icon: LayoutDashboard },
+  { to: '/portal/attendance', label: 'My Attendance', Icon: Clock },
+  { to: '/portal/leaves',     label: 'My Leaves',     Icon: FileText },
+  { to: '/portal/payslips',   label: 'My Payslips',   Icon: DollarSign },
 ];
 
 // Non-payroll finance items
@@ -116,7 +134,7 @@ function NavItem({ to, label, Icon, badge, onClose }) {
 }
 
 // ── Payroll dropdown group ───────────────────────────────────────────────────
-function PayrollGroup({ onClose, isAdmin, isRootAdmin, prefix = '', featureKey = 'payroll', hasPermission, permissionsLoaded }) {
+function PayrollGroup({ onClose, isAdmin, isRootAdmin, prefix = '', featureKey = 'payroll', hasPermission, permissionsLoaded, customAccess = null }) {
   const featureFlags = useContext(FeatureFlagContext);
   const flagsLoaded  = useContext(FeatureFlagsLoadedContext);
   const location     = useLocation();
@@ -135,12 +153,16 @@ function PayrollGroup({ onClose, isAdmin, isRootAdmin, prefix = '', featureKey =
 
   if (!payrollEnabled) return null;
   // BUG_172: hide entire payroll dropdown if user lacks payroll.view
-  if (permissionsLoaded && !isRootAdmin && !hasPermission('payroll', 'view')) return null;
+  if (customAccess) {
+    if (!canAccessAdminPath(customAccess, '/payroll')) return null;
+  } else if (permissionsLoaded && !isRootAdmin && !hasPermission('payroll', 'view')) return null;
 
   const visibleSubs = PAYROLL_SUB_ITEMS.filter(item => {
     if (item.adminOnly && !isAdmin) return false;
+    if (customAccess && !permissionMatches(customAccess, PAYROLL_SUB_PERMISSION[item.to] || 'payroll.view')) return false;
     return true;
   });
+  if (customAccess && !visibleSubs.length) return null;
 
   return (
     <div>
@@ -189,7 +211,7 @@ function PayrollGroup({ onClose, isAdmin, isRootAdmin, prefix = '', featureKey =
 }
 
 // ── Generic NavSection ───────────────────────────────────────────────────────
-function NavSection({ title, items, onClose, isAdmin, isRootAdmin, prefix = '', unreadCount = 0, hasPermission, permissionsLoaded }) {
+function NavSection({ title, items, onClose, isAdmin, isRootAdmin, prefix = '', unreadCount = 0, hasPermission, permissionsLoaded, customAccess = null }) {
   const featureFlags = useContext(FeatureFlagContext);
   const flagsLoaded  = useContext(FeatureFlagsLoadedContext);
   const filtered = items.filter(i => {
@@ -201,6 +223,9 @@ function NavSection({ title, items, onClose, isAdmin, isRootAdmin, prefix = '', 
       const enabled = i.featureKey in featureFlags ? featureFlags[i.featureKey] : true;
       if (!enabled) return false;
     }
+    // Custom-role user: visibility comes from their CUSTOM role's grants only (the Employee system role's
+    // self-service grants must not surface admin modules).
+    if (customAccess) return canAccessAdminPath(customAccess, i.to);
     // BUG_172: permission-based visibility when RBAC is loaded and user is not root admin
     // Root admin always sees everything; for others, check the module permission
     if (i.perm && permissionsLoaded && !isRootAdmin) {
@@ -226,7 +251,7 @@ function NavSection({ title, items, onClose, isAdmin, isRootAdmin, prefix = '', 
 }
 
 // ── Finance section: Payroll dropdown + other finance items ──────────────────
-function FinanceSection({ onClose, isAdmin, isRootAdmin, prefix = '', hasPermission, permissionsLoaded }) {
+function FinanceSection({ onClose, isAdmin, isRootAdmin, prefix = '', hasPermission, permissionsLoaded, customAccess = null }) {
   const featureFlags = useContext(FeatureFlagContext);
   const flagsLoaded  = useContext(FeatureFlagsLoadedContext);
 
@@ -237,6 +262,7 @@ function FinanceSection({ onClose, isAdmin, isRootAdmin, prefix = '', hasPermiss
       const enabled = i.featureKey in featureFlags ? featureFlags[i.featureKey] : true;
       if (!enabled) return false;
     }
+    if (customAccess) return canAccessAdminPath(customAccess, i.to);
     // BUG_172: permission-based visibility
     if (i.perm && permissionsLoaded && !isRootAdmin) {
       if (!hasPermission(i.perm, 'view')) return false;
@@ -252,7 +278,7 @@ function FinanceSection({ onClose, isAdmin, isRootAdmin, prefix = '', hasPermiss
     <div className="mb-3">
       <p className="text-[0.6rem] font-black uppercase tracking-[0.14em] text-[#777587] px-2.5 py-2">Finance</p>
       <div className="flex flex-col gap-0.5">
-        {payrollEnabled && <PayrollGroup onClose={onClose} isAdmin={isAdmin} isRootAdmin={isRootAdmin} prefix={prefix} hasPermission={hasPermission} permissionsLoaded={permissionsLoaded} />}
+        {payrollEnabled && <PayrollGroup onClose={onClose} isAdmin={isAdmin} isRootAdmin={isRootAdmin} prefix={prefix} hasPermission={hasPermission} permissionsLoaded={permissionsLoaded} customAccess={customAccess} />}
         {otherFiltered.map(({ to, label, Icon }) => (
           <NavItem key={prefix + to} to={prefix + to} label={label} Icon={Icon} onClose={onClose} />
         ))}
@@ -263,7 +289,8 @@ function FinanceSection({ onClose, isAdmin, isRootAdmin, prefix = '', hasPermiss
 
 // ── Sidebar ──────────────────────────────────────────────────────────────────
 export function Sidebar({ onClose, prefix = '', onMenuClick, onSearchOpen }) {
-  const { user, logout, isAdmin, isRootAdmin, hasPermission, permissions } = useAuth();
+  const { user, logout, isAdmin, isHR, isRootAdmin, hasPermission, permissions, hasCustomAccess, customPermissions } = useAuth();
+  const customAccess = hasCustomAccess && !isHR && !isRootAdmin ? customPermissions : null;
   const navigate  = useNavigate();
   const location  = useLocation();
   const navRef    = useRef(null);
@@ -295,7 +322,7 @@ export function Sidebar({ onClose, prefix = '', onMenuClick, onSearchOpen }) {
 
   function handleLogout() { logout(); navigate('/login'); }
 
-  const sharedProps = { onClose, isAdmin, isRootAdmin, prefix, unreadCount: unread, hasPermission, permissionsLoaded };
+  const sharedProps = { onClose, isAdmin, isRootAdmin, prefix, unreadCount: unread, hasPermission, permissionsLoaded, customAccess };
 
   return (
     <aside className="w-64 h-full bg-white flex flex-col flex-shrink-0 relative border-r border-[#c7c4d8] shadow-sm">
@@ -312,7 +339,7 @@ export function Sidebar({ onClose, prefix = '', onMenuClick, onSearchOpen }) {
           <div>
             <h2 className="text-sm font-black text-[#151c27] leading-tight tracking-tight">Lumos Logic</h2>
             <p className="text-[0.65rem] text-[#777587] mt-0.5 tracking-wide">
-              {isRootAdmin ? 'Root Admin Console' : 'HR Admin Console'}
+              {isRootAdmin ? 'Root Admin Console' : customAccess ? 'Team Workspace' : 'HR Admin Console'}
             </p>
           </div>
         </div>
@@ -346,7 +373,7 @@ export function Sidebar({ onClose, prefix = '', onMenuClick, onSearchOpen }) {
           <NavSection title="Biometric" items={BIOMETRIC_ITEMS} {...sharedProps} />
         </div>
         <div id="tour-nav-finance">
-          <FinanceSection onClose={onClose} isAdmin={isAdmin} isRootAdmin={isRootAdmin} prefix={prefix} hasPermission={hasPermission} permissionsLoaded={permissionsLoaded} />
+          <FinanceSection onClose={onClose} isAdmin={isAdmin} isRootAdmin={isRootAdmin} prefix={prefix} hasPermission={hasPermission} permissionsLoaded={permissionsLoaded} customAccess={customAccess} />
         </div>
         <div id="tour-nav-people">
           <NavSection title="Performance" items={PERFORMANCE_ITEMS} {...sharedProps} />
@@ -357,6 +384,7 @@ export function Sidebar({ onClose, prefix = '', onMenuClick, onSearchOpen }) {
         <div id="tour-nav-account">
           <NavSection title="Administration" items={ADMIN_ITEMS} {...sharedProps} />
         </div>
+        {customAccess && <NavSection title="My Workspace" items={MY_WORKSPACE_ITEMS} {...sharedProps} />}
       </nav>
 
       {/* User */}
@@ -369,7 +397,7 @@ export function Sidebar({ onClose, prefix = '', onMenuClick, onSearchOpen }) {
           <div className="flex-1 min-w-0">
             <p className="text-[0.84rem] font-black text-[#151c27] leading-tight truncate">{user?.name}</p>
             <p className="text-[0.68rem] text-[#777587] mt-0.5 truncate">
-              {isRootAdmin ? 'Root Administrator' : isAdmin ? 'HR Admin' : user?.position || 'Employee'}
+              {isRootAdmin ? 'Root Administrator' : customAccess ? (user?.position || 'Employee') : isAdmin ? 'HR Admin' : user?.position || 'Employee'}
             </p>
           </div>
         </div>

@@ -1,16 +1,13 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { BRANCH_KEYED } from '@/lib/queryScopes';
-import {
-  Shield, Plus, Trash2, ChevronRight, Users, Lock,
-  Settings, AlertCircle, CheckCircle2, X, Pencil,
-} from 'lucide-react';
-import { apiGet, apiPost, apiDelete, apiPut } from '@/lib/api';
+import { Shield, Plus, Trash2, Users, Lock, AlertCircle, CheckCircle2, X, Copy } from 'lucide-react';
+import { apiGet, apiPost, apiDelete } from '@/lib/api';
 import { useBranch } from '@/context/BranchContext';
+import PermissionPicker from '@/components/rbac/PermissionPicker';
+import AssignUsersModal from '@/components/rbac/AssignUsersModal';
 import { cn } from '@/lib/utils';
-
-// ─── Create Role Modal ────────────────────────────────────────────────────────
 
 function validateRoleName(val) {
   if (!val || !val.trim()) return 'Role name is required';
@@ -20,277 +17,126 @@ function validateRoleName(val) {
   return '';
 }
 
-function CreateRoleModal({ onClose, onCreate }) {
-  const [name, setName]       = useState('');
-  const [desc, setDesc]       = useState('');
-  const [nameErr, setNameErr] = useState('');
-  const [error, setError]     = useState('');
-  const [saving, setSaving]   = useState(false);
+const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
 
-  function handleNameChange(e) {
-    const val = e.target.value;
-    setName(val);
-    setNameErr(validateRoleName(val));
-  }
-
-  async function handleSubmit(e) {
-    e.preventDefault();
-    const err = validateRoleName(name);
-    if (err) { setNameErr(err); return; }
-    setSaving(true);
-    setError('');
-    try {
-      const role = await apiPost('/roles', { name: name.trim(), description: desc.trim() });
-      onCreate(role);
-      onClose();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const nameOk = !nameErr && name.trim().length >= 2;
-
+function Badge({ system }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(4,6,14,.6)', backdropFilter: 'blur(4px)' }}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md border border-[#c7c4d8]">
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[#e7eefe]">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-[#3525cd]/10 flex items-center justify-center">
-              <Shield size={16} className="text-[#3525cd]" />
-            </div>
-            <h2 className="font-black text-[#151c27] text-base">Create Custom Role</h2>
-          </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-[#f0f3ff] flex items-center justify-center transition-colors">
-            <X size={16} className="text-[#777587]" />
-          </button>
-        </div>
-
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-xs font-bold text-[#464555]">Role Name <span className="text-rose-500">*</span></label>
-              <span className={cn('text-[0.65rem] font-semibold', name.length > 45 ? 'text-amber-500' : 'text-[#c7c4d8]')}>
-                {name.length}/50
-              </span>
-            </div>
-            <input
-              autoFocus
-              value={name}
-              onChange={handleNameChange}
-              placeholder="e.g. Finance Manager"
-              maxLength={50}
-              className={cn(
-                'w-full border rounded-lg px-3 py-2.5 text-sm text-[#151c27] focus:outline-none focus:ring-1 transition-colors',
-                nameErr
-                  ? 'border-rose-400 focus:border-rose-500 focus:ring-rose-200'
-                  : nameOk
-                    ? 'border-green-400 focus:border-green-500 focus:ring-green-100'
-                    : 'border-[#c7c4d8] focus:border-[#3525cd] focus:ring-[#3525cd]/20'
-              )}
-            />
-            {nameErr && (
-              <div className="flex items-center gap-1.5 mt-1.5">
-                <AlertCircle size={11} className="text-rose-500 shrink-0" />
-                <p className="text-[0.68rem] text-rose-600">{nameErr}</p>
-              </div>
-            )}
-            {!nameErr && name.trim() && (
-              <p className="text-[0.68rem] text-[#777587] mt-1">Allowed: letters, numbers, spaces, hyphens, underscores</p>
-            )}
-          </div>
-
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-xs font-bold text-[#464555]">Description <span className="text-[#c7c4d8] font-normal">(optional)</span></label>
-              <span className={cn('text-[0.65rem] font-semibold', desc.length > 450 ? 'text-amber-500' : 'text-[#c7c4d8]')}>
-                {desc.length}/500
-              </span>
-            </div>
-            <textarea
-              value={desc}
-              onChange={e => setDesc(e.target.value.slice(0, 500))}
-              placeholder="What does this role do? Who should have it?"
-              rows={3}
-              maxLength={500}
-              className="w-full border border-[#c7c4d8] rounded-lg px-3 py-2.5 text-sm text-[#151c27] resize-none focus:outline-none focus:border-[#3525cd] focus:ring-1 focus:ring-[#3525cd]/20"
-            />
-          </div>
-
-          {error && (
-            <div className="flex items-center gap-2 text-red-600 text-xs bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-              <AlertCircle size={13} /> {error}
-            </div>
-          )}
-
-          <div className="flex gap-2.5 pt-1">
-            <button type="button" onClick={onClose}
-              className="flex-1 border border-[#c7c4d8] rounded-lg py-2.5 text-sm font-semibold text-[#464555] hover:bg-[#f0f3ff] transition-colors">
-              Cancel
-            </button>
-            <button type="submit" disabled={saving || !!nameErr || !name.trim()}
-              className="flex-1 bg-[#3525cd] text-white rounded-lg py-2.5 text-sm font-bold hover:bg-[#2a1fb0] transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-              {saving ? 'Creating…' : 'Create Role'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+    <span className={cn(
+      'inline-flex items-center text-[0.6rem] font-black tracking-wider px-1.5 py-0.5 rounded-full',
+      system ? 'bg-purple-50 text-purple-600' : 'bg-[#f0f3ff] text-[#3525cd]'
+    )}>
+      {system ? 'SYSTEM' : 'CUSTOM'}
+    </span>
   );
 }
 
-// ─── Edit Role Modal ──────────────────────────────────────────────────────────
+// ─── Create Role Modal ────────────────────────────────────────────────────────
+// `templateRole` pre-selects a "start from" role (used by "Create custom role" on a system role).
+function CreateRoleModal({ roles, templateRole, onClose, onCreated }) {
+  const [name, setName]         = useState(templateRole ? `${templateRole.name} - Limited` : '');
+  const [desc, setDesc]         = useState('');
+  const [fromId, setFromId]     = useState(templateRole ? String(templateRole.id) : '');
+  const [selected, setSelected] = useState(new Set());
+  const [error, setError]       = useState('');
+  const [saving, setSaving]     = useState(false);
+  const nameErr = name ? validateRoleName(name) : '';
 
-function EditRoleModal({ role, onClose, onSaved }) {
-  const [name, setName]       = useState(role.name || '');
-  const [desc, setDesc]       = useState(role.description || '');
-  const [nameErr, setNameErr] = useState('');
-  const [error, setError]     = useState('');
-  const [saving, setSaving]   = useState(false);
+  const { data: catalog = [] } = useQuery({ queryKey: ['all-permissions'], queryFn: () => apiGet('/permissions'), retry: 1 });
 
-  function handleNameChange(e) {
-    const val = e.target.value;
-    setName(val);
-    setNameErr(validateRoleName(val));
-  }
+  // Copy the chosen role's permissions into the (editable) selection. The source role is only read.
+  useEffect(() => {
+    if (!fromId) return;
+    let cancelled = false;
+    apiGet(`/roles/${fromId}`)
+      .then(r => { if (!cancelled) setSelected(new Set(r.permission_ids || [])); })
+      .catch(e => { if (!cancelled) setError(e.message); });
+    return () => { cancelled = true; };
+  }, [fromId]);
 
   async function handleSubmit(e) {
     e.preventDefault();
     const err = validateRoleName(name);
-    if (err) { setNameErr(err); return; }
-    setSaving(true);
-    setError('');
+    if (err) return;
+    setSaving(true); setError('');
     try {
-      const updated = await apiPut(`/roles/${role.id}`, {
-        name: name.trim(),
-        description: desc.trim(),
+      const role = await apiPost('/roles', {
+        name: name.trim(), description: desc.trim(), permission_ids: [...selected],
       });
-      onSaved(updated);
-      onClose();
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      setSaving(false);
-    }
+      onCreated(role);
+    } catch (e2) { setError(e2.message); } finally { setSaving(false); }
   }
 
-  const nameOk = !nameErr && name.trim().length >= 2;
+  const templates = roles.filter(r => r.slug !== 'root_admin');
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(4,6,14,.6)', backdropFilter: 'blur(4px)' }}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md border border-[#c7c4d8]">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(4,6,14,.6)', backdropFilter: 'blur(4px)' }}>
+      <form onSubmit={handleSubmit} className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl border border-[#c7c4d8] flex flex-col max-h-[90vh]">
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#e7eefe]">
           <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-lg bg-[#3525cd]/10 flex items-center justify-center">
-              <Pencil size={15} className="text-[#3525cd]" />
-            </div>
-            <h2 className="font-black text-[#151c27] text-base">Edit Role</h2>
+            <div className="w-8 h-8 rounded-lg bg-[#3525cd]/10 flex items-center justify-center"><Shield size={16} className="text-[#3525cd]" /></div>
+            <h2 className="font-black text-[#151c27] text-base">Create Custom Role</h2>
           </div>
-          <button onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-[#f0f3ff] flex items-center justify-center transition-colors">
-            <X size={16} className="text-[#777587]" />
-          </button>
+          <button type="button" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-[#f0f3ff] flex items-center justify-center"><X size={16} className="text-[#777587]" /></button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
-          <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-xs font-bold text-[#464555]">Role Name <span className="text-rose-500">*</span></label>
-              <span className={cn('text-[0.65rem] font-semibold', name.length > 45 ? 'text-amber-500' : 'text-[#c7c4d8]')}>
-                {name.length}/50
-              </span>
+        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-bold text-[#464555] mb-1.5">Role Name <span className="text-rose-500">*</span></label>
+              <input autoFocus value={name} onChange={e => setName(e.target.value)} maxLength={50} placeholder="e.g. Payroll Manager"
+                className={cn('w-full border rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-1',
+                  nameErr ? 'border-rose-400 focus:ring-rose-200' : 'border-[#c7c4d8] focus:border-[#3525cd] focus:ring-[#3525cd]/20')} />
+              {nameErr && <p className="text-[0.68rem] text-rose-600 mt-1">{nameErr}</p>}
             </div>
-            <input
-              autoFocus
-              value={name}
-              onChange={handleNameChange}
-              placeholder="e.g. Finance Manager"
-              maxLength={50}
-              className={cn(
-                'w-full border rounded-lg px-3 py-2.5 text-sm text-[#151c27] focus:outline-none focus:ring-1 transition-colors',
-                nameErr
-                  ? 'border-rose-400 focus:border-rose-500 focus:ring-rose-200'
-                  : nameOk
-                    ? 'border-green-400 focus:border-green-500 focus:ring-green-100'
-                    : 'border-[#c7c4d8] focus:border-[#3525cd] focus:ring-[#3525cd]/20'
-              )}
-            />
-            {nameErr && (
-              <div className="flex items-center gap-1.5 mt-1.5">
-                <AlertCircle size={11} className="text-rose-500 shrink-0" />
-                <p className="text-[0.68rem] text-rose-600">{nameErr}</p>
-              </div>
-            )}
-            {!nameErr && name.trim() && (
-              <p className="text-[0.68rem] text-[#777587] mt-1">Allowed: letters, numbers, spaces, hyphens, underscores</p>
-            )}
+            <div>
+              <label className="block text-xs font-bold text-[#464555] mb-1.5">Start from <span className="text-[#c7c4d8] font-normal">(optional)</span></label>
+              <select value={fromId} onChange={e => { setFromId(e.target.value); if (!e.target.value) setSelected(new Set()); }}
+                className="w-full border border-[#c7c4d8] rounded-lg px-3 py-2.5 text-sm bg-white focus:outline-none focus:border-[#3525cd]">
+                <option value="">Blank — no permissions</option>
+                {templates.map(r => <option key={r.id} value={r.id}>{r.name}{r.is_system_role ? ' (system)' : ''}</option>)}
+              </select>
+            </div>
           </div>
-
           <div>
-            <div className="flex items-center justify-between mb-1.5">
-              <label className="block text-xs font-bold text-[#464555]">Description <span className="text-[#c7c4d8] font-normal">(optional)</span></label>
-              <span className={cn('text-[0.65rem] font-semibold', desc.length > 450 ? 'text-amber-500' : 'text-[#c7c4d8]')}>
-                {desc.length}/500
-              </span>
-            </div>
-            <textarea
-              value={desc}
-              onChange={e => setDesc(e.target.value.slice(0, 500))}
+            <label className="block text-xs font-bold text-[#464555] mb-1.5">Description <span className="text-[#c7c4d8] font-normal">(optional)</span></label>
+            <textarea value={desc} onChange={e => setDesc(e.target.value.slice(0, 500))} rows={2} maxLength={500}
               placeholder="What does this role do? Who should have it?"
-              rows={3}
-              maxLength={500}
-              className="w-full border border-[#c7c4d8] rounded-lg px-3 py-2.5 text-sm text-[#151c27] resize-none focus:outline-none focus:border-[#3525cd] focus:ring-1 focus:ring-[#3525cd]/20"
-            />
+              className="w-full border border-[#c7c4d8] rounded-lg px-3 py-2.5 text-sm resize-none focus:outline-none focus:border-[#3525cd] focus:ring-1 focus:ring-[#3525cd]/20" />
           </div>
-
+          <div>
+            <p className="text-xs font-black uppercase tracking-widest text-[#777587] mb-2">Permissions</p>
+            <PermissionPicker catalog={catalog} selectedIds={selected} onChange={setSelected} />
+          </div>
           {error && (
-            <div className="flex items-center gap-2 text-red-600 text-xs bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-              <AlertCircle size={13} /> {error}
-            </div>
+            <div className="flex items-center gap-2 text-red-600 text-xs bg-red-50 border border-red-200 rounded-lg px-3 py-2"><AlertCircle size={13} /> {error}</div>
           )}
+        </div>
 
-          <div className="flex gap-2.5 pt-1">
-            <button type="button" onClick={onClose}
-              className="flex-1 border border-[#c7c4d8] rounded-lg py-2.5 text-sm font-semibold text-[#464555] hover:bg-[#f0f3ff] transition-colors">
-              Cancel
-            </button>
-            <button type="submit" disabled={saving || !!nameErr || !name.trim()}
-              className="flex-1 bg-[#3525cd] text-white rounded-lg py-2.5 text-sm font-bold hover:bg-[#2a1fb0] transition-colors disabled:opacity-50 disabled:cursor-not-allowed">
-              {saving ? 'Saving…' : 'Save Changes'}
-            </button>
-          </div>
-        </form>
-      </div>
+        <div className="flex justify-end gap-2.5 px-6 py-4 border-t border-[#e7eefe]">
+          <button type="button" onClick={onClose} className="border border-[#c7c4d8] rounded-lg px-5 py-2.5 text-sm font-semibold text-[#464555] hover:bg-[#f0f3ff]">Cancel</button>
+          <button type="submit" disabled={saving || !name.trim() || !!nameErr}
+            className="bg-[#3525cd] text-white rounded-lg px-5 py-2.5 text-sm font-bold hover:bg-[#2a1fb0] disabled:opacity-50 disabled:cursor-not-allowed">
+            {saving ? 'Creating…' : 'Create Role'}
+          </button>
+        </div>
+      </form>
     </div>
   );
 }
 
 // ─── Delete Confirm ───────────────────────────────────────────────────────────
-
 function DeleteConfirm({ role, onCancel, onConfirm, loading }) {
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
-      style={{ background: 'rgba(4,6,14,.6)', backdropFilter: 'blur(4px)' }}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4" style={{ background: 'rgba(4,6,14,.6)', backdropFilter: 'blur(4px)' }}>
       <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm border border-[#c7c4d8] p-6">
-        <div className="w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center mx-auto mb-4">
-          <Trash2 size={22} className="text-red-500" />
-        </div>
+        <div className="w-12 h-12 rounded-2xl bg-red-50 flex items-center justify-center mx-auto mb-4"><Trash2 size={22} className="text-red-500" /></div>
         <h3 className="text-center font-black text-[#151c27] mb-1">Delete Role</h3>
-        <p className="text-center text-sm text-[#777587] mb-2">
-          Are you sure you want to delete <strong className="text-[#151c27]">{role.name}</strong>?
-        </p>
-        <p className="text-center text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 mb-6">
-          All member assignments and permissions for this role will be permanently revoked. This cannot be undone.
+        <p className="text-center text-sm text-[#777587] mb-6">
+          Delete <strong className="text-[#151c27]">{role.name}</strong> and its permissions? This cannot be undone.
         </p>
         <div className="flex gap-2.5">
-          <button onClick={onCancel}
-            className="flex-1 border border-[#c7c4d8] rounded-lg py-2.5 text-sm font-semibold text-[#464555] hover:bg-[#f0f3ff]">
-            Cancel
-          </button>
-          <button onClick={onConfirm} disabled={loading}
-            className="flex-1 bg-red-500 text-white rounded-lg py-2.5 text-sm font-bold hover:bg-red-600 disabled:opacity-60">
+          <button onClick={onCancel} className="flex-1 border border-[#c7c4d8] rounded-lg py-2.5 text-sm font-semibold text-[#464555] hover:bg-[#f0f3ff]">Cancel</button>
+          <button onClick={onConfirm} disabled={loading} className="flex-1 bg-red-500 text-white rounded-lg py-2.5 text-sm font-bold hover:bg-red-600 disabled:opacity-60">
             {loading ? 'Deleting…' : 'Delete'}
           </button>
         </div>
@@ -299,137 +145,20 @@ function DeleteConfirm({ role, onCancel, onConfirm, loading }) {
   );
 }
 
-// ─── Role Card ────────────────────────────────────────────────────────────────
-
-function RoleCard({ role, onDelete, onClick, onEdit }) {
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [deleting, setDeleting]           = useState(false);
-
-  const SYSTEM_COLORS = {
-    root_admin: { bg: 'bg-purple-50', border: 'border-purple-200', text: 'text-purple-700', dot: 'bg-purple-400' },
-    hr_admin:   { bg: 'bg-blue-50',   border: 'border-blue-200',   text: 'text-blue-700',   dot: 'bg-blue-400'   },
-    dept_head:  { bg: 'bg-amber-50',  border: 'border-amber-200',  text: 'text-amber-700',  dot: 'bg-amber-400'  },
-    employee:   { bg: 'bg-green-50',  border: 'border-green-200',  text: 'text-green-700',  dot: 'bg-green-400'  },
-  };
-  const colors = SYSTEM_COLORS[role.slug] || {
-    bg: 'bg-[#f0f3ff]', border: 'border-[#c7c4d8]', text: 'text-[#3525cd]', dot: 'bg-[#3525cd]',
-  };
-
-  async function handleDelete() {
-    setDeleting(true);
-    try {
-      await onDelete(role.id);
-    } finally {
-      setDeleting(false);
-      setConfirmDelete(false);
-    }
-  }
-
-  return (
-    <>
-      <div
-        className="bg-white border border-[#e7eefe] rounded-xl p-4 hover:border-[#3525cd]/30 hover:shadow-sm transition-all cursor-pointer group relative overflow-hidden"
-        onClick={() => onClick(role)}
-      >
-        {/* Header */}
-        <div className="flex items-start justify-between mb-3">
-          <div className="flex items-center gap-2.5 min-w-0 flex-1">
-            <div className={cn('w-9 h-9 rounded-xl flex items-center justify-center flex-shrink-0', colors.bg, 'border', colors.border)}>
-              {role.is_system_role
-                ? <Lock size={15} className={colors.text} />
-                : <Shield size={15} className="text-[#3525cd]" />
-              }
-            </div>
-            {/* BUG_143: prevent long name/description causing horizontal scroll */}
-            <div className="min-w-0 flex-1 overflow-hidden">
-              <p title={role.name} className="font-bold text-[0.88rem] text-[#151c27] leading-tight break-all line-clamp-2">{role.name}</p>
-              <span className={cn(
-                'inline-flex items-center gap-1 text-[0.6rem] font-bold px-1.5 py-0.5 rounded-full mt-0.5',
-                role.is_system_role ? cn(colors.bg, colors.text) : 'bg-[#f0f3ff] text-[#3525cd]'
-              )}>
-                <span className={cn('w-1.5 h-1.5 rounded-full', role.is_system_role ? colors.dot : 'bg-[#3525cd]')} />
-                {role.is_system_role ? 'System' : 'Custom'}
-              </span>
-            </div>
-          </div>
-
-          <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-            {!role.is_system_role && (
-              <>
-                <button
-                  onClick={e => { e.stopPropagation(); onEdit(role); }}
-                  className="w-7 h-7 rounded-lg hover:bg-[#f0f3ff] flex items-center justify-center transition-colors"
-                  title="Edit role"
-                >
-                  <Pencil size={13} className="text-[#3525cd]" />
-                </button>
-                <button
-                  onClick={e => { e.stopPropagation(); setConfirmDelete(true); }}
-                  className="w-7 h-7 rounded-lg hover:bg-red-50 flex items-center justify-center transition-colors"
-                  title="Delete role"
-                >
-                  <Trash2 size={13} className="text-red-400" />
-                </button>
-              </>
-            )}
-            <ChevronRight size={16} className="text-[#777587]" />
-          </div>
-        </div>
-
-        {/* Description */}
-        {role.description && (
-          <p title={role.description} className="text-xs text-[#777587] mb-3 line-clamp-2 leading-relaxed break-all overflow-hidden">{role.description}</p>
-        )}
-
-        {/* Stats */}
-        <div className="flex items-center gap-3 pt-2.5 border-t border-[#f0f3ff]">
-          <div className="flex items-center gap-1.5 text-[#777587]">
-            <Shield size={12} />
-            <span className="text-xs font-semibold">{role.permission_count || 0} permissions</span>
-          </div>
-          <div className="flex items-center gap-1.5 text-[#777587]">
-            <Users size={12} />
-            <span className="text-xs font-semibold">{role.member_count || 0} members</span>
-          </div>
-        </div>
-      </div>
-
-      {confirmDelete && (
-        <DeleteConfirm
-          role={role}
-          onCancel={() => setConfirmDelete(false)}
-          onConfirm={handleDelete}
-          loading={deleting}
-        />
-      )}
-    </>
-  );
-}
-
 // ─── Main Page ────────────────────────────────────────────────────────────────
-
 export default function RoleManagement() {
-  const navigate     = useNavigate();
-  const queryClient  = useQueryClient();
+  const navigate    = useNavigate();
+  const queryClient = useQueryClient();
   const { selectedBranchId } = useBranch();
-  const [showCreate, setShowCreate] = useState(false);
-  const [editRole, setEditRole]     = useState(null); // role object being edited
-  const [toast, setToast]           = useState(null);
+  const [createFor, setCreateFor]       = useState(null);  // null | { template: role|null }
+  const [assignRole, setAssignRole]     = useState(null);
+  const [deleteRole, setDeleteRole]     = useState(null);
+  const [toast, setToast]               = useState(null);
 
-  // Include selectedBranchId in queryKey so member counts refresh when branch changes
   const { data: roles = [], isLoading } = useQuery({
     queryKey: ['roles', selectedBranchId],
     meta: BRANCH_KEYED, placeholderData: keepPreviousData,
     queryFn: () => apiGet('/roles'),
-  });
-
-  const deleteMutation = useMutation({
-    mutationFn: (roleId) => apiDelete(`/roles/${roleId}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['roles'] });
-      showToast('Role deleted successfully', 'success');
-    },
-    onError: (err) => showToast(err.message, 'error'),
   });
 
   function showToast(message, type = 'success') {
@@ -437,184 +166,133 @@ export default function RoleManagement() {
     setTimeout(() => setToast(null), 3500);
   }
 
-  function handleRoleClick(role) {
-    navigate(`/root/roles/${role.id}/permissions`);
-  }
+  const deleteMutation = useMutation({
+    mutationFn: (id) => apiDelete(`/roles/${id}`),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ['roles'] }); showToast('Role deleted'); },
+    onError: (err) => showToast(err.message, 'error'),
+    onSettled: () => setDeleteRole(null),
+  });
 
-  function handleCreated(role) {
-    queryClient.invalidateQueries({ queryKey: ['roles'] });
-    // EHN_RM_001: drop the admin straight into the new role's Permissions tab
-    navigate(`/root/roles/${role.id}/permissions`);
-  }
-
-  function handleRoleSaved(updatedRole) {
-    queryClient.invalidateQueries({ queryKey: ['roles'] });
-    showToast(`Role "${updatedRole.name}" updated`, 'success');
-  }
-
-  // BUG_25: Root Admin has all permissions by default; Employee uses self-service dashboard only.
-  // Only HR Admin and Department Head need configurable permission management.
-  const systemRoles = roles.filter(r => r.is_system_role);
-  const configurableSystemRoles = systemRoles.filter(r => !['root_admin', 'employee'].includes(r.slug));
-  const lockedSystemRoles = systemRoles.filter(r => ['root_admin', 'employee'].includes(r.slug));
+  // Root Admin is never shown as a role; it has full access without a permission list.
   const customRoles = roles.filter(r => !r.is_system_role);
+  const systemRoles = roles.filter(r => r.is_system_role && r.slug !== 'root_admin');
+  const manage = (role) => navigate(`/root/roles/${role.id}/permissions`);
 
   return (
     <div>
-      {/* Header */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between gap-3 mb-6">
         <div>
           <div className="flex items-center gap-2.5 mb-1">
-            <div className="w-8 h-8 rounded-xl bg-[#3525cd]/10 flex items-center justify-center">
-              <Shield size={17} className="text-[#3525cd]" />
-            </div>
+            <div className="w-8 h-8 rounded-xl bg-[#3525cd]/10 flex items-center justify-center"><Shield size={17} className="text-[#3525cd]" /></div>
             <h1 className="text-xl font-black text-[#151c27]">Role Management</h1>
           </div>
-          <p className="text-sm text-[#777587] ml-10.5">
-            Define roles and assign permissions to control what users can access.
-          </p>
+          <p className="text-sm text-[#777587]">Create and manage custom roles and their permissions.</p>
         </div>
-        <button
-          onClick={() => setShowCreate(true)}
-          className="flex items-center gap-2 bg-[#3525cd] text-white px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-[#2a1fb0] transition-colors shadow-sm"
-        >
+        <button onClick={() => setCreateFor({ template: null })}
+          className="flex items-center gap-2 bg-[#3525cd] text-white px-4 py-2.5 rounded-xl text-sm font-bold hover:bg-[#2a1fb0] shadow-sm whitespace-nowrap">
           <Plus size={16} /> Create Role
         </button>
       </div>
 
-      {/* Info banner */}
-      <div className="bg-[#f0f3ff] border border-[#c7c4d8] rounded-xl px-4 py-3 mb-6 flex items-start gap-3">
-        <Settings size={16} className="text-[#3525cd] flex-shrink-0 mt-0.5" />
-        <div>
-          <p className="text-xs font-bold text-[#3525cd] mb-0.5">Click any role to manage its permissions and members</p>
-          <p className="text-xs text-[#777587]">
-            System roles are seeded automatically and cannot be deleted or renamed. Custom roles can be created, edited, and deleted. Hover a custom role card to edit or delete it.
-          </p>
-        </div>
-      </div>
-
+      {/* Custom roles */}
+      <h2 className="text-xs font-black uppercase tracking-widest text-[#777587] mb-3">Custom Roles</h2>
       {isLoading ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[1,2,3,4].map(i => (
-            <div key={i} className="bg-white border border-[#e7eefe] rounded-xl p-4 animate-pulse">
-              <div className="flex items-center gap-2.5 mb-3">
-                <div className="w-9 h-9 rounded-xl bg-[#f0f3ff]" />
-                <div className="space-y-1.5">
-                  <div className="h-4 w-28 bg-[#f0f3ff] rounded" />
-                  <div className="h-3 w-14 bg-[#f0f3ff] rounded" />
-                </div>
+        <div className="bg-white border border-[#e7eefe] rounded-xl p-6 animate-pulse space-y-3">
+          {[1, 2, 3].map(i => <div key={i} className="h-9 bg-[#f0f3ff] rounded" />)}
+        </div>
+      ) : customRoles.length === 0 ? (
+        <div className="bg-white border border-dashed border-[#c7c4d8] rounded-xl p-10 text-center">
+          <div className="w-12 h-12 rounded-2xl bg-[#f0f3ff] flex items-center justify-center mx-auto mb-3"><Plus size={22} className="text-[#3525cd]/50" /></div>
+          <button onClick={() => setCreateFor({ template: null })} className="text-sm font-bold text-[#3525cd] hover:underline">+ Create your first custom role</button>
+          <p className="text-xs text-[#777587] mt-1">Create a role for specific responsibilities.</p>
+        </div>
+      ) : (
+        <div className="bg-white border border-[#e7eefe] rounded-xl overflow-x-auto">
+          <table className="w-full text-sm min-w-[560px]">
+            <thead>
+              <tr className="bg-[#f9f9ff] text-left text-[0.68rem] font-black uppercase tracking-wider text-[#777587]">
+                <th className="px-4 py-3">Role Name</th>
+                <th className="px-4 py-3">Permissions</th>
+                <th className="px-4 py-3">Users</th>
+                <th className="px-4 py-3 text-right">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {customRoles.map(role => {
+                const members = role.member_count || 0;
+                return (
+                  <tr key={role.id} className="border-t border-[#f0f3ff] hover:bg-[#f9f9ff]">
+                    <td className="px-4 py-3 max-w-[280px]">
+                      <div className="flex items-center gap-2">
+                        <span title={role.name} className="font-bold text-[#151c27] truncate">{role.name}</span>
+                        <Badge />
+                      </div>
+                      {role.description && <p title={role.description} className="text-xs text-[#777587] truncate mt-0.5">{role.description}</p>}
+                    </td>
+                    <td className="px-4 py-3 text-[#464555] whitespace-nowrap">{plural(role.permission_count || 0, 'permission')}</td>
+                    <td className="px-4 py-3 text-[#464555] whitespace-nowrap">{plural(members, 'user')}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center justify-end gap-2">
+                        <button onClick={() => manage(role)} className="px-3 py-1.5 rounded-lg border border-[#c7c4d8] text-xs font-bold text-[#3525cd] hover:bg-[#f0f3ff]">Manage</button>
+                        <button onClick={() => setAssignRole(role)} className="px-3 py-1.5 rounded-lg border border-[#c7c4d8] text-xs font-bold text-[#464555] hover:bg-[#f0f3ff]">Assign</button>
+                        <button onClick={() => setDeleteRole(role)} disabled={members > 0}
+                          title={members > 0 ? 'Remove all users from this role before deleting it' : 'Delete role'}
+                          className="w-8 h-8 rounded-lg flex items-center justify-center hover:bg-red-50 disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed">
+                          <Trash2 size={14} className="text-red-500" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* System roles — informational */}
+      <div className="mt-8">
+        <div className="flex items-center gap-2 mb-1">
+          <Lock size={13} className="text-[#777587]" />
+          <h2 className="text-xs font-black uppercase tracking-widest text-[#777587]">System Roles</h2>
+        </div>
+        <p className="text-xs text-[#777587] mb-3">System roles are predefined and cannot be customized.</p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          {systemRoles.map(role => (
+            <div key={role.id} className="bg-white border border-[#e7eefe] rounded-xl p-4 flex flex-col gap-2">
+              <div className="flex items-center gap-2">
+                <span className="font-bold text-sm text-[#151c27] truncate">{role.name}</span>
+                <Badge system />
               </div>
-              <div className="h-3 w-full bg-[#f0f3ff] rounded mb-4" />
-              <div className="h-3 w-2/3 bg-[#f0f3ff] rounded" />
+              <p className="text-xs text-[#777587]">{plural(role.member_count || 0, 'user')}</p>
+              <button onClick={() => setCreateFor({ template: role })}
+                className="mt-auto inline-flex items-center gap-1.5 text-xs font-bold text-[#3525cd] hover:underline self-start">
+                <Copy size={12} /> Create custom role
+              </button>
             </div>
           ))}
         </div>
-      ) : (
-        <div className="space-y-6">
-          {/* Configurable System Roles — HR Admin & Department Head */}
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <Shield size={14} className="text-[#3525cd]" />
-              <h2 className="text-xs font-black uppercase tracking-widest text-[#777587]">Configurable Roles</h2>
-              <span className="text-xs text-[#777587] font-medium">— manage permissions for these roles</span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {configurableSystemRoles.map(role => (
-                <RoleCard
-                  key={role.id}
-                  role={role}
-                  onDelete={(id) => deleteMutation.mutateAsync(id)}
-                  onClick={handleRoleClick}
-                  onEdit={setEditRole}
-                />
-              ))}
-            </div>
-          </div>
+      </div>
 
-          {/* Locked System Roles — Root Admin & Employee */}
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <Lock size={14} className="text-[#777587]" />
-              <h2 className="text-xs font-black uppercase tracking-widest text-[#777587]">Fixed System Roles</h2>
-              <span className="text-xs text-[#777587] font-medium">— predefined access, click to view</span>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {lockedSystemRoles.map(role => (
-                <RoleCard
-                  key={role.id}
-                  role={role}
-                  onDelete={(id) => deleteMutation.mutateAsync(id)}
-                  onClick={handleRoleClick}
-                  onEdit={setEditRole}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Custom Roles */}
-          <div>
-            <div className="flex items-center gap-2 mb-3">
-              <Shield size={14} className="text-[#777587]" />
-              <h2 className="text-xs font-black uppercase tracking-widest text-[#777587]">Custom Roles</h2>
-            </div>
-            {customRoles.length === 0 ? (
-              <div className="bg-white border border-dashed border-[#c7c4d8] rounded-xl p-8 text-center">
-                <div className="w-12 h-12 rounded-2xl bg-[#f0f3ff] flex items-center justify-center mx-auto mb-3">
-                  <Plus size={22} className="text-[#3525cd]/40" />
-                </div>
-                <p className="text-sm font-bold text-[#151c27] mb-1">No custom roles yet</p>
-                <p className="text-xs text-[#777587] mb-4">Create a custom role for specific job functions in your organization.</p>
-                <button
-                  onClick={() => setShowCreate(true)}
-                  className="text-[#3525cd] text-xs font-bold hover:underline"
-                >
-                  + Create your first custom role
-                </button>
-              </div>
-            ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-                {customRoles.map(role => (
-                  <RoleCard
-                    key={role.id}
-                    role={role}
-                    onDelete={(id) => deleteMutation.mutateAsync(id)}
-                    onClick={handleRoleClick}
-                    onEdit={setEditRole}
-                  />
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {showCreate && (
+      {createFor && (
         <CreateRoleModal
-          onClose={() => setShowCreate(false)}
-          onCreate={handleCreated}
+          roles={roles}
+          templateRole={createFor.template}
+          onClose={() => setCreateFor(null)}
+          onCreated={(role) => {
+            queryClient.invalidateQueries({ queryKey: ['roles'] });
+            setCreateFor(null);
+            showToast(`Role "${role.name}" created`);
+          }}
         />
       )}
+      {assignRole && <AssignUsersModal role={assignRole} onClose={() => setAssignRole(null)} onSaved={showToast} />}
+      {deleteRole && <DeleteConfirm role={deleteRole} loading={deleteMutation.isPending} onCancel={() => setDeleteRole(null)} onConfirm={() => deleteMutation.mutate(deleteRole.id)} />}
 
-      {editRole && (
-        <EditRoleModal
-          role={editRole}
-          onClose={() => setEditRole(null)}
-          onSaved={handleRoleSaved}
-        />
-      )}
-
-      {/* Toast */}
       {toast && (
-        <div className={cn(
-          'fixed bottom-6 right-6 z-50 flex items-center gap-2.5 px-4 py-3 rounded-xl shadow-xl text-sm font-semibold border',
-          toast.type === 'success'
-            ? 'bg-white border-green-200 text-green-700'
-            : 'bg-white border-red-200 text-red-600'
-        )}>
-          {toast.type === 'success'
-            ? <CheckCircle2 size={16} className="text-green-500" />
-            : <AlertCircle size={16} className="text-red-500" />
-          }
+        <div className={cn('fixed bottom-6 right-6 z-50 flex items-center gap-2.5 px-4 py-3 rounded-xl shadow-xl text-sm font-semibold border bg-white',
+          toast.type === 'success' ? 'border-green-200 text-green-700' : 'border-red-200 text-red-600')}>
+          {toast.type === 'success' ? <CheckCircle2 size={16} className="text-green-500" /> : <AlertCircle size={16} className="text-red-500" />}
           {toast.message}
         </div>
       )}

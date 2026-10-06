@@ -997,6 +997,27 @@ function announcementOrgScope(userRole, userOrgId) {
     }],
   ]);
 
+  await run('RBAC UI — system roles protected, custom roles safe to manage', [
+    ['System role permissions cannot be edited (PUT /:id/permissions)', () => {
+      const src = require('fs').readFileSync(require('path').join(__dirname, '../modules/roles/roles.routes.js'), 'utf8');
+      assert.ok(/if \(role\.is_system_role\) \{\s*return res\.status\(400\)[^;]*cannot be edited/.test(src),
+        'permission PUT must reject system roles');
+    }],
+    ['A role that is still assigned cannot be deleted', () => {
+      const src = require('fs').readFileSync(require('path').join(__dirname, '../modules/roles/roles.routes.js'), 'utf8');
+      const del = src.slice(src.indexOf("router.delete('/:id'"), src.indexOf("router.get('/:id/permissions'"));
+      assert.ok(/affectedUsers\.length > 0/.test(del) && /status\(409\)/.test(del), 'delete must 409 when members exist');
+      assert.ok(del.indexOf('status(409)') < del.indexOf("BEGIN"), 'guard must run before any deletion');
+    }],
+    ['Creating a role from another only READS the source and blocks Root Admin as template', () => {
+      const src = require('fs').readFileSync(require('path').join(__dirname, '../modules/roles/roles.routes.js'), 'utf8');
+      const post = src.slice(src.indexOf("router.post('/', auth"), src.indexOf("router.get('/:id', auth"));
+      assert.ok(/copy_from_role_id/.test(post) && /cannot be used as a template/.test(post));
+      assert.ok(!/UPDATE roles|DELETE FROM role_permissions/.test(post), 'clone must never modify an existing role');
+      assert.ok(/You cannot grant a permission you do not hold/.test(post), 'non-root callers cannot escalate via create');
+    }],
+  ]);
+
   // ── Summary ────────────────────────────────────────────────────────────────
   console.log(`\n${'─'.repeat(60)}`);
   console.log(`Results: ${passed} passed, ${failed} failed`);

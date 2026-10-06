@@ -41,8 +41,12 @@ const NAV_SECTIONS = [
 ];
 
 function EmployeeSidebar({ onClose, onMenuClick, onSearchOpen }) {
-  const { user, logout } = useAuth();
+  const { user, logout, hasCustomAccess, adminLanding } = useAuth();
   const navigate = useNavigate();
+  // A custom-role user can switch to the permission-driven admin modules their role grants
+  const sections = hasCustomAccess
+    ? [{ title: 'Team Workspace', items: [{ to: adminLanding, label: 'Admin Modules', Icon: ClipboardCheck }] }, ...NAV_SECTIONS]
+    : NAV_SECTIONS;
 
   const { data: countData } = useQuery({
     queryKey: ['notif-count'],
@@ -103,7 +107,7 @@ function EmployeeSidebar({ onClose, onMenuClick, onSearchOpen }) {
       </div>
 
       <nav className="flex-1 px-3 pb-3 pt-1 overflow-y-auto space-y-1">
-        {NAV_SECTIONS.map((sec, idx) => (
+        {sections.map((sec, idx) => (
           <div key={sec.title} id={`tour-emp-${['workspace','selfservice','growth','company'][idx] || idx}`} className="mb-2">
             <p className="text-[0.6rem] font-black uppercase tracking-[0.14em] text-[#777587] px-2.5 py-2">{sec.title}</p>
             <div className="flex flex-col gap-0.5">

@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const { applyAccessMap } = require('./effectiveAccess');
 const { pool } = require('../config/db');
 
 const JWT_SECRET = process.env.JWT_SECRET;
@@ -94,6 +95,11 @@ async function auth(req, res, next) {
 
     req.user = decoded;
     req._authed = true;
+    // Custom-role permissions may satisfy the legacy admin-role checks on routes listed in accessMap.js.
+    // Request-scoped only; never touches the token or the stored role. Fails closed on any error.
+    if (decoded.role === 'employee') {
+      try { await applyAccessMap(req); } catch (e) { console.error('[auth] access map:', e.message); }
+    }
     next();
   }
   catch { return res.status(401).json({ error: 'Invalid token' }); }

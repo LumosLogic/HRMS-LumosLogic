@@ -349,7 +349,8 @@ function Pagination({ page, totalPages, totalCount, pageSize, onPageChange, onPa
 export default function Reports() {
   const now = new Date();
   const { selectedBranchId, isBranchContextReady } = useBranch();
-  const { isAdmin } = useAuth();
+  const { isAdmin, adminCan } = useAuth();
+  const canExport = adminCan('reports', 'export');   // HR/Root unchanged; custom role needs reports.export
   const qc = useQueryClient();
   const toast = useToast();
   const [searchParams] = useSearchParams();
@@ -763,9 +764,11 @@ export default function Reports() {
           <button className="btn btn-outline btn-sm" onClick={() => window.print()}>
             <Printer size={14} /> Print
           </button>
+          {canExport && (
           <button className="btn btn-primary btn-sm" onClick={() => active === 'employees' ? handleDownload({ year }) : setDlOpen(true)}>
             <Download size={14} /> Export CSV
           </button>
+          )}
         </div>
       </div>
 

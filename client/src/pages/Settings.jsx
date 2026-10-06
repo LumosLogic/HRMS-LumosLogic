@@ -1616,8 +1616,13 @@ function firstVisible(role) {
 
 // ─── Main Settings Page ───────────────────────────────────────────────────────
 export default function Settings() {
-  const { user, isAdmin, isRootAdmin } = useAuth();
-  const role = user?.role || 'employee';
+  const { user, isAdmin, isRootAdmin, isHR, adminCan } = useAuth();
+  // A custom-role user in the admin shell sees the HR-level sections their permissions allow:
+  // read-only with settings.view, editable with settings.manage. Root-only sections stay hidden.
+  const customShell = isAdmin && !isHR && !isRootAdmin;
+  const role = customShell ? 'admin' : (user?.role || 'employee');
+  const canManageSettings = adminCan('settings', 'manage');   // HR/Root: true (unchanged)
+  const sectionAllowed = (item) => item.roles.includes(role) && !(customShell && item.id === 'leave_workflow' && !canManageSettings);
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['settings'],
@@ -1654,9 +1659,9 @@ export default function Settings() {
 
   function renderPanel() {
     switch (active) {
-      case 'work_schedule':        return <WorkSchedulePanel    schedule={schedule} isAdmin={isAdmin} onSaved={refetch} />;
+      case 'work_schedule':        return <WorkSchedulePanel    schedule={schedule} isAdmin={isAdmin && canManageSettings} onSaved={refetch} />;
       case 'branch_work_schedule': return <BranchSchedulePanel   schedule={schedule} />;
-      case 'attendance_rules':     return <AttendanceRulesPanel  schedule={schedule} isAdmin={isAdmin} onSaved={refetch} />;
+      case 'attendance_rules':     return <AttendanceRulesPanel  schedule={schedule} isAdmin={isAdmin && canManageSettings} onSaved={refetch} />;
       case 'status_legend':    return <StatusLegendPanel />;
       case 'email_automation': return <EmailAutomationPanel schedule={schedule} />;
       case 'leave_workflow':   return <LeaveWorkflowPanel />;
@@ -1675,7 +1680,7 @@ export default function Settings() {
 
   // Build a flat list of all visible items for the mobile dropdown
   const allVisibleItems = NAV_GROUPS.flatMap(g =>
-    g.items.filter(i => i.roles.includes(role)).map(i => ({ ...i, groupLabel: g.label, groupColor: g.color }))
+    g.items.filter(sectionAllowed).map(i => ({ ...i, groupLabel: g.label, groupColor: g.color }))
   );
   const activeItem = allVisibleItems.find(i => i.id === active);
 
@@ -1714,7 +1719,7 @@ export default function Settings() {
           {mobileNavOpen && (
             <div className="border-t border-[#f0f3ff] overflow-y-auto max-h-72">
               {NAV_GROUPS.map((group, gi) => {
-                const visibleItems = group.items.filter(i => i.roles.includes(role));
+                const visibleItems = group.items.filter(sectionAllowed);
                 if (!visibleItems.length) return null;
                 const GroupIcon = group.icon;
                 return (
@@ -1769,7 +1774,7 @@ export default function Settings() {
             {NAV_GROUPS.map((group, gi) => {
               const GroupIcon  = group.icon;
               const isOpen     = openGroups.has(group.id);
-              const visibleItems = group.items.filter(i => i.roles.includes(role)).filter(i =>
+              const visibleItems = group.items.filter(sectionAllowed).filter(i =>
                 !settingsSearch || i.label.toLowerCase().includes(settingsSearch.toLowerCase()) || group.label.toLowerCase().includes(settingsSearch.toLowerCase())
               );
               if (!visibleItems.length) return null;

@@ -445,7 +445,7 @@ function ManagerReviewModal({ open, onClose, expense }) {
 }
 
 export default function ExpensesPage() {
-  const { user, isAdmin, isEmployee } = useAuth();
+  const { user, isAdmin, isEmployee, adminCan } = useAuth();
   const { selectedBranchId } = useBranch();
   const wrap = '';
   const toast = useToast();
@@ -670,7 +670,7 @@ export default function ExpensesPage() {
                   </div>
                   <div className="flex flex-col gap-1.5 flex-shrink-0">
                     {/* HR Admin: review pending (no manager) or manager-approved expenses */}
-                    {isAdmin && ['pending', 'manager_approved'].includes(e.status) && (
+                    {isAdmin && adminCan('expenses', 'approve') && ['pending', 'manager_approved'].includes(e.status) && (
                       <button className="btn btn-outline btn-sm" onClick={() => setReviewExp(e)}>Review <ChevronRight size={12} /></button>
                     )}
                     {/* Manager: approve/reject their direct report's pending expense */}

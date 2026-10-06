@@ -93,7 +93,7 @@ export default function PayrollRunDetails() {
   const navigate = useNavigate();
   const toast    = useToast();
   const qc       = useQueryClient();
-  const { user } = useAuth();
+  const { user, adminCan, customCan } = useAuth();
 
   const isRootAdmin = user?.role === 'root_admin';
   const basePath    = isRootAdmin ? '/root' : '';
@@ -266,13 +266,16 @@ export default function PayrollRunDetails() {
 
   const fmt2 = n => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
 
-  const canLock       = run && isRootAdmin && ['completed', 'completed_with_errors', 'approved'].includes(run.status);
-  const canUnlock     = run?.status === 'locked' && isRootAdmin;
-  const canVerify     = run && ['completed', 'completed_with_errors'].includes(run.status);
-  const canApprove    = run?.status === 'verified' && isRootAdmin;
-  const canReopen     = run?.status === 'approved' && isRootAdmin;
-  const canRegenerate = run && !['locked', 'paid'].includes(run.status) && isRootAdmin;
-  const canPaid       = run && ['locked', 'approved'].includes(run.status) && isRootAdmin;
+  // Root keeps these actions; a custom-role user gets each one only with the matching payroll permission
+  // (the API enforces the same permissions). HR Admin is unchanged.
+  const may           = (action) => isRootAdmin || customCan('payroll', action);
+  const canLock       = run && may('lock') && ['completed', 'completed_with_errors', 'approved'].includes(run.status);
+  const canUnlock     = run?.status === 'locked' && may('unlock');
+  const canVerify     = run && adminCan('payroll', 'verify') && ['completed', 'completed_with_errors'].includes(run.status);
+  const canApprove    = run?.status === 'verified' && may('approve');
+  const canReopen     = run?.status === 'approved' && may('approve');
+  const canRegenerate = run && !['locked', 'paid'].includes(run.status) && may('generate');
+  const canPaid       = run && ['locked', 'approved'].includes(run.status) && may('mark_paid');
   const canAddAdj     = run && !['locked', 'paid'].includes(run.status);
 
   if (isLoading) {
@@ -429,7 +432,7 @@ export default function PayrollRunDetails() {
             </button>
           )}
           {/* Send payslip emails */}
-          {['approved','locked','paid'].includes(run?.status) && isRootAdmin && (
+          {['approved','locked','paid'].includes(run?.status) && may('approve') && (
             <button
               onClick={() => setConfirmDlg({
                 title: 'Send Payslip Emails',

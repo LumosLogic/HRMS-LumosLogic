@@ -61,7 +61,7 @@ export default function PayrollGeneration() {
   const toast    = useToast();
   const qc       = useQueryClient();
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, adminCan } = useAuth();
   const { selectedBranchId, selectedBranch } = useBranch();
   const branchesEnabled = useFeature('branches');
 
@@ -157,6 +157,7 @@ export default function PayrollGeneration() {
             </select>
           </div>
           <div className="flex gap-2 ml-auto">
+            {adminCan('payroll', 'generate') && (<>
             <button
               onClick={() => previewMut.mutate()}
               disabled={previewMut.isPending}
@@ -173,6 +174,7 @@ export default function PayrollGeneration() {
               {generateMut.isPending ? <span className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" /> : <Play size={15} />}
               Generate Payroll
             </button>
+            </>)}
           </div>
         </div>
       </div>

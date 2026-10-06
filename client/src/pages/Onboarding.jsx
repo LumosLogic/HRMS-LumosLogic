@@ -182,6 +182,7 @@ function MyOnboarding() {
 }
 
 function AdminOnboarding() {
+  const { adminCan } = useAuth();
   const toast = useToast();
   const qc    = useQueryClient();
   const { selectedBranchId } = useBranch();
@@ -217,7 +218,7 @@ function AdminOnboarding() {
   return (
     <div className="space-y-5">
       {/* Not started alert */}
-      {notStarted.length > 0 && (
+      {notStarted.length > 0 && adminCan('onboarding', 'manage') && (
         <div className="card p-5 border-amber-200 bg-amber-50">
           <p className="text-xs font-black uppercase tracking-widest text-amber-800 mb-3">
             {notStarted.length} employee{notStarted.length > 1 ? 's' : ''} without onboarding checklist
@@ -306,7 +307,7 @@ function AdminOnboarding() {
 }
 
 export default function Onboarding() {
-  const { isAdmin, isEmployee } = useAuth();
+  const { isAdmin, isEmployee, adminCan } = useAuth();
   const wrap = '';
   return (
     <div className={wrap}>

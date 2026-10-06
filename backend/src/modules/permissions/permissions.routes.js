@@ -5,7 +5,7 @@ const { auth } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
 const { orgId } = require('../../utils/helpers');
 // Fix H3: require at module top, not inside handler bodies
-const { resolvePermissions } = require('../../services/permissionService');
+const { resolvePermissions, resolveCustomPermissions } = require('../../services/permissionService');
 
 // ─── GET /api/permissions ─────────────────────────────────────────────────────
 // Returns all available permissions grouped by module.
@@ -43,7 +43,12 @@ router.get('/', auth, hasPermission('roles', 'view'), async (req, res) => {
 router.get('/me', auth, async (req, res) => {
   try {
     const permissions = await resolvePermissions(req.user.id, req.user.organization_id);
-    res.json({ permissions });
+    // custom_permissions = grants from CUSTOM roles only. The client uses them to decide which admin
+    // modules a custom-role employee sees; the API enforces the same grants independently.
+    const custom_permissions = req.user.role === 'employee'
+      ? await resolveCustomPermissions(req.user.id, req.user.organization_id)
+      : [];
+    res.json({ permissions, custom_permissions });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

@@ -568,9 +568,11 @@ function UploadSharedDocPanel({ allEmployees, colleagues, isEmployee, onCancel, 
 
 // ── Admin: Shared Documents Tab ───────────────────────────────────────────────
 function SharedDocumentsTab({ onUploadClick }) {
-  const { user, isRootAdmin, isAdmin, can } = useAuth();
+  const { user, isRootAdmin, isAdmin, can, adminCan } = useAuth();
   const { selectedBranchId } = useBranch();
   const canUpload = can('documents', 'upload');
+  const canManageDocs = adminCan('documents', 'manage');   // HR/Root: true. Custom role: documents.manage only.
+  const canRequestDelete = adminCan('documents', 'delete') || canManageDocs;
   const toast = useToast();
   const qc = useQueryClient();
 
@@ -803,11 +805,11 @@ function SharedDocumentsTab({ onUploadClick }) {
                           ) : (
                             <a href={doc.file_url} target="_blank" rel="noopener noreferrer" title="Open" className="p-1.5 rounded-lg text-[#777587] hover:text-[#3525cd] hover:bg-[#f0f3ff] transition-colors"><ExternalLink size={13} /></a>
                           )}
-                          <button title="Edit" onClick={() => setEditDoc(doc)} className="p-1.5 rounded-lg text-[#777587] hover:text-[#3525cd] hover:bg-[#f0f3ff] transition-colors"><Edit2 size={13} /></button>
+                          {canManageDocs && <button title="Edit" onClick={() => setEditDoc(doc)} className="p-1.5 rounded-lg text-[#777587] hover:text-[#3525cd] hover:bg-[#f0f3ff] transition-colors"><Edit2 size={13} /></button>}
                           {isRootAdmin && (
                             <button title="Delete (Root Admin only)" onClick={() => setConfirmDel({ id: doc.id, name: doc.name })} className="p-1.5 rounded-lg text-[#c7c4d8] hover:text-rose-500 hover:bg-rose-50 transition-colors"><Trash2 size={13} /></button>
                           )}
-                          {isAdmin && !isRootAdmin && (
+                          {isAdmin && !isRootAdmin && canRequestDelete && (
                             <button title="Request deletion (sends to Root Admin)" onClick={() => setRequestDelDoc({ id: doc.id, name: doc.name })} className="p-1.5 rounded-lg text-[#c7c4d8] hover:text-amber-500 hover:bg-amber-50 transition-colors"><Trash2 size={13} /></button>
                           )}
                         </div>
@@ -2447,9 +2449,10 @@ function SettingsTab() {
 // ── Admin: Main Documents Page ────────────────────────────────────────────────
 function AdminDocumentsPage() {
   const qc = useQueryClient();
-  const { isRootAdmin, can } = useAuth();
+  const { isRootAdmin, can, adminCan } = useAuth();
   const { selectedBranchId } = useBranch();
-  const canUpload = can('documents', 'upload');
+  const canManageDocs = adminCan('documents', 'manage');
+  const canUpload = can('documents', 'upload') && canManageDocs;
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get('tab') || 'shared';
   const [activeTab, setActiveTab]         = useState(initialTab);
@@ -2468,10 +2471,10 @@ function AdminDocumentsPage() {
 
   const tabs = [
     { id: 'shared',          label: 'Shared Documents',     Icon: FolderOpen,    show: true },
-    { id: 'requirements',    label: 'Requirements',          Icon: ClipboardList, show: true },
-    { id: 'verification',    label: 'Verification Queue',   Icon: ShieldCheck,   show: true },
+    { id: 'requirements',    label: 'Requirements',          Icon: ClipboardList, show: canManageDocs },
+    { id: 'verification',    label: 'Verification Queue',   Icon: ShieldCheck,   show: canManageDocs },
     { id: 'delete_requests', label: 'Delete Requests',      Icon: Trash2,        show: isRootAdmin, badge: pendingDelReqs.length },
-    { id: 'analytics',       label: 'Analytics',            Icon: BarChart2,     show: true },
+    { id: 'analytics',       label: 'Analytics',            Icon: BarChart2,     show: canManageDocs },
     { id: 'settings',        label: 'Settings',             Icon: Settings,      show: isRootAdmin },
   ].filter(t => t.show);
 

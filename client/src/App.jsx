@@ -1,6 +1,7 @@
 import React, { useState, useEffect, lazy, Suspense } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
+import { canAccessAdminPath } from '@/lib/adminAccess';
 import { ToastProvider } from '@/context/ToastContext';
 import { FeatureFlagProvider, useFeature } from '@/context/FeatureFlagContext';
 import { BranchProvider } from '@/context/BranchContext';
@@ -186,10 +187,32 @@ function defaultPath(user) {
 }
 
 function HRRoute({ children }) {
-  const { token, isAdmin } = useAuth();
+  const { token, isAdmin, isHR, isRootAdmin, isEmployee, hasCustomAccess, customPermissions, adminLanding, permissionsReady } = useAuth();
+  const { pathname } = useLocation();
   if (!token)   return <Navigate to="/login" replace />;
+  // A custom-role employee: open the admin shell only for modules their custom role grants (direct URLs included).
+  // HR Admin / Root Admin skip this entirely — their access is unchanged and enforced by the API.
+  if (isEmployee && !isHR && !isRootAdmin) {
+    if (!permissionsReady && !hasCustomAccess) return <PageSpinner />;
+    if (!hasCustomAccess) return <Navigate to="/portal/home" replace />;
+    if (!canAccessAdminPath(customPermissions, pathname)) return <Navigate to={adminLanding} replace />;
+    return children;
+  }
   if (!isAdmin) return <Navigate to="/portal/home" replace />;
   return children;
+}
+
+// Where a signed-in user lands: Root/HR as before; an employee waits for their permissions so a custom-role
+// user is taken to their admin module instead of being forced into the employee-only portal.
+function HomeRedirect() {
+  const { user, isEmployee, permissionsReady, hasCustomAccess, adminLanding } = useAuth();
+  if (isEmployee && !permissionsReady && !hasCustomAccess) return <PageSpinner />;
+  if (isEmployee && hasCustomAccess) return <Navigate to={adminLanding} replace />;
+  return <Navigate to={defaultPath(user)} replace />;
+}
+
+function PageSpinner() {
+  return <div className="flex items-center justify-center h-screen"><div className="spinner" /></div>;
 }
 
 function RootRoute({ children }) {
@@ -212,8 +235,8 @@ function AppRoutes() {
 
   return (
     <Routes>
-      <Route path="/" element={token ? <Navigate to={home} replace /> : <LandingPage />} />
-      <Route path="/login"            element={token ? <Navigate to={home} replace /> : <Login />} />
+      <Route path="/" element={token ? <HomeRedirect /> : <LandingPage />} />
+      <Route path="/login"            element={token ? <HomeRedirect /> : <Login />} />
       <Route path="/register"         element={token ? <Navigate to={home} replace /> : <Register />} />
       <Route path="/forgot-password"  element={<ForgotPassword />} />
       <Route path="/reset-password"   element={<ResetPassword />} />

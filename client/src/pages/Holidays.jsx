@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { BRANCH_KEYED } from '@/lib/queryScopes';
+import { useAuth } from '@/context/AuthContext';
 import { Plus, Pencil, Trash2, CalendarDays, Globe, Star, PartyPopper, ChevronLeft, ChevronRight, Copy, LayoutGrid, List, History } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
@@ -148,6 +149,8 @@ function HolidayModal({ open, onClose, holiday }) {
 }
 
 export default function HolidaysPage() {
+  const { adminCan } = useAuth();
+  const canManageHolidays = adminCan('holidays', 'manage');
   const toast = useToast();
   const qc    = useQueryClient();
   const now   = new Date();
@@ -235,10 +238,12 @@ export default function HolidaysPage() {
             </button>
           </div>
           {/* EHN_Holidays_002: Copy from previous year */}
+          {canManageHolidays && <>
           <button className="btn btn-outline" onClick={() => setCopyConfirm(true)} title={`Copy holidays from ${year - 1}`}>
             <Copy size={13} />Copy from {year - 1}
           </button>
           <button className="btn btn-primary" onClick={() => setAddOpen(true)}><Plus size={15} />Add Holiday</button>
+          </>}
         </div>
       </div>
 
@@ -306,8 +311,8 @@ export default function HolidaysPage() {
                           <span className={`badge ${cfg.bg} ${cfg.text} ${cfg.border} flex items-center gap-1 border`}>
                             {cfg.icon}<span className="hidden sm:inline">{cfg.label}</span>
                           </span>
-                          <button className="btn btn-ghost btn-icon text-[#777587] hover:text-[#3525cd]" onClick={() => setEditH(h)}><Pencil size={13} /></button>
-                          <button className="btn btn-ghost btn-icon text-[#777587] hover:text-rose-500" onClick={() => setConfirmDel({ id: h.id, name: h.name })}><Trash2 size={13} /></button>
+                          {canManageHolidays && <button className="btn btn-ghost btn-icon text-[#777587] hover:text-[#3525cd]" onClick={() => setEditH(h)}><Pencil size={13} /></button>}
+                          {canManageHolidays && <button className="btn btn-ghost btn-icon text-[#777587] hover:text-rose-500" onClick={() => setConfirmDel({ id: h.id, name: h.name })}><Trash2 size={13} /></button>}
                         </div>
                       </div>
                     );
