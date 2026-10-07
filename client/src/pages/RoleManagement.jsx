@@ -258,15 +258,23 @@ export default function RoleManagement() {
           <Lock size={13} className="text-[#777587]" />
           <h2 className="text-xs font-black uppercase tracking-widest text-[#777587]">System Roles</h2>
         </div>
-        <p className="text-xs text-[#777587] mb-3">System roles are predefined and cannot be customized.</p>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        <p className="text-xs text-[#777587] mb-3">Root Admin, HR Admin and Employee are fixed. Manager and Department Head are applied automatically from reporting lines and department heads — you can edit what they may access.</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
           {systemRoles.map(role => (
             <div key={role.id} className="bg-white border border-[#e7eefe] rounded-xl p-4 flex flex-col gap-2">
               <div className="flex items-center gap-2">
                 <span className="font-bold text-sm text-[#151c27] truncate">{role.name}</span>
                 <Badge system />
               </div>
-              <p className="text-xs text-[#777587]">{plural(role.member_count || 0, 'user')}</p>
+              {role.slug === 'manager' || role.slug === 'dept_head' ? (
+                <>
+                  <p className="text-xs text-[#777587]">Automatic · {role.slug === 'manager' ? 'reporting managers' : 'department heads'}</p>
+                  <button onClick={() => manage(role)}
+                    className="px-3 py-1.5 rounded-lg border border-[#c7c4d8] text-xs font-bold text-[#3525cd] hover:bg-[#f0f3ff] self-start">Manage permissions</button>
+                </>
+              ) : (
+                <p className="text-xs text-[#777587]">{plural(role.member_count || 0, 'user')}</p>
+              )}
               <button onClick={() => setCreateFor({ template: role })}
                 className="mt-auto inline-flex items-center gap-1.5 text-xs font-bold text-[#3525cd] hover:underline self-start">
                 <Copy size={12} /> Create custom role

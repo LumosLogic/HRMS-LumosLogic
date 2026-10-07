@@ -110,6 +110,7 @@ router.put('/:id', auth, hasPermission('departments', 'edit'), async (req, res) 
       try {
         const { rows } = await pool.query('SELECT user_id FROM user_departments WHERE department_id = $1 AND organization_id = $2', [req.params.id, oId]);
         await require('../../services/leaveWorkflowEngine').reresolvePendingApprovers(oId, rows.map(r => r.user_id));
+        require('../../services/teamScope').clearTeamScopeCache(oId);
         if (patch.head_user_id) require('../../services/permissionService').clearUserCache(String(patch.head_user_id), oId);
         if (oldDept?.head_user_id) require('../../services/permissionService').clearUserCache(String(oldDept.head_user_id), oId);
       } catch (e) { console.error('[departments] head change propagation:', e.message); }

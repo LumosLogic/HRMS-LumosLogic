@@ -65,8 +65,25 @@ export function AuthProvider({ children }) {
   // false until /permissions/me has answered for the current token (decides where an employee lands)
   const [permissionsReady, setPermissionsReady] = useState(false);
 
-  // Fetch the user's effective RBAC permissions whenever the token changes.
+  // Fetch the user's effective RBAC permissions whenever the token changes, and keep them live afterwards.
   // Results are stored in localStorage so they survive page refreshes.
+  const loadPermissions = useCallback((tok, { silent = false } = {}) => {
+    if (!silent) setPermissionsReady(false);
+    return fetch('/api/permissions/me', { headers: { Authorization: `Bearer ${tok}` } })
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => {
+        if (!Array.isArray(data?.permissions)) return;
+        const custom = Array.isArray(data.custom_permissions) ? data.custom_permissions : [];
+        // Only touch state when something actually changed, so a silent refresh never re-renders the app.
+        setPermissions(prev => (JSON.stringify(prev) === JSON.stringify(data.permissions) ? prev : data.permissions));
+        setCustomPermissions(prev => (JSON.stringify(prev) === JSON.stringify(custom) ? prev : custom));
+        localStorage.setItem('lt_permissions', JSON.stringify(data.permissions));
+        localStorage.setItem('lt_custom_permissions', JSON.stringify(custom));
+      })
+      .catch(() => {})
+      .finally(() => setPermissionsReady(true));
+  }, []);
+
   useEffect(() => {
     if (!token) {
       setPermissions([]);
@@ -76,23 +93,20 @@ export function AuthProvider({ children }) {
       localStorage.removeItem('lt_custom_permissions');
       return;
     }
-    setPermissionsReady(false);
-    fetch('/api/permissions/me', {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(r => (r.ok ? r.json() : null))
-      .then(data => {
-        if (Array.isArray(data?.permissions)) {
-          setPermissions(data.permissions);
-          localStorage.setItem('lt_permissions', JSON.stringify(data.permissions));
-          const custom = Array.isArray(data.custom_permissions) ? data.custom_permissions : [];
-          setCustomPermissions(custom);
-          localStorage.setItem('lt_custom_permissions', JSON.stringify(custom));
-        }
-      })
-      .catch(() => {})
-      .finally(() => setPermissionsReady(true));
-  }, [token]);
+    loadPermissions(token);
+  }, [token, loadPermissions]);
+
+  // Role / permission changes made by an admin reach the employee without a re-login: re-check when the tab regains
+  // focus and every 60 s while it is visible (one tiny request; state only changes when the permission set differs).
+  useEffect(() => {
+    if (!token) return undefined;
+    const refresh = () => { if (!document.hidden) { loadPermissions(token, { silent: true }); queryClient.invalidateQueries({ queryKey: ['my-team-me'] }); } };
+    const timer = setInterval(refresh, 60 * 1000);
+    document.addEventListener('visibilitychange', refresh);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', refresh); };
+  }, [token, loadPermissions, queryClient]);
+
+  const refreshPermissions = useCallback(() => (token ? loadPermissions(token, { silent: true }) : Promise.resolve()), [token, loadPermissions]);
 
   const saveAuth = useCallback((newToken, newUser) => {
     setToken(newToken);
@@ -176,18 +190,20 @@ export function AuthProvider({ children }) {
   // legacy isAdmin/isRootAdmin flags remain available as a UI fallback.
   //
   // Inference rules (mirrors backend permissionService):
-  //   • Any non-view action on module X implies X.view
+  //   • Any non-view, non-self-scoped action on module X implies X.view
   //     (you cannot act on something you cannot see)
   //   • `manage` implies create, edit and delete for the same module
+  // Self-scoped grants (payroll.view_own, onboarding.complete_task) are portal-only:
+  // they must not imply the module-wide view that opens an admin module.
   const hasPermission = useCallback((module, action) => {
     if (!Array.isArray(permissions) || permissions.length === 0) return false;
 
     // 1. Direct match
     if (permissions.includes(`${module}.${action}`)) return true;
 
-    // 2. Any permission on the module implies 'view'
+    // 2. Any admin-grade permission on the module implies 'view' (self-scoped grants do not)
     if (action === 'view') {
-      return permissions.some(p => p.startsWith(`${module}.`));
+      return permissions.some(p => p.startsWith(`${module}.`) && !['view_own', 'complete_task'].includes(p.slice(module.length + 1)));
     }
 
     // 3. 'manage' implies create / edit / delete
@@ -223,13 +239,13 @@ export function AuthProvider({ children }) {
   const value = useMemo(() => ({
       user, token, saveAuth, logout,
       isAdmin, isHR, isRootAdmin, isEmployee,
-      hasCustomAccess, customPermissions, permissionsReady, adminLanding, adminCan, customCan,
+      hasCustomAccess, customPermissions, permissionsReady, adminLanding, adminCan, customCan, refreshPermissions,
       organization,
       permissions,
       hasPermission,
       can: hasPermission,
     }), [user, token, saveAuth, logout, isAdmin, isHR, isRootAdmin, isEmployee, hasCustomAccess, customPermissions,
-    permissionsReady, adminLanding, adminCan, customCan, organization?.id, permissions, hasPermission]);
+    permissionsReady, adminLanding, adminCan, customCan, refreshPermissions, organization?.id, permissions, hasPermission]);
 
   return (
     <AuthContext.Provider value={value}>

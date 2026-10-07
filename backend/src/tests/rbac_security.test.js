@@ -1000,8 +1000,14 @@ function announcementOrgScope(userRole, userOrgId) {
   await run('RBAC UI — system roles protected, custom roles safe to manage', [
     ['System role permissions cannot be edited (PUT /:id/permissions)', () => {
       const src = require('fs').readFileSync(require('path').join(__dirname, '../modules/roles/roles.routes.js'), 'utf8');
-      assert.ok(/if \(role\.is_system_role\) \{\s*return res\.status\(400\)[^;]*cannot be edited/.test(src),
+      assert.ok(/if \(role\.is_system_role && !isTeamRole\) \{\s*return res\.status\(400\)[^;]*cannot be edited/.test(src),
         'permission PUT must reject system roles');
+    }],
+    ['Only Manager / Department Head system roles are editable, and only by Root Admin', () => {
+      const src = require('fs').readFileSync(require('path').join(__dirname, '../modules/roles/roles.routes.js'), 'utf8');
+      assert.ok(/TEAM_EDITABLE_SLUGS = \['manager', 'dept_head'\]/.test(src), 'editable set must be exactly manager + dept_head');
+      assert.ok(/isTeamRole && req\.user\.role !== 'root_admin'\) \{\s*return res\.status\(403\)/.test(src), 'team roles are Root-only');
+      assert.ok(/applied automatically/.test(src), 'derived roles cannot be assigned by hand');
     }],
     ['A role that is still assigned cannot be deleted', () => {
       const src = require('fs').readFileSync(require('path').join(__dirname, '../modules/roles/roles.routes.js'), 'utf8');

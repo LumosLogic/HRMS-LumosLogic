@@ -362,7 +362,7 @@ export default function PayrollGeneration() {
             </div>
             <p className="text-sm text-[#464555] mb-5">
               Regenerating will overwrite all payslips for <strong>{MONTHS[month - 1]} {year}</strong>
-              {selectedBranch ? <> — <strong>{selectedBranch.name}</strong> branch only</> : <> (All Branches)</>}.
+              {branchesEnabled && (selectedBranch ? <> — <strong>{selectedBranch.name}</strong> branch only</> : <> (All Branches)</>)}.
               Existing figures for this period will be replaced. Locked, paid and approved runs cannot be regenerated.
             </p>
             <div className="flex justify-end gap-3">

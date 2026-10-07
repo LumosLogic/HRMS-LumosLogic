@@ -90,7 +90,8 @@ export function AssignRoleModal({ user, onClose, onSaved }) {
   }
 
   const isLoading = rolesLoading || userRolesLoading;
-  const systemRoles = allRoles.filter(r => r.is_system_role);
+  // Manager / Department Head are derived from reporting lines / department heads — never assigned by hand.
+  const systemRoles = allRoles.filter(r => r.is_system_role && r.slug !== 'manager' && r.slug !== 'dept_head');
   const customRoles = allRoles.filter(r => !r.is_system_role);
 
   return (

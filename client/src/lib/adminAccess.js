@@ -43,11 +43,17 @@ export const ADMIN_PATH_PERMISSIONS = [
   ['/roles',            []],
 ];
 
-/** Same inference rules as the backend: any action on a module implies view; manage implies create/edit/delete. */
+/**
+ * Same inference rules as the backend (permissionService.hasPermissionCheck): any admin-grade action on a
+ * module implies view; manage implies create/edit/delete. Self-scoped grants (own payslips, completing own
+ * onboarding tasks) are portal-only — they never imply the module-wide view that opens an admin module.
+ */
+const SELF_SCOPED_ACTIONS = new Set(['view_own', 'complete_task']);
+
 export function permissionMatches(granted, perm) {
   if (granted.includes(perm)) return true;
   const [module, action] = perm.split('.');
-  if (action === 'view') return granted.some(p => p.startsWith(`${module}.`));
+  if (action === 'view') return granted.some(p => p.startsWith(`${module}.`) && !SELF_SCOPED_ACTIONS.has(p.slice(module.length + 1)));
   if (['create', 'edit', 'delete'].includes(action)) return granted.includes(`${module}.manage`);
   return false;
 }

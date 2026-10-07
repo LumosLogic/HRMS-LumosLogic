@@ -89,9 +89,12 @@ function validateAll(form) {
   return errs;
 }
 
+const BACK_BTN = 'px-5 py-3.5 border-2 border-[#e7eefe] text-[#464555] font-bold text-base rounded-xl hover:border-[#3525cd]/40 transition-all';
+const NEXT_BTN = 'py-3.5 bg-[#3525cd] text-white font-bold text-base rounded-xl hover:bg-[#4f46e5] transition-all shadow-lg shadow-[#3525cd]/20 active:scale-[0.98] flex items-center justify-center gap-2';
+
 export default function Register() {
   const [step, setStep] = useState(1); // 1 = form, 2 = success
-  const [formStep, setFormStep] = useState(1); // 1 = basic details, 2 = organization details
+  const [formStep, setFormStep] = useState(1); // 1 basic · 2 organization · 3 branches & message · 4 review
 
   const [form, setForm] = useState({
     company_name:          '',
@@ -160,26 +163,36 @@ export default function Register() {
     setFieldErrors(fe => { const n = { ...fe }; delete n[k]; return n; });
   };
 
-  const STEP1_FIELDS = ['company_name', 'name', 'email', 'phone'];
+  const STEPS = ['Basic details', 'Organization', 'Branches', 'Review'];
+  // Fields that belong to each step — the SAME validators as before, just applied per step.
+  const STEP_FIELDS = { 1: ['company_name', 'name', 'email', 'phone'], 2: [], 3: ['has_multiple_branches'] };
+
+  function validateStep(n) {
+    const errs = validateAll(form);
+    const own = {};
+    (STEP_FIELDS[n] || []).forEach(k => { if (errs[k]) own[k] = errs[k]; });
+    return own;
+  }
 
   function handleNext() {
     setError('');
-    const errs = validateAll(form);
-    const step1Errs = {};
-    STEP1_FIELDS.forEach(k => { if (errs[k]) step1Errs[k] = errs[k]; });
-    if (Object.keys(step1Errs).length) { setFieldErrors(step1Errs); return; }
+    const own = validateStep(formStep);
+    if (Object.keys(own).length) { setFieldErrors(own); return; }
     setFieldErrors({});
-    setFormStep(2);
+    setFormStep(n => Math.min(4, n + 1));
   }
+
+  function handleBack() { setError(''); setFieldErrors({}); setFormStep(n => Math.max(1, n - 1)); }
 
   async function handleSubmit(e) {
     e.preventDefault();
-    if (formStep === 1) { handleNext(); return; }
+    if (formStep < 4) { handleNext(); return; }
     setError('');
     const errs = validateAll(form);
     if (Object.keys(errs).length) {
       setFieldErrors(errs);
-      if (STEP1_FIELDS.some(k => errs[k])) setFormStep(1);
+      const firstBad = [1, 2, 3].find(n => (STEP_FIELDS[n] || []).some(k => errs[k]));
+      if (firstBad) setFormStep(firstBad);
       return;
     }
     setFieldErrors({});
@@ -296,19 +309,22 @@ export default function Register() {
           </div>
 
           {/* Step indicator */}
-          <div className="flex items-center gap-2 mb-5">
-            {[1, 2].map(n => (
-              <div key={n} className="flex items-center gap-2 flex-1">
-                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0
-                  ${formStep >= n ? 'bg-[#3525cd] text-white' : 'bg-[#e7eefe] text-[#777587]'}`}>
-                  {formStep > n ? <CheckCircle2 size={14} /> : n}
-                </div>
-                <span className={`text-xs font-semibold ${formStep >= n ? 'text-[#151c27]' : 'text-[#777587]'}`}>
-                  {n === 1 ? 'Basic details' : 'Organization'}
-                </span>
-                {n === 1 && <div className={`flex-1 h-0.5 rounded ${formStep > 1 ? 'bg-[#3525cd]' : 'bg-[#e7eefe]'}`} />}
-              </div>
-            ))}
+          <div className="mb-5">
+            <div className="flex items-center gap-1.5">
+              {STEPS.map((label, i) => {
+                const n = i + 1;
+                return (
+                  <React.Fragment key={label}>
+                    <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0
+                      ${formStep >= n ? 'bg-[#3525cd] text-white' : 'bg-[#e7eefe] text-[#777587]'}`}>
+                      {formStep > n ? <CheckCircle2 size={14} /> : n}
+                    </div>
+                    {n < STEPS.length && <div className={`flex-1 h-0.5 rounded ${formStep > n ? 'bg-[#3525cd]' : 'bg-[#e7eefe]'}`} />}
+                  </React.Fragment>
+                );
+              })}
+            </div>
+            <p className="text-xs font-semibold text-[#151c27] mt-2">Step {formStep} of {STEPS.length} · {STEPS[formStep - 1]}</p>
           </div>
 
           <form onSubmit={handleSubmit} className="space-y-3.5">
@@ -443,6 +459,13 @@ export default function Register() {
               <p className="text-[0.7rem] text-[#777587] mt-1">15-character GST Identification Number</p>
             </div>
 
+            <div className="flex gap-3">
+              <button type="button" onClick={handleBack} className={BACK_BTN}>Back</button>
+              <button type="button" onClick={handleNext} className={`flex-1 ${NEXT_BTN}`}>Next <ArrowRight size={16} /></button>
+            </div>
+            </>)}
+
+            {formStep === 3 && (<>
             {/* Message */}
             <div>
               <label className="form-label">Message <span className="text-[#777587] font-normal">(optional)</span></label>
@@ -481,6 +504,35 @@ export default function Register() {
               )}
             </div>
 
+            <div className="flex gap-3">
+              <button type="button" onClick={handleBack} className={BACK_BTN}>Back</button>
+              <button type="button" onClick={handleNext} className={`flex-1 ${NEXT_BTN}`}>Review <ArrowRight size={16} /></button>
+            </div>
+            </>)}
+
+            {formStep === 4 && (<>
+            {/* Review */}
+            <div className="rounded-xl border border-[#e7eefe] bg-[#f9f9ff] divide-y divide-[#e7eefe] text-sm">
+              {[
+                ['Company',        form.company_name, 1],
+                ['Your name',      form.name, 1],
+                ['Work email',     form.email, 1],
+                ['Phone',          form.phone, 1],
+                ['Website',        form.website, 2],
+                ['Company size',   COMPANY_SIZES.find(s => s.value === form.company_size)?.label, 2],
+                ['Industry',       form.industry, 2],
+                ['GST number',     form.gst_number, 2],
+                ['Multiple branches', form.has_multiple_branches === null ? '' : form.has_multiple_branches ? 'Yes' : 'No', 3],
+                ['Message',        form.message, 3],
+              ].map(([label, value, goTo]) => (
+                <div key={label} className="flex items-start gap-3 px-3.5 py-2">
+                  <span className="w-32 flex-shrink-0 text-[0.72rem] font-bold uppercase tracking-wide text-[#777587] pt-0.5">{label}</span>
+                  <span className="flex-1 min-w-0 break-words text-[#151c27]">{value || <span className="text-[#c7c4d8]">—</span>}</span>
+                  <button type="button" onClick={() => { setError(''); setFormStep(goTo); }} className="text-[0.72rem] font-bold text-[#3525cd] hover:underline">Edit</button>
+                </div>
+              ))}
+            </div>
+
             {error && (
               <div className="text-[0.83rem] text-rose-700 bg-rose-50 border border-rose-200 border-l-4 border-l-rose-500 rounded-xl px-4 py-3">
                 {error}
@@ -488,8 +540,7 @@ export default function Register() {
             )}
 
             <div className="flex gap-3">
-              <button type="button" onClick={() => { setError(''); setFormStep(1); }} disabled={loading}
-                className="px-5 py-3.5 border-2 border-[#e7eefe] text-[#464555] font-bold text-base rounded-xl hover:border-[#3525cd]/40 transition-all disabled:opacity-50">
+              <button type="button" onClick={handleBack} disabled={loading} className={`${BACK_BTN} disabled:opacity-50`}>
                 Back
               </button>
               <button type="submit" disabled={loading}

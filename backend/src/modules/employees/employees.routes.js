@@ -610,6 +610,9 @@ router.put('/:id', auth, hasPermission('employees', 'edit'), withBranchContext, 
       });
     }
 
+    // Manager / HOD team scope depends on department + branch.
+    if (deptIdsToApply || branchProvided) require('../../services/teamScope').clearTeamScopeCache(orgId(req));
+
     // Department change ⇒ in-flight leave approvals follow the (new) department head.
     if (deptIdsToApply) {
       try { await require('../../services/leaveWorkflowEngine').reresolvePendingApprovers(orgId(req), [empId]); }

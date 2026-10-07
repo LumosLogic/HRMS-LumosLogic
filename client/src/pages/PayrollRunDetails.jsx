@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useFeature } from '@/context/FeatureFlagContext';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -90,6 +91,7 @@ function ConfirmDialog({ title, message, onOk, onCancel, danger = false }) {
 }
 
 export default function PayrollRunDetails() {
+  const branchesEnabled = useFeature('branches');
   const { id }   = useParams();
   const navigate = useNavigate();
   const toast    = useToast();
@@ -341,10 +343,12 @@ export default function PayrollRunDetails() {
                 <> · Locked by {run.locked_by_name}</>
               )}
             </p>
-            <span className="inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full bg-[#f0f3ff] text-[#3525cd]">
-              <GitBranch size={10} />
-              {run.branch_name || 'All Branches'}
-            </span>
+            {branchesEnabled && (
+              <span className="inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-full bg-[#f0f3ff] text-[#3525cd]">
+                <GitBranch size={10} />
+                {run.branch_name || 'All Branches'}
+              </span>
+            )}
           </div>
         </div>
         <div className="flex flex-wrap gap-2">

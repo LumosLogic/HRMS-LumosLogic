@@ -2074,12 +2074,19 @@ function WorkTab({ empId, isAdmin, emp }) {
 
 // ─── Section: Performance Tab ─────────────────────────────────────────────────
 
-function PerformanceTab({ empId, isAdmin }) {
+function PerformanceTab({ empId, isAdmin, teamView = false }) {
   const toast = useToast();
   const qc    = useQueryClient();
-  const { data: goals   = [], isLoading: gLoad } = useQuery({ queryKey: ['emp-goals',   empId], queryFn: () => apiGet('/performance/goals',   { userId: empId }) });
-  const { data: reviews = [] }                   = useQuery({ queryKey: ['emp-reviews', empId], queryFn: () => apiGet('/performance/reviews', { userId: empId }) });
-  const { data: exits   = [] }                   = useQuery({ queryKey: ['emp-exit',    empId], queryFn: () => apiGet('/exit',                { userId: empId }) });
+  // Manager / HOD view reads through the team-scoped endpoint (the regular endpoints only ever return the caller's own rows).
+  const { data: teamPerf, isLoading: tLoad } = useQuery({
+    queryKey: ['emp-team-perf', empId], queryFn: () => apiGet('/team/performance', { userId: empId }), enabled: teamView, retry: false,
+  });
+  const { data: ownGoals   = [], isLoading: gLoad0 } = useQuery({ queryKey: ['emp-goals',   empId], queryFn: () => apiGet('/performance/goals',   { userId: empId }), enabled: !teamView });
+  const { data: ownReviews = [] }                    = useQuery({ queryKey: ['emp-reviews', empId], queryFn: () => apiGet('/performance/reviews', { userId: empId }), enabled: !teamView });
+  const { data: exits      = [] }                    = useQuery({ queryKey: ['emp-exit',    empId], queryFn: () => apiGet('/exit',                { userId: empId }), enabled: !teamView });
+  const goals   = teamView ? (teamPerf?.goals   || []) : ownGoals;
+  const reviews = teamView ? (teamPerf?.reviews || []) : ownReviews;
+  const gLoad   = teamView ? tLoad : gLoad0;
 
   const [reviewModal, setReviewModal] = useState(false);
   const [rForm, setRForm]             = useState({ review_cycle: '', review_type: 'annual' });
@@ -2616,10 +2623,11 @@ const PROFILE_STATUS_CFG = {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export default function EmployeeProfileV2({ emp, onBack, onEdit }) {
+export default function EmployeeProfileV2({ emp, onBack, onEdit, teamView = false }) {
   const { user } = useAuth();
-  const isAdmin = user.role === 'admin' || user.role === 'root_admin';
-  const isRoot  = user.role === 'root_admin';
+  // teamView = a Manager / HOD looking at a member of their team: read-only, work sections only, team-scoped endpoints.
+  const isAdmin = !teamView && (user.role === 'admin' || user.role === 'root_admin');
+  const isRoot  = !teamView && user.role === 'root_admin';
   const branchingEnabled = useFeature('branches');
 
   const now = new Date();
@@ -2643,14 +2651,20 @@ export default function EmployeeProfileV2({ emp, onBack, onEdit }) {
   const today    = now.toISOString().split('T')[0];
 
   const { data: curAttendance = [] } = useQuery({
-    queryKey: ['emp-att-cur', emp.id, curYear, curMonth],
-    queryFn: () => apiGet('/attendance', { year: curYear, month: curMonth, userId: emp.id }),
+    queryKey: ['emp-att-cur', emp.id, curYear, curMonth, teamView],
+    queryFn: () => (teamView
+      ? apiGet('/team/attendance', { userId: emp.id, from: `${curYear}-${String(curMonth).padStart(2, '0')}-01`, to: today })
+      : apiGet('/attendance', { year: curYear, month: curMonth, userId: emp.id })),
     staleTime: 60000,
+    retry: teamView ? false : undefined,
   });
   const { data: curLeaves = [] } = useQuery({
-    queryKey: ['emp-leaves-cur', emp.id, curYear, curMonth],
-    queryFn: () => apiGet('/leaves', { userId: emp.id, year: curYear, month: curMonth }),
+    queryKey: ['emp-leaves-cur', emp.id, curYear, curMonth, teamView],
+    queryFn: () => (teamView
+      ? apiGet('/team/leaves', { userId: emp.id, from: `${curYear}-${String(curMonth).padStart(2, '0')}-01`, to: today })
+      : apiGet('/leaves', { userId: emp.id, year: curYear, month: curMonth })),
     staleTime: 60000,
+    retry: teamView ? false : undefined,
   });
   const { data: overview = {} } = useQuery({
     queryKey: ['epv2-overview', emp.id],
@@ -2695,7 +2709,8 @@ export default function EmployeeProfileV2({ emp, onBack, onEdit }) {
   const statusKey = emp.employee_status || 'active';
   const statusCfg = PROFILE_STATUS_CFG[statusKey] || PROFILE_STATUS_CFG.active;
 
-  const TABS = TABS_ALL.filter(t => (!t.adminOnly || isAdmin) && (!t.rootOnly || isRoot));
+  const TEAM_TABS = ['overview', 'professional', 'performance'];
+  const TABS = TABS_ALL.filter(t => (teamView ? TEAM_TABS.includes(t.id) : (!t.adminOnly || isAdmin) && (!t.rootOnly || isRoot)));
 
   // Denominator: working days elapsed this month. Exclude today if no attendance record
   // exists yet for today (day still in progress — don't penalise for an unrecorded current day).
@@ -2731,7 +2746,7 @@ export default function EmployeeProfileV2({ emp, onBack, onEdit }) {
       {/* ── Action Bar ── */}
       <div className="bg-white rounded-2xl border border-[#c7c4d8] shadow-sm px-4 py-3 flex items-center gap-2 flex-wrap">
         <button onClick={onBack} className="flex items-center gap-1.5 text-sm font-semibold text-[#464555] hover:text-[#3525cd] transition-colors">
-          <ArrowLeft size={16} /> Back to Employees
+          <ArrowLeft size={16} /> {teamView ? 'Back to My Team' : 'Back to Employees'}
         </button>
         <div className="flex-1" />
         {isAdmin && (
@@ -2742,10 +2757,12 @@ export default function EmployeeProfileV2({ emp, onBack, onEdit }) {
             </button>
           </>
         )}
+        {!teamView && (
         <button onClick={() => setCurrentTab('work')}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#c7c4d8] bg-white text-xs font-bold text-[#464555] hover:bg-emerald-50 hover:text-emerald-700 transition-all">
           <UserCheck size={12} /> Attendance
         </button>
+        )}
         <button onClick={() => setCurrentTab('performance')}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#c7c4d8] bg-white text-xs font-bold text-[#464555] hover:bg-[#f0f3ff] hover:text-[#3525cd] transition-all">
           <BarChart3 size={12} /> Performance
@@ -2939,7 +2956,7 @@ export default function EmployeeProfileV2({ emp, onBack, onEdit }) {
             {currentTab === 'compliance'   && <ComplianceTab               empId={emp.id} isAdmin={isAdmin} onEdit={onEdit} emp={emp} />}
             {currentTab === 'work'         && <WorkTab                     empId={emp.id} isAdmin={isAdmin} emp={emp} />}
             {currentTab === 'documents'    && <DocumentRequirementsSection empId={emp.id} isAdmin={isAdmin} />}
-            {currentTab === 'performance'  && <PerformanceTab              empId={emp.id} isAdmin={isAdmin} />}
+            {currentTab === 'performance'  && <PerformanceTab              empId={emp.id} isAdmin={isAdmin} teamView={teamView} />}
             {currentTab === 'system'       && <SystemTab                   emp={emp} onEdit={onEdit} />}
           </div>
         </div>

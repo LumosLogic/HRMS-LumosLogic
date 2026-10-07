@@ -64,11 +64,12 @@ const META = {
   '/portal/announcements':    { title: 'Announcements',       subtitle: 'Company updates and news' },
   '/portal/notifications':    { title: 'Notifications',       subtitle: 'Your activity notifications' },
   '/portal/profile':          { title: 'My Profile',          subtitle: 'Manage your account' },
+  '/portal/team':             { title: 'My Team',             subtitle: 'Attendance, leaves and performance of your team' },
 };
 
 export function usePageMeta() {
   const { pathname } = useLocation();
-  const meta = META[pathname] || { title: 'HRMS', subtitle: '' };
+  const meta = META[pathname] || (pathname.startsWith('/portal/team/') ? META['/portal/team'] : null) || { title: 'HRMS', subtitle: '' };
   useEffect(() => {
     document.title = meta.title ? `LeaveTrackr | ${meta.title}` : 'LeaveTrackr';
   }, [meta.title]);

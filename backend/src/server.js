@@ -205,6 +205,7 @@ app.use('/api/onboarding',     onboardingRouter);
 app.use('/api/offboarding',    offboardingRouter);
 app.use('/api/exit',           exitRouter);
 app.use('/api/branches',       branchesRouter);
+app.use('/api/team',           require('./modules/team/team.routes')); // Manager / HOD read-only team scope
 app.use('/api/config-groups',   require('./modules/config-groups/configGroups.routes'));
 app.use('/api/biometric',      biometricRouter);
 

@@ -1186,6 +1186,7 @@ function RequirementAssignModal({ requirement, employees, onClose, onSaved }) {
   const toast = useToast();
   const qc = useQueryClient();
   const { selectedBranchId } = useBranch();
+  const branchesEnabled = useFeature('branches');
 
   // Derive initial mode from existing requirement data
   const hasBranches = requirement.assigned_branch_ids?.length > 0;
@@ -1265,7 +1266,7 @@ function RequirementAssignModal({ requirement, employees, onClose, onSaved }) {
                 { v: 'all',      label: 'All Employees',      desc: 'Visible to everyone in the organization', Icon: Globe },
                 { v: 'specific', label: 'Specific Employees', desc: 'Only visible to selected employees',      Icon: Users },
                 { v: 'branch',   label: 'By Branch',          desc: 'Only visible to employees in selected branches', Icon: Building2 },
-              ].map(opt => (
+              ].filter(opt => opt.v !== 'branch' || branchesEnabled || mode === 'branch').map(opt => (
                 <label key={opt.v} className={`flex items-start gap-2.5 p-3 rounded-xl border cursor-pointer transition-all ${mode === opt.v ? 'border-[#3525cd] bg-[#f0f3ff]' : 'border-[#e7eefe] hover:border-[#c7c4d8]'}`}>
                   <input type="radio" name="assign-mode" value={opt.v} checked={mode === opt.v} onChange={() => setMode(opt.v)} className="mt-0.5 text-[#3525cd]" />
                   <div>

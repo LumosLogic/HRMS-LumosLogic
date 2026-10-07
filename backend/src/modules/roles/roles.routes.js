@@ -197,7 +197,7 @@ router.put('/user/:userId', auth, hasPermission('roles', 'manage'), withBranchCo
     if (validationError) return res.status(400).json({ error: validationError });
 
     // Cast to integers
-    const safeRoleIds = role_ids.map(id => parseInt(id, 10));
+    let safeRoleIds = role_ids.map(id => parseInt(id, 10));
 
     // Ensure the target user exists in this org
     const { data: targetUser } = await db
@@ -227,6 +227,16 @@ router.put('/user/:userId', auth, hasPermission('roles', 'manage'), withBranchCo
       if (!orgRolesErr && orgRoles !== null && orgRoles.length !== safeRoleIds.length) {
         return res.status(400).json({ error: 'One or more roles do not belong to this organization' });
       }
+    }
+
+    // Manager / Department Head are derived (reporting lines / department heads) — never stored per user, so they are
+    // dropped from the submitted set instead of failing a form that still lists a legacy row.
+    if (safeRoleIds.length > 0) {
+      const { rows: derived } = await pool.query(
+        `SELECT id FROM roles WHERE id = ANY($1::bigint[]) AND org_id = $2 AND is_system_role = true AND slug IN ('manager','dept_head')`,
+        [safeRoleIds, oId]);
+      const drop = new Set(derived.map(r => Number(r.id)));
+      if (drop.size) safeRoleIds = safeRoleIds.filter(id => !drop.has(Number(id)));
     }
 
     // Branch-scoped roles can only go to employees of that branch.
@@ -678,8 +688,15 @@ router.put('/:id/permissions', auth, hasPermission('roles', 'manage'), withBranc
 
     // System roles (HR Admin, Department Head, Employee) are predefined and protected.
     // To vary their access, create a custom role from them instead.
-    if (role.is_system_role) {
+    // Manager and Department Head are the only editable system roles (Root Admin only): their members are derived
+    // from reporting lines / department heads, and Root Admin tunes what that team access includes.
+    const TEAM_EDITABLE_SLUGS = ['manager', 'dept_head'];
+    const isTeamRole = role.is_system_role && TEAM_EDITABLE_SLUGS.includes(role.slug);
+    if (role.is_system_role && !isTeamRole) {
       return res.status(400).json({ error: 'System role permissions are predefined and cannot be edited. Create a custom role from it instead.' });
+    }
+    if (isTeamRole && req.user.role !== 'root_admin') {
+      return res.status(403).json({ error: 'Only a Root Admin can change the Manager / Department Head permissions.' });
     }
 
     const client = await pool.connect();
@@ -827,6 +844,11 @@ router.post('/:id/members', auth, hasPermission('roles', 'manage'), withBranchCo
 
     if (!user) return res.status(404).json({ error: 'User not found in this organization' });
 
+    // Manager / Department Head are derived from reporting lines and department heads, never assigned by hand.
+    if (role.is_system_role && (role.slug === 'manager' || role.slug === 'dept_head')) {
+      return res.status(400).json({ error: `The ${role.name} role is applied automatically — set the employee's reporting manager or the department head instead.` });
+    }
+
     // DEEP-005: only a Root Admin may grant the Root Admin system role
     if (req.user.role !== 'root_admin' && role.slug === 'root_admin' && role.is_system_role) {
       return res.status(403).json({ error: 'Only a Root Admin can assign the Root Admin role.' });
@@ -885,8 +907,12 @@ router.post('/:id/members', auth, hasPermission('roles', 'manage'), withBranchCo
     }
 
     clearUserCache(userId, oId);
-    const { markRoleChanged } = require('../../middleware/auth');
-    markRoleChanged(userId); // force re-login so the JWT picks up the new role
+    // Only a SYSTEM role rewrites users.role (carried in the JWT). A custom role is resolved per request, so the member
+    // gets the new permissions on the next permission refresh — no forced re-login.
+    if (role.is_system_role) {
+      const { markRoleChanged } = require('../../middleware/auth');
+      markRoleChanged(userId);
+    }
     res.json({ user_id: userId, role_id: roleId, org_id: oId, assigned_by: req.user.id });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -934,8 +960,10 @@ router.delete('/:id/members/:userId', auth, hasPermission('roles', 'manage'), as
     }
 
     clearUserCache(userId, oId);
-    const { markRoleChanged } = require('../../middleware/auth');
-    markRoleChanged(userId);
+    if (role?.is_system_role) {
+      const { markRoleChanged } = require('../../middleware/auth');
+      markRoleChanged(userId);
+    }
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err.message });

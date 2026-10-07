@@ -54,6 +54,8 @@ export const BRANCH_INDEPENDENT_QUERY_KEYS = new Set([
   'me', 'auth-me', 'login-history', 'emergency-contacts', 'el-usage', 'onboarding-me',
   'culture', 'new-joiners', 'team-dashboard', 'team-leaves-today', 'dept-pending-leaves',
   'doc-activity', 'doc-requirements-my', 'user-roles',
+  'bgv-my-status',        // my own BGV request status (/bgv/my-status)
+  'bgv-review',           // one employee's BGV review data (/bgv/employees/:id/review)
 ]);
 // emp-<id>… (one employee, admin view), epv2-<id>… (employee profile v2), profile-… / my-… (self-service),
 // drawer-… (employee drawer), goal-… (one goal), att-day (one employee/day — keyed by user + date)

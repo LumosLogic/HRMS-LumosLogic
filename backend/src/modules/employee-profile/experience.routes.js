@@ -8,7 +8,7 @@ const { orgId }                 = require('../../utils/helpers');
 router.get('/:id/experience', auth, async (req, res) => {
   try {
     const empId = parseInt(req.params.id);
-    if (!isAdminRole(req.user.role) && parseInt(req.user.id) !== empId)
+    if (!isAdminRole(req.user.role) && parseInt(req.user.id) !== empId && !req.teamViewer)
       return res.status(403).json({ error: 'Access denied' });
 
     const { data, error } = await db.from('employee_experiences')

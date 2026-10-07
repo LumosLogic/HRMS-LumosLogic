@@ -12,7 +12,7 @@ router.get('/:id/overview', auth, async (req, res) => {
     const oId   = orgId(req);
     const isSelf = parseInt(req.user.id) === empId;
 
-    if (!isAdminRole(req.user.role) && !isSelf)
+    if (!isAdminRole(req.user.role) && !isSelf && !req.teamViewer)
       return res.status(403).json({ error: 'Access denied' });
 
     // Core user row

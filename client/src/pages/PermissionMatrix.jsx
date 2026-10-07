@@ -162,7 +162,10 @@ export default function PermissionMatrix() {
     );
   }
 
-  const isSystem = !!role.is_system_role;
+  // Manager and Department Head are the only system roles whose permissions Root Admin can edit (membership is derived).
+  const isTeamRole = !!role.is_system_role && (role.slug === 'manager' || role.slug === 'dept_head');
+  const isSystem = !!role.is_system_role && !isTeamRole; // locked system role
+  const isSystemBadge = !!role.is_system_role;
   const total    = flattenCatalog(catalog).length;
 
   return (
@@ -171,15 +174,15 @@ export default function PermissionMatrix() {
       <div className="flex items-start justify-between gap-3 mb-5">
         <div className="flex items-center gap-2.5 min-w-0">
           <div className="w-9 h-9 rounded-xl bg-[#3525cd]/10 flex items-center justify-center flex-shrink-0">
-            {isSystem ? <Lock size={17} className="text-[#3525cd]" /> : <Shield size={17} className="text-[#3525cd]" />}
+            {isSystemBadge ? <Lock size={17} className="text-[#3525cd]" /> : <Shield size={17} className="text-[#3525cd]" />}
           </div>
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="text-xl font-black text-[#151c27] truncate">{role.name}</h1>
-              <span className={cn('text-[0.6rem] font-black tracking-wider px-1.5 py-0.5 rounded-full', isSystem ? 'bg-purple-50 text-purple-600' : 'bg-[#f0f3ff] text-[#3525cd]')}>
-                {isSystem ? 'SYSTEM' : 'CUSTOM'}
+              <span className={cn('text-[0.6rem] font-black tracking-wider px-1.5 py-0.5 rounded-full', isSystemBadge ? 'bg-purple-50 text-purple-600' : 'bg-[#f0f3ff] text-[#3525cd]')}>
+                {isSystemBadge ? 'SYSTEM' : 'CUSTOM'}
               </span>
-              {!isSystem && (
+              {!isSystemBadge && (
                 <button onClick={() => setShowEditRole(true)} title="Edit role name and description"
                   className="w-7 h-7 rounded-lg hover:bg-[#f0f3ff] flex items-center justify-center"><Pencil size={13} className="text-[#777587]" /></button>
               )}
@@ -198,6 +201,15 @@ export default function PermissionMatrix() {
           <Lock size={15} className="text-amber-500 flex-shrink-0" />
           <p className="text-xs text-amber-700 font-semibold">
             System roles are predefined and cannot be customized. To vary this access, create a custom role from it on the Role Management page.
+          </p>
+        </div>
+      )}
+
+      {isTeamRole && (
+        <div className="bg-[#f0f3ff] border border-[#c7c4d8] rounded-xl px-4 py-3 mb-5 flex items-center gap-3">
+          <Users size={15} className="text-[#3525cd] flex-shrink-0" />
+          <p className="text-xs text-[#464555] font-semibold">
+            This role is applied automatically — {role.slug === 'manager' ? 'to anyone who is the reporting manager of at least one employee' : 'to anyone set as a department head'}. Changes here take effect for them immediately (sidebar, pages and API access).
           </p>
         </div>
       )}
@@ -237,7 +249,7 @@ export default function PermissionMatrix() {
         </div>
       )}
 
-      {showEditRole && !isSystem && <EditRoleModal role={role} onClose={() => setShowEditRole(false)} onSaved={() => showToast('Role updated')} />}
+      {showEditRole && !isSystemBadge && <EditRoleModal role={role} onClose={() => setShowEditRole(false)} onSaved={() => showToast('Role updated')} />}
     </div>
   );
 }

@@ -57,6 +57,7 @@ export const MODULE_LABELS = {
   performance:   'Performance',
   exit:          'Exit Management',
   roles:         'Role Management',
+  team:          'My Team (Manager / HOD)',
   notifications: 'Notifications',
 };
 const MODULE_ORDER = Object.keys(MODULE_LABELS);

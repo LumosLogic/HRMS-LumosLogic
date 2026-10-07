@@ -12,7 +12,7 @@ router.get('/:id/professional', auth, async (req, res) => {
   try {
     const empId  = parseInt(req.params.id);
     const isSelf = parseInt(req.user.id) === empId;
-    if (!isAdminRole(req.user.role) && !isSelf)
+    if (!isAdminRole(req.user.role) && !isSelf && !req.teamViewer)
       return res.status(403).json({ error: 'Access denied' });
 
     const { data, error } = await db.from('users').select(`
@@ -44,6 +44,9 @@ router.get('/:id/professional', auth, async (req, res) => {
         .select('departments(id, name)')
         .eq('user_id', empId),
     ]);
+
+    // A manager / HOD (req.teamViewer) never receives compensation fields.
+    if (req.teamViewer) for (const k of ['salary_on', 'salary_structure', 'ctc', 'salary_effective_date']) delete data[k];
 
     res.json({
       ...data,
@@ -154,6 +157,11 @@ router.put('/:id/professional', auth, hasPermission('employees', 'edit'), async 
 
     // In-flight leave approvals follow a manager / department change (approver id is stored at submission).
     const managerChanged = Object.hasOwn(update, 'reporting_to') && String(update.reporting_to ?? '') !== String(cur.reporting_to ?? '');
+    if (managerChanged || deptIds || Object.hasOwn(update, 'department_id') || Object.hasOwn(update, 'branch_id')) {
+      // Manager / HOD team scope + the derived Manager permissions follow reporting-line, department and branch changes.
+      require('../../services/teamScope').clearTeamScopeCache(oId);
+      if (managerChanged) require('../../services/permissionService').clearOrgCache(oId);
+    }
     if (managerChanged || deptIds) {
       try { await require('../../services/leaveWorkflowEngine').reresolvePendingApprovers(oId, [empId]); }
       catch (e) { console.error('[professional] reresolvePendingApprovers:', e.message); }

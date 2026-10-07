@@ -120,7 +120,21 @@ async function resolvePermissions(userId, orgId) {
        JOIN role_permissions rp ON rp.role_id = r.id
        JOIN permissions p       ON p.id       = rp.permission_id
        WHERE d.head_user_id    = $1
-         AND d.organization_id = $2`,
+         AND d.organization_id = $2
+
+       UNION
+
+       -- Manager system role permissions for anyone who has at least one direct report
+       -- (users.reporting_to = me) — derived, never assigned by hand, so it follows reporting changes immediately.
+       SELECT DISTINCT p.module_key || '.' || p.action AS permission
+       FROM roles r
+       JOIN role_permissions rp ON rp.role_id = r.id
+       JOIN permissions p       ON p.id       = rp.permission_id
+       WHERE r.org_id         = $2
+         AND r.is_system_role = true
+         AND r.slug           = 'manager'
+         AND EXISTS (SELECT 1 FROM users rep
+                      WHERE rep.reporting_to = $1 AND rep.organization_id = $2 AND rep.id <> $1)`,
       [userId, orgId]
     );
 
@@ -172,11 +186,20 @@ async function resolveCustomPermissions(userId, orgId) {
 // ─── Pure permission check ─────────────────────────────────────────────────────
 
 /**
+ * Actions that are scoped to the granted user's OWN data (own payslips, completing own
+ * onboarding tasks). They unlock portal features only — holding one must not imply the
+ * module-wide `view` that opens an admin module / elevates admin APIs (BUG_172, tuned:
+ * a `complete_task`-only custom role must not read the org-wide onboarding overview).
+ * Mirrored in client/src/lib/adminAccess.js and client/src/context/AuthContext.jsx.
+ */
+const SELF_SCOPED_ACTIONS = new Set(['view_own', 'complete_task']);
+
+/**
  * Checks if a permission array includes module.action.
  * Pure function — no DB, no cache.
  *
  * Inference rules (BUG_172):
- *   • Any non-view action on module X implies X.view
+ *   • Any non-view, non-self-scoped action on module X implies X.view
  *   • `manage` implies create, edit and delete for the same module
  */
 function hasPermissionCheck(permissions, module, action) {
@@ -185,9 +208,9 @@ function hasPermissionCheck(permissions, module, action) {
   // 1. Direct match
   if (permissions.includes(`${module}.${action}`)) return true;
 
-  // 2. Any permission on the module implies 'view'
+  // 2. Any admin-grade permission on the module implies 'view' (self-scoped grants do not)
   if (action === 'view') {
-    return permissions.some(p => p.startsWith(`${module}.`));
+    return permissions.some(p => p.startsWith(`${module}.`) && !SELF_SCOPED_ACTIONS.has(p.slice(module.length + 1)));
   }
 
   // 3. 'manage' implies create / edit / delete
@@ -235,13 +258,14 @@ function clearOrgCache(orgId) {
 async function seedSystemRolesForOrg(orgId, rootUserId, client) {
   const db = client || pool;
 
-  // Insert the 4 system roles
+  // Insert the 5 system roles
   const rolesRes = await db.query(
     `INSERT INTO roles (org_id, name, slug, description, is_system_role)
      VALUES
        ($1, 'Root Admin',       'root_admin', 'Full system access.',              true),
        ($1, 'HR Admin',         'hr_admin',   'HR management access.',            true),
        ($1, 'Department Head',  'dept_head',  'Department-level team access.',     true),
+       ($1, 'Manager',          'manager',    'Reporting-manager team access.',    true),
        ($1, 'Employee',         'employee',   'Standard employee self-service.',   true)
      ON CONFLICT (org_id, slug) DO NOTHING
      RETURNING id, slug`,
@@ -253,7 +277,7 @@ async function seedSystemRolesForOrg(orgId, rootUserId, client) {
   rolesRes.rows.forEach(r => { slugToId[r.slug] = r.id; });
 
   // If some already existed (re-run safety), fetch them
-  if (Object.keys(slugToId).length < 4) {
+  if (Object.keys(slugToId).length < 5) {
     const existing = await db.query(
       `SELECT id, slug FROM roles WHERE org_id = $1 AND is_system_role = true`,
       [orgId]
@@ -264,6 +288,7 @@ async function seedSystemRolesForOrg(orgId, rootUserId, client) {
   const rootRoleId = slugToId['root_admin'];
   const hrRoleId   = slugToId['hr_admin'];
   const dhRoleId   = slugToId['dept_head'];
+  const mgrRoleId  = slugToId['manager'];
   const empRoleId  = slugToId['employee'];
 
   // Assign ALL permissions to Root Admin
@@ -314,6 +339,23 @@ async function seedSystemRolesForOrg(orgId, rootUserId, client) {
        ('onboarding','view'),('performance','view'),('expenses','view'),
        ('reports','view'),('notifications','view')
      )
+     ON CONFLICT (role_id, permission_id) DO NOTHING`,
+    [dhRoleId]
+  );
+
+  // Manager permissions (team scope is derived from users.reporting_to; Root Admin can edit this set)
+  await db.query(
+    `INSERT INTO role_permissions (role_id, permission_id)
+     SELECT $1, p.id FROM permissions p
+     WHERE p.module_key = 'team'
+     ON CONFLICT (role_id, permission_id) DO NOTHING`,
+    [mgrRoleId]
+  );
+  // Department Head also gets the team-scope permissions (department-wide scope)
+  await db.query(
+    `INSERT INTO role_permissions (role_id, permission_id)
+     SELECT $1, p.id FROM permissions p
+     WHERE p.module_key = 'team'
      ON CONFLICT (role_id, permission_id) DO NOTHING`,
     [dhRoleId]
   );

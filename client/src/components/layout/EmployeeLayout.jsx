@@ -7,7 +7,7 @@ import { Header } from '@/components/layout/Header';
 import {
   Home, FileText, Clock, UserCircle, LogOut, Menu, X, CalendarDays,
   FolderOpen, Receipt, DollarSign, Target, ClipboardList, UserCheck,
-  LogOut as Exit, Bell, Megaphone, Search, ClipboardCheck,
+  LogOut as Exit, Bell, Megaphone, Search, ClipboardCheck, Users,
 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useQuery } from '@tanstack/react-query';
@@ -15,6 +15,7 @@ import { apiGet } from '@/lib/api';
 import { STALE } from '@/lib/queryTiers';
 import { initials, cn } from '@/lib/utils';
 import { GlobalSearchModal } from '@/components/ui/GlobalSearchModal';
+import { useTeamMe } from '@/hooks/useTeam';
 
 const NAV_SECTIONS = [
   { title: 'My Workspace', items: [
@@ -44,9 +45,15 @@ function EmployeeSidebar({ onClose, onMenuClick, onSearchOpen }) {
   const { user, logout, hasCustomAccess, adminLanding } = useAuth();
   const navigate = useNavigate();
   // A custom-role user can switch to the permission-driven admin modules their role grants
-  const sections = hasCustomAccess
-    ? [{ title: 'Team Workspace', items: [{ to: adminLanding, label: 'Admin Modules', Icon: ClipboardCheck }] }, ...NAV_SECTIONS]
+  // Manager / Head of Department: the same employee portal plus a "My Team" page, shown only while the role's team.*
+  // permissions and an actual team exist (so removing the permission or the last report removes the link).
+  const { data: team } = useTeamMe();
+  const base = team?.hasTeam
+    ? NAV_SECTIONS.map((sec, i) => (i === 0 ? { ...sec, items: [...sec.items, { to: '/portal/team', label: 'My Team', Icon: Users }] } : sec))
     : NAV_SECTIONS;
+  const sections = hasCustomAccess
+    ? [{ title: 'Team Workspace', items: [{ to: adminLanding, label: 'Admin Modules', Icon: ClipboardCheck }] }, ...base]
+    : base;
 
   const { data: countData } = useQuery({
     queryKey: ['notif-count'],

@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useFeature } from '@/context/FeatureFlagContext';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   ClipboardList, CheckCircle2, XCircle, Clock, Umbrella, Home,
@@ -168,6 +169,7 @@ function ExpenseReviewModal({ open, onClose, expense, onDone }) {
 export default function PendingApprovals() {
   const toast = useToast();
   const qc    = useQueryClient();
+  const branchesEnabled = useFeature('branches');
   const { selectedBranchId, accessibleBranches, hasAllBranches, isRootAdmin, branchesLoaded } = useBranch();
 
   const [tab,         setTab]         = useState('all');
@@ -465,7 +467,7 @@ export default function PendingApprovals() {
 
       {/* BUG_251: branch-limited HR admins only see approvals of their assigned branches —
           say so explicitly, so a missing request is not mistaken for a bug. */}
-      {branchesLoaded && !isRootAdmin && !hasAllBranches && (accessibleBranches || []).length > 0 && (
+      {branchesEnabled && branchesLoaded && !isRootAdmin && !hasAllBranches && (accessibleBranches || []).length > 0 && (
         <div className="rounded-xl border border-[#c7c4d8] bg-[#f0f3ff] px-4 py-2.5 text-xs text-[#464555]">
           <span className="font-bold text-[#3525cd]">Branch access: </span>
           you can review approval requests from employees in{' '}

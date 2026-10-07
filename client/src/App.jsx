@@ -83,6 +83,8 @@ const MyAttendance            = lazy(() => import('@/pages/MyAttendance'));
 const TeamCalendar            = lazy(() => import('@/pages/TeamCalendar'));
 const EmployeePortalProfile   = lazy(() => import('@/pages/EmployeePortalProfile'));
 const DeptHeadApprovals       = lazy(() => import('@/pages/DeptHeadApprovals'));
+const MyTeam                  = lazy(() => import('@/pages/MyTeam'));
+const TeamMemberProfile       = lazy(() => import('@/pages/TeamMemberProfile'));
 
 // ── Shown while any lazy page is loading ──
 function PageLoader() {
@@ -369,6 +371,8 @@ function AppRoutes() {
         <Route path="/portal/announcements"  element={<FeatureRoute featureKey="announcements"><AnnouncementsPage /></FeatureRoute>} />
         <Route path="/portal/profile"         element={<EmployeePortalProfile />} />
         <Route path="/portal/dept-approvals"  element={<DeptHeadApprovals />} />
+        <Route path="/portal/team"            element={<MyTeam />} />
+        <Route path="/portal/team/:id"        element={<TeamMemberProfile />} />
       </Route>
 
       <Route path="*" element={<Navigate to={token ? home : '/'} replace />} />
