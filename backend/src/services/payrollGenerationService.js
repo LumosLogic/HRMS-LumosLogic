@@ -15,6 +15,12 @@ const { applyStatutoryCalculations } = require('./statutoryCalculationService');
 const { payrollEligibilitySql } = require('../utils/employeeStatus');
 
 // ─── Custom error ─────────────────────────────────────────────────────────────
+function lastDayOfMonth(m, y) { return new Date(y, m, 0).getDate(); }
+/** A period is complete once its last calendar day is over (today is on/after the 1st of the next month). */
+function isPeriodComplete(m, y, now = new Date()) {
+  return now >= new Date(y, m, 1);
+}
+
 class GenerationError extends Error {
   constructor(message, code, meta = {}) {
     super(message);
@@ -309,6 +315,15 @@ async function generatePayrollRun({ organizationId, month, year, generatedBy, no
     );
   }
 
+  // The pay period must be fully over — for manual AND scheduled generation — so a partial run is never created.
+  if (!isPeriodComplete(m, y, now)) {
+    throw new GenerationError(
+      `Payroll for ${padZ(m)}/${y} cannot be generated until the period is complete ` +
+      `(after ${lastDayOfMonth(m, y)}/${padZ(m)}/${y}).`,
+      'PERIOD_INCOMPLETE'
+    );
+  }
+
   // ── Step 1: advisory lock + create/reset run ────────────────────────────
   // pg_advisory_xact_lock ensures only one concurrent generation per period
   // and per branch.  Using 0 as the sentinel for "All Branches" (null) is safe
@@ -372,6 +387,15 @@ async function generatePayrollRun({ organizationId, month, year, generatedBy, no
         throw new GenerationError(
           `Payroll ${branchLabel}for ${padZ(m)}/${y} is already being processed.`,
           'ALREADY_PROCESSING',
+          { existingRunId: run.id }
+        );
+      }
+      // Approved payslips are already published to employees — the approval must be cancelled (reopen) first.
+      if (run.status === 'approved') {
+        await setupClient.query('ROLLBACK');
+        throw new GenerationError(
+          `Payroll ${branchLabel}for ${padZ(m)}/${y} is approved. Cancel the approval before regenerating.`,
+          'PAYROLL_APPROVED',
           { existingRunId: run.id }
         );
       }
@@ -606,6 +630,7 @@ async function previewPayrollRun({ organizationId, month, year, employeeIds = nu
     totalDeductions: round2(eligible.reduce((s, i) => s + i.deductions,  0)),
     totalNet:        round2(eligible.reduce((s, i) => s + i.netSalary,   0)),
     existingRun:     existing.rows[0] ?? null,
+    periodComplete:  isPeriodComplete(m, y),
     employees:       items,
   };
 }
@@ -629,9 +654,9 @@ async function lockPayrollRun({ organizationId, runId, actorId, actorName, ip })
 
   if (run.status === 'locked') return { id: rId, status: 'locked' }; // idempotent
 
-  if (!['completed', 'completed_with_errors', 'verified', 'approved'].includes(run.status)) {
+  if (run.status !== 'approved') {
     throw new GenerationError(
-      `Cannot lock a run with status '${run.status}'. The run must be completed or approved first.`,
+      `Cannot lock a run with status '${run.status}'. The run must be verified and approved first.`,
       'INVALID_STATUS_FOR_LOCK',
       { currentStatus: run.status }
     );
@@ -693,16 +718,19 @@ async function unlockPayrollRun({ organizationId, runId, actorId, actorName, ip 
     return { id: rId, status: run.status }; // idempotent
   }
 
+  let newStatus = 'completed';
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
 
     await client.query(
       `UPDATE payroll_runs
-          SET status = 'completed', locked_by = NULL, locked_at = NULL
-        WHERE id = $1 AND organization_id = $2`,
+          SET status = CASE WHEN approved_at IS NOT NULL THEN 'approved' ELSE 'completed' END,
+              locked_by = NULL, locked_at = NULL
+        WHERE id = $1 AND organization_id = $2
+       RETURNING status`,
       [rId, oId]
-    );
+    ).then(r => { newStatus = r.rows[0].status; });
 
     await client.query(
       `UPDATE payslips
@@ -722,15 +750,16 @@ async function unlockPayrollRun({ organizationId, runId, actorId, actorName, ip 
     action:     'payroll_unlocked',
     entityType: 'payroll_run',
     entityId:   rId,
-    newValues:  { status: 'completed', month: run.month, year: run.year },
+    newValues:  { status: newStatus, month: run.month, year: run.year },
     ip,
   });
 
-  return { id: rId, status: 'completed' };
+  return { id: rId, status: newStatus };
 }
 
 module.exports = {
   generatePayrollRun,
+  isPeriodComplete,
   generateEmployeePayslip,
   lockPayrollRun,
   unlockPayrollRun,

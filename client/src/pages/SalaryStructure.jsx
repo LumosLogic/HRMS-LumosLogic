@@ -9,6 +9,7 @@ import {
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut } from '@/lib/api';
+import SalaryRulesEditor from '@/components/payroll/SalaryRulesEditor';
 import { usePayrollSettings } from '@/hooks/useReferenceData';
 import { Avatar } from '@/components/ui/Avatar';
 import { cn, fmtDate } from '@/lib/utils';
@@ -50,6 +51,14 @@ function firstOfCurrentMonth() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`;
 }
+
+// A later Effective From on an existing structure creates a NEW version (the current one is closed and kept in
+// history). The same/earlier date is a correction of the current record (audited, shown in history).
+function startsNewVersion(employee, effectiveFrom) {
+  const orig = employee.effective_from ? String(employee.effective_from).split('T')[0] : null;
+  return !!orig && !!effectiveFrom && effectiveFrom > orig;
+}
+const EFFECTIVE_HINT = 'Keep this date to correct the current record. Choose a later date to create a new version — the current one is kept in history.';
 
 // ── CTC Mode — auto-calculated salary form ────────────────────────────────────
 function CtcModal({ employee, rules, onClose, onSaved, modeToggle, statutoryConfig = null }) {
@@ -142,7 +151,7 @@ function CtcModal({ employee, rules, onClose, onSaved, modeToggle, statutoryConf
     mutationFn: () => {
       if (!calc && ctcNum <= 0) throw new Error('Enter a valid monthly CTC');
       if (!effectiveFrom) throw new Error('Effective From date is required');
-      if (isRevising) {
+      if (isRevising && !startsNewVersion(employee, effectiveFrom)) {
         return apiPut(`/payroll/salary-structures/${employee.salary_id}`, {
           ...componentPayload(),
           effective_from: effectiveFrom,
@@ -157,6 +166,7 @@ function CtcModal({ employee, rules, onClose, onSaved, modeToggle, statutoryConf
     onSuccess: () => {
       toast(isRevising ? 'Salary updated!' : 'Salary structure saved!', 'success');
       qc.invalidateQueries({ queryKey: ['payroll-employees'] });
+      qc.invalidateQueries({ queryKey: ['salary-history'] });
       onSaved?.();
       onClose();
     },
@@ -336,9 +346,7 @@ function CtcModal({ employee, rules, onClose, onSaved, modeToggle, statutoryConf
               <label className="block text-[0.7rem] font-bold text-[#464555] mb-1">
                 Effective From <span className="text-rose-500">*</span>
                 <span className="ml-2 text-[0.65rem] font-normal text-[#777587]">
-                  {isRevising
-                    ? 'Shown from existing record — change to backdate for a past payroll month'
-                    : 'First day of the month this salary applies from'}
+                  {isRevising ? EFFECTIVE_HINT : 'First day of the month this salary applies from'}
                 </span>
               </label>
               <input type="date" value={effectiveFrom} onChange={e => setEffectiveFrom(e.target.value)}
@@ -363,7 +371,7 @@ function CtcModal({ employee, rules, onClose, onSaved, modeToggle, statutoryConf
             className="flex items-center gap-2 px-4 py-2.5 bg-[#3525cd] text-white rounded-xl text-sm font-bold hover:bg-[#2a1fb0] disabled:opacity-60 transition-colors">
             {mut.isPending
               ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Saving…</>
-              : <><Plus size={14} /> {isRevising ? 'Save Changes' : 'Save Structure'}</>}
+              : <><Plus size={14} /> {isRevising ? (startsNewVersion(employee, effectiveFrom) ? 'Save New Version' : 'Save Changes') : 'Save Structure'}</>}
           </button>
         </div>
       </div>
@@ -422,9 +430,8 @@ function ManualModal({ employee, onClose, onSaved, modeToggle }) {
         notes: form.notes,
       };
       if (!form.effective_from) throw new Error('Effective From date is required');
-      if (isRevising) {
-        // Include effective_from so HR can correct a September-dated structure
-        // back to August 1 without needing a new version.
+      if (isRevising && !startsNewVersion(employee, form.effective_from)) {
+        // Same (or earlier) date = correction of the current record; a later date creates a new version below.
         return apiPut(`/payroll/salary-structures/${employee.salary_id}`, {
           ...payload,
           effective_from: form.effective_from,
@@ -437,6 +444,7 @@ function ManualModal({ employee, onClose, onSaved, modeToggle }) {
     onSuccess: () => {
       toast(isRevising ? 'Salary updated!' : 'Salary structure saved!', 'success');
       qc.invalidateQueries({ queryKey: ['payroll-employees'] });
+      qc.invalidateQueries({ queryKey: ['salary-history'] });
       onSaved?.();
       onClose();
     },
@@ -511,9 +519,7 @@ function ManualModal({ employee, onClose, onSaved, modeToggle }) {
                 className="w-full border border-[#c7c4d8] rounded-lg px-3 py-2 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd]"
               />
               <p className="text-[0.62rem] text-[#9ca3af] mt-1">
-                {isRevising
-                  ? 'Loaded from existing record. Change to August 1 to fix retroactive payroll.'
-                  : 'First day of the payroll month this structure should apply from.'}
+                {isRevising ? EFFECTIVE_HINT : 'First day of the payroll month this structure should apply from.'}
               </p>
             </div>
           </div>
@@ -578,7 +584,7 @@ function ManualModal({ employee, onClose, onSaved, modeToggle }) {
             className="flex items-center gap-2 px-4 py-2.5 bg-[#3525cd] text-white rounded-xl text-sm font-bold hover:bg-[#2a1fb0] disabled:opacity-60 transition-colors">
             {mut.isPending
               ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Saving…</>
-              : <><Plus size={14} /> {isRevising ? 'Save Changes' : 'Save Structure'}</>}
+              : <><Plus size={14} /> {isRevising ? (startsNewVersion(employee, form.effective_from) ? 'Save New Version' : 'Save Changes') : 'Save Structure'}</>}
           </button>
         </div>
       </div>
@@ -586,71 +592,128 @@ function ManualModal({ employee, onClose, onSaved, modeToggle }) {
   );
 }
 
-// ── SalaryModal: picks CTC or Manual mode based on org rules ─────────────────
-// Mode toggle is embedded inside the modal header (not floating above it).
+// ── SalaryModal: ONE mode, chosen by the organisation's CTC-based salary setting ──
+// CTC setting ON  → CTC form only (components derive from CTC; individual fields can still be overridden).
+// CTC setting OFF → manual component form only.
 function SalaryModal({ employee, rules, onClose, statutoryConfig = null }) {
-  const rulesEnabled = rules?.enabled;
-  const [mode, setMode] = useState(rulesEnabled ? 'ctc' : 'manual');
+  return rules?.enabled
+    ? <CtcModal employee={employee} rules={rules} onClose={onClose} statutoryConfig={statutoryConfig} />
+    : <ManualModal employee={employee} onClose={onClose} />;
+}
 
-  // When mode changes, remount the inner modal with a fresh key
+// ── Structure details + history modal ────────────────────────────────────────
+const EARN_ROWS = [['basic','Basic'],['hra','HRA'],['da','Dearness Allowance'],['transport_allowance','Transport Allowance'],['medical_allowance','Medical Allowance'],['special_allowance','Special Allowance'],['other_allowance','Other Allowance']];
+const DED_ROWS  = [['employee_pf','PF (Employee)'],['employee_esi','ESI (Employee)'],['professional_tax','Professional Tax'],['tds','TDS'],['retention','Retention'],['other_deductions','Other Deductions']];
+const EMPR_ROWS = [['employer_pf','PF (Employer)'],['employer_esi','ESI (Employer)']];
+const ALL_ROWS  = [...EARN_ROWS, ...DED_ROWS, ...EMPR_ROWS, ['gross_salary', 'Gross Salary'], ['ctc', 'CTC']];
+const num = v => Number(v || 0);
+
+function totalsOf(h) {
+  const gross = num(h.gross_salary) || EARN_ROWS.reduce((s, [k]) => s + num(h[k]), 0);
+  const ded   = DED_ROWS.reduce((s, [k]) => s + num(h[k]), 0);
+  const empr  = EMPR_ROWS.reduce((s, [k]) => s + num(h[k]), 0);
+  return { gross, ded, net: Math.max(0, gross - ded), empr, ctc: num(h.ctc) || gross + empr };
+}
+
+// Components that differ between two versions: [{ label, from, to }]
+function diffOf(prev, next) {
+  if (!prev) return [];
+  return ALL_ROWS
+    .filter(([k]) => Math.abs(num(prev[k]) - num(next[k])) > 0.004)
+    .map(([k, label]) => ({ label, from: num(prev[k]), to: num(next[k]) }));
+}
+
+function DiffList({ diff }) {
+  if (!diff.length) return <p className="text-[0.68rem] text-[#9ca3af]">No component values changed.</p>;
   return (
-    <>
-      {mode === 'ctc'
-        ? <CtcModal key="ctc" employee={employee} rules={rules} onClose={onClose}
-            statutoryConfig={statutoryConfig}
-            modeToggle={rulesEnabled ? (
-              <div className="flex items-center gap-1 bg-[#f0f3ff] border border-[#c7c4d8] p-0.5 rounded-lg">
-                <button onClick={() => setMode('ctc')}
-                  className={cn('flex items-center gap-1 px-2.5 py-1 rounded-md text-[0.68rem] font-bold transition-all',
-                    'bg-[#3525cd] text-white')}>
-                  <Zap size={10} /> CTC-Based
-                </button>
-                <button onClick={() => setMode('manual')}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[0.68rem] font-bold text-[#464555] hover:bg-white transition-all">
-                  <Settings2 size={10} /> Manual
-                </button>
-              </div>
-            ) : null}
-          />
-        : <ManualModal key="manual" employee={employee} onClose={onClose}
-            modeToggle={rulesEnabled ? (
-              <div className="flex items-center gap-1 bg-[#f0f3ff] border border-[#c7c4d8] p-0.5 rounded-lg">
-                <button onClick={() => setMode('ctc')}
-                  className="flex items-center gap-1 px-2.5 py-1 rounded-md text-[0.68rem] font-bold text-[#464555] hover:bg-white transition-all">
-                  <Zap size={10} /> CTC-Based
-                </button>
-                <button onClick={() => setMode('manual')}
-                  className={cn('flex items-center gap-1 px-2.5 py-1 rounded-md text-[0.68rem] font-bold transition-all',
-                    'bg-[#464555] text-white')}>
-                  <Settings2 size={10} /> Manual
-                </button>
-              </div>
-            ) : null}
-          />}
-    </>
+    <div className="space-y-1">
+      {diff.map(d => (
+        <div key={d.label} className="flex items-center justify-between text-xs">
+          <span className="text-[#777587]">{d.label}</span>
+          <span className="font-semibold">
+            <span className="text-[#9ca3af] line-through">{fmt(d.from)}</span>
+            <span className="mx-1.5 text-[#c7c4d8]">→</span>
+            <span className="text-[#151c27]">{fmt(d.to)}</span>
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 
-// ── History Modal ─────────────────────────────────────────────────────────────
+function StructureBreakdown({ h }) {
+  const t = totalsOf(h);
+  const block = (title, rows, tone, total, totalLabel) => {
+    const shown = rows.filter(([k]) => num(h[k]) > 0);
+    return (
+      <div className={cn('rounded-xl border overflow-hidden', tone.border)}>
+        <div className={cn('px-4 py-2 text-[0.62rem] font-black uppercase tracking-widest', tone.head)}>{title}</div>
+        <div className="px-4 py-1">
+          {shown.length === 0
+            ? <p className="text-xs text-[#9ca3af] py-2">None</p>
+            : shown.map(([k, label]) => (
+              <div key={k} className="flex justify-between py-1.5 border-b border-[#f0f3ff] last:border-0 text-xs">
+                <span className="text-[#464555]">{label}</span>
+                <span className="font-semibold text-[#151c27]">{fmtD(h[k])}</span>
+              </div>
+            ))}
+        </div>
+        <div className={cn('flex justify-between px-4 py-2 text-xs font-black', tone.head)}>
+          <span>{totalLabel}</span><span>{fmtD(total)}</span>
+        </div>
+      </div>
+    );
+  };
+  return (
+    <div className="space-y-3">
+      {block('Earnings', EARN_ROWS, { border: 'border-emerald-200', head: 'bg-emerald-50 text-emerald-700' }, t.gross, 'Gross Salary')}
+      {block('Employee Deductions', DED_ROWS, { border: 'border-rose-200', head: 'bg-rose-50 text-rose-700' }, t.ded, 'Total Deductions')}
+      {block('Employer Contributions', EMPR_ROWS, { border: 'border-blue-200', head: 'bg-blue-50 text-blue-700' }, t.empr, 'Total Employer')}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="rounded-xl bg-[#f0f3ff] border border-[#c7c4d8] px-4 py-3">
+          <p className="text-[0.62rem] font-black uppercase tracking-widest text-[#777587]">Net Salary / month</p>
+          <p className="text-lg font-black text-[#151c27]">{fmtD(t.net)}</p>
+        </div>
+        <div className="rounded-xl bg-[#f0f3ff] border border-[#c7c4d8] px-4 py-3">
+          <p className="text-[0.62rem] font-black uppercase tracking-widest text-[#777587]">CTC / month</p>
+          <p className="text-lg font-black text-[#3525cd]">{fmtD(t.ctc)}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function HistoryModal({ employee, onClose }) {
   const { data: history = [], isLoading, error: histError } = useQuery({
     queryKey: ['salary-history', employee.id],
     queryFn: () => apiGet(`/payroll/salary-structures/history/${employee.id}`),
     retry: false,
   });
+  const [tab, setTab] = useState('current');
+  const current = history.find(h => h.effective_to === null) || history[0];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
       style={{ background: 'rgba(4,6,14,.55)', backdropFilter: 'blur(4px)' }}>
-      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl border border-[#c7c4d8] max-h-[80vh] flex flex-col">
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-xl border border-[#c7c4d8] max-h-[88vh] flex flex-col">
         <div className="flex items-center justify-between px-6 py-4 border-b border-[#e7eefe] flex-shrink-0">
           <div className="flex items-center gap-2.5">
             <History size={16} className="text-[#3525cd]" />
-            <h2 className="font-black text-[#151c27] text-sm">Salary History — {employee.name}</h2>
+            <div>
+              <h2 className="font-black text-[#151c27] text-sm">Salary Structure — {employee.name}</h2>
+              {current && <p className="text-[0.68rem] text-[#777587]">Effective from {fmtDate(current.effective_from)}</p>}
+            </div>
           </div>
           <button onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-[#f0f3ff] flex items-center justify-center">
             <X size={16} className="text-[#777587]" />
           </button>
+        </div>
+        <div className="flex gap-1 px-6 pt-3 flex-shrink-0">
+          {[['current', 'Current Structure'], ['history', `History (${history.length})`]].map(([k, l]) => (
+            <button key={k} onClick={() => setTab(k)}
+              className={cn('px-3 py-1.5 rounded-lg text-xs font-bold transition-colors',
+                tab === k ? 'bg-[#3525cd] text-white' : 'text-[#464555] hover:bg-[#f0f3ff]')}>{l}</button>
+          ))}
         </div>
         <div className="overflow-y-auto flex-1 p-5">
           {isLoading ? (
@@ -666,57 +729,98 @@ function HistoryModal({ employee, onClose }) {
           ) : history.length === 0 ? (
             <div className="text-center py-10">
               <History size={32} className="text-[#c7c4d8] mx-auto mb-2" />
-              <p className="text-sm text-[#777587]">No salary history yet</p>
+              <p className="text-sm text-[#777587]">No salary structure yet</p>
             </div>
+          ) : tab === 'current' ? (
+            <StructureBreakdown h={current} />
           ) : (
             <div className="space-y-3">
-              {history.map(h => (
-                <div key={h.id} className={cn('rounded-xl border p-4', h.effective_to === null ? 'border-[#3525cd]/30 bg-[#f0f3ff]' : 'border-[#e7eefe] bg-white')}>
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center gap-2">
-                      <span className={cn('text-[0.6rem] font-bold px-1.5 py-0.5 rounded-full', h.effective_to === null ? 'bg-[#3525cd] text-white' : 'bg-slate-100 text-slate-600')}>
-                        {h.effective_to === null ? 'Active' : 'Past'}
-                      </span>
-                      <span className="text-xs font-semibold text-[#151c27]">
-                        {fmtDate(h.effective_from)}{h.effective_to ? ` → ${fmtDate(h.effective_to)}` : ' → Present'}
-                      </span>
-                    </div>
-                    <span className="text-sm font-black text-[#3525cd]">{fmt(h.gross_salary)}/mo</span>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2 text-xs">
-                    {[['Basic', h.basic],['HRA', h.hra],['DA', h.da],['Transport', h.transport_allowance],['Medical', h.medical_allowance],['Special', h.special_allowance],['Other', h.other_allowance]]
-                      .filter(([,v]) => Number(v) > 0)
-                      .map(([label, val]) => (
-                        <div key={label} className="flex justify-between">
-                          <span className="text-[#777587]">{label}</span>
-                          <span className="font-semibold text-[#151c27]">{fmt(val)}</span>
-                        </div>
-                      ))}
-                  </div>
-                  {[['PF', h.employee_pf],['ESI', h.employee_esi],['Prof. Tax', h.professional_tax],['TDS', h.tds],['Retention', h.retention],['Other Ded.', h.other_deductions]]
-                    .filter(([,v]) => Number(v) > 0).length > 0 && (
-                    <div className="mt-3 pt-3 border-t border-[#e7eefe]">
-                      <p className="text-[0.6rem] font-black uppercase tracking-widest text-rose-500 mb-1.5">Deductions / month</p>
-                      <div className="grid grid-cols-3 gap-2 text-xs">
-                        {[['PF', h.employee_pf],['ESI', h.employee_esi],['Prof. Tax', h.professional_tax],['TDS', h.tds],['Retention', h.retention],['Other Ded.', h.other_deductions]]
-                          .filter(([,v]) => Number(v) > 0)
-                          .map(([label, val]) => (
-                            <div key={label} className="flex justify-between">
-                              <span className="text-[#777587]">{label}</span>
-                              <span className="font-semibold text-rose-600">{fmt(val)}</span>
-                            </div>
-                          ))}
+              {history.map((h, i) => {
+                const prev = history[i + 1]; // list is newest-first
+                const isActive = h.effective_to === null;
+                return (
+                  <div key={h.id} className={cn('rounded-xl border p-4', isActive ? 'border-[#3525cd]/30 bg-[#f0f3ff]' : 'border-[#e7eefe] bg-white')}>
+                    <div className="flex items-center justify-between mb-2">
+                      <div className="flex items-center gap-2">
+                        <span className={cn('text-[0.6rem] font-bold px-1.5 py-0.5 rounded-full', isActive ? 'bg-[#3525cd] text-white' : 'bg-slate-100 text-slate-600')}>
+                          {isActive ? 'Active' : 'Past'}
+                        </span>
+                        <span className="text-xs font-semibold text-[#151c27]">
+                          {fmtDate(h.effective_from)}{h.effective_to ? ` → ${fmtDate(h.effective_to)}` : ' → Present'}
+                        </span>
                       </div>
+                      <span className="text-sm font-black text-[#3525cd]">{fmt(h.gross_salary)}/mo</span>
                     </div>
-                  )}
-                  <div className="flex items-center justify-between mt-3 pt-3 border-t border-[#e7eefe]">
-                    <span className="text-[0.65rem] text-[#9ca3af]">CTC: {fmt(h.ctc)}/mo{h.created_by_name && ` · By ${h.created_by_name}`}</span>
-                    {h.notes && <span className="text-[0.65rem] italic text-[#777587] max-w-[60%] truncate">{h.notes}</span>}
+                    <p className="text-[0.65rem] text-[#9ca3af] mb-2">
+                      CTC {fmt(h.ctc)}/mo{h.created_by_name && ` · Set by ${h.created_by_name}`}
+                      {h.created_at && ` · ${fmtDate(h.created_at)}`}
+                    </p>
+                    {prev ? (
+                      <div className="pt-2 border-t border-[#e7eefe]">
+                        <p className="text-[0.6rem] font-black uppercase tracking-widest text-[#777587] mb-1.5">Changed from previous version</p>
+                        <DiffList diff={diffOf(prev, h)} />
+                      </div>
+                    ) : (
+                      <p className="text-[0.65rem] text-[#9ca3af] pt-2 border-t border-[#e7eefe]">First salary structure</p>
+                    )}
+                    {(h.corrections || []).map((c, ci) => (
+                      <div key={ci} className="mt-2 pt-2 border-t border-dashed border-amber-200">
+                        <p className="text-[0.6rem] font-black uppercase tracking-widest text-amber-700 mb-1.5">
+                          Corrected{c.changed_by ? ` by ${c.changed_by}` : ''}{c.changed_at ? ` · ${fmtDate(c.changed_at)}` : ''}
+                        </p>
+                        <DiffList diff={diffOf(c.previous, c.current)} />
+                      </div>
+                    ))}
+                    {h.notes && <p className="text-[0.65rem] italic text-[#777587] mt-2 truncate">{h.notes}</p>}
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── CTC rules modal ───────────────────────────────────────────────────────────
+// The CTC-based switch and the component split rules. Moved here from Payroll Settings, because this is the
+// screen CTC drives. Saved on the same payroll_settings.salary_calculation_rules the engine already uses.
+function CtcRulesModal({ initialRules, onClose }) {
+  const toast = useToast();
+  const qc    = useQueryClient();
+  const [rules, setRules] = useState(initialRules);
+  const mut = useMutation({
+    mutationFn: () => apiPut('/payroll/settings', { salary_calculation_rules: rules }),
+    onSuccess: () => {
+      toast('CTC rules saved', 'success');
+      qc.invalidateQueries({ queryKey: ['payroll-settings'] });
+      onClose();
+    },
+    onError: e => toast(e.message, 'error'),
+  });
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: 'rgba(4,6,14,.55)', backdropFilter: 'blur(4px)' }}>
+      <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl border border-[#c7c4d8] max-h-[90vh] flex flex-col">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-[#e7eefe] flex-shrink-0">
+          <div>
+            <h2 className="font-black text-[#151c27] text-sm">Salary Calculation Mode</h2>
+            <p className="text-xs text-[#777587]">Applies to new and revised salary structures. Existing structures are not changed.</p>
+          </div>
+          <button onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-[#f0f3ff] flex items-center justify-center">
+            <X size={16} className="text-[#777587]" />
+          </button>
+        </div>
+        <div className="overflow-y-auto flex-1 px-6 py-5">
+          <SalaryRulesEditor rules={rules} onChange={setRules} />
+        </div>
+        <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-[#e7eefe] flex-shrink-0">
+          <button onClick={onClose} className="px-4 py-2.5 border border-[#c7c4d8] rounded-xl text-sm font-semibold text-[#464555] hover:bg-[#f0f3ff]">Cancel</button>
+          <button onClick={() => mut.mutate()} disabled={mut.isPending}
+            className="px-4 py-2.5 bg-[#3525cd] text-white rounded-xl text-sm font-bold hover:bg-[#2a1fb0] disabled:opacity-60">
+            {mut.isPending ? 'Saving…' : 'Save'}
+          </button>
         </div>
       </div>
     </div>
@@ -788,6 +892,7 @@ export default function SalaryStructure() {
   const [filterStatus, setFilterStatus]= useState('all');
   const [editEmp,      setEditEmp]     = useState(null);
   const [historyEmp,   setHistoryEmp]  = useState(null);
+  const [showRules,    setShowRules]   = useState(false);
 
   // Include selectedBranchId so branch switching loads the correct employees.
   const { data: employees = [], isLoading } = useQuery({
@@ -847,11 +952,11 @@ export default function SalaryStructure() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {salaryRules?.enabled && (
-            <div className="flex items-center gap-1.5 text-[0.7rem] font-bold px-3 py-1.5 rounded-full bg-[#f0f3ff] text-[#3525cd] border border-[#c7c4d8]">
-              <Zap size={12} /> CTC-based calculation active
-            </div>
-          )}
+          <button onClick={() => setShowRules(true)} title="Change how salary structures are entered"
+            className="flex items-center gap-1.5 text-[0.7rem] font-bold px-3 py-1.5 rounded-full bg-[#f0f3ff] text-[#3525cd] border border-[#c7c4d8] hover:border-[#3525cd]/50 transition-colors">
+            {salaryRules?.enabled ? <><Zap size={12} /> CTC-based calculation</> : <><Settings2 size={12} /> Manual components</>}
+            <span className="text-[#777587] font-semibold">· Change</span>
+          </button>
           {withSalary.length > 0 && (
             <button
               onClick={() => downloadSalaryStructuresCSV(employees)}
@@ -954,8 +1059,8 @@ export default function SalaryStructure() {
                       <div className="flex items-center gap-1.5">
                         {emp.salary_id && (
                           <button onClick={() => setHistoryEmp(emp)}
-                            className="p-1.5 rounded-lg border border-[#c7c4d8] hover:bg-[#f0f3ff] transition-colors" title="View history">
-                            <History size={13} className="text-[#777587]" />
+                            className="flex items-center gap-1 px-2 py-1.5 rounded-lg border border-[#c7c4d8] text-[0.7rem] font-bold text-[#464555] hover:bg-[#f0f3ff] transition-colors" title="View full structure and history">
+                            <History size={13} className="text-[#777587]" /> Details
                           </button>
                         )}
                         <button onClick={() => setEditEmp(emp)}
@@ -981,6 +1086,7 @@ export default function SalaryStructure() {
 
       {editEmp    && <SalaryModal   employee={editEmp}    rules={salaryRules} statutoryConfig={statutoryConfig} onClose={() => setEditEmp(null)} />}
       {historyEmp && <HistoryModal  employee={historyEmp} onClose={() => setHistoryEmp(null)} />}
+      {showRules  && <CtcRulesModal initialRules={salaryRules} onClose={() => setShowRules(false)} />}
     </div>
   );
 }

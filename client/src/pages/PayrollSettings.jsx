@@ -1,29 +1,31 @@
 import React, { useState, useEffect } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
+import { Link } from 'react-router-dom';
 import {
-  Settings, Save, Info,
-  Calendar, Clock, Users, IndianRupee,
-  ChevronDown, ChevronUp, Percent, Lock, Zap,
+  Settings, Save, Info, Calendar, ChevronLeft, ChevronRight, ExternalLink, Scale,
 } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
-import { apiGet, apiPut, apiPost } from '@/lib/api';
+import { useAuth } from '@/context/AuthContext';
+import { useBranch } from '@/context/BranchContext';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
+import { apiGet, apiPut } from '@/lib/api';
 import { usePayrollSettings } from '@/hooks/useReferenceData';
-import { cn } from '@/lib/utils';
-import { ConfirmModal } from '@/components/ui/ConfirmModal';
-import { DEFAULT_SALARY_RULES, mergeWithDefaults, STATUTORY_COMPONENT_KEYS } from '@/lib/salaryCalculator';
+import { cn, MONTHS, fmtDate } from '@/lib/utils';
+import { Section, Row, Toggle, NumInput, DayPicker, TimeInput } from '@/components/payroll/settingsUi';
+import ProbationManager from '@/components/payroll/ProbationManager';
+import PayslipBranding from '@/components/payroll/PayslipBranding';
 
+// Only payroll-OWNED settings live here. Anything the organisation already configures elsewhere is read from
+// there and shown read-only:
+//   • weekly offs, holidays, late/early thresholds → Organization Settings (work schedule) / Holidays
+//   • PF / ESI / PT / TDS                           → Statutory Compliance
+//   • CTC-based salary rules                        → Salary Structure
 const DEFAULTS = {
   payroll_cycle:                'monthly',
   payroll_date:                 1,
-  working_days_rule:            'calendar',
-  fixed_working_days:           26,
-  weekend_policy:               'sat_sun',
   count_holidays_as_paid:       true,
-  grace_minutes:                15,
   late_allowance_per_month:     3,
-  early_exit_allowance_minutes: 30,
   half_day_after_lates:         3,
-  lop_after_half_days:          2,
   payslip_auto_email:           true,
   auto_generate_payroll:        false,
   auto_publish:                 false,
@@ -35,23 +37,31 @@ const DEFAULTS = {
   payroll_publish_time:         '09:00',
   payroll_payout_day:           null,
   payroll_payout_time:          null,
-  salary_calculation_rules:     null,
-  probation_enabled:              false,
-  default_probation_months:       3,
-  paid_leave_during_probation:    true,
-  probation_scope:                'selected',
-  per_day_salary_basis:           'working_days',
-  payslip_company_fullname:       '',
-  payslip_registered_address:     '',
-  payslip_corporate_address:      '',
-  payslip_contact_details:        '',
-  payslip_company_address:        '',
-  payslip_company_cin:            '',
-  payslip_company_registration:   '',
-  payslip_footer_note:            '',
-  payslip_company_pf_no:          '',
-  payslip_company_esic_no:        '',
+  probation_enabled:            false,
+  default_probation_months:     3,
+  paid_leave_during_probation:  true,
+  probation_scope:              'selected',
+  per_day_salary_basis:         'working_days',
+  payslip_company_fullname:     '',
+  payslip_registered_address:   '',
+  payslip_corporate_address:    '',
+  payslip_contact_details:      '',
+  payslip_company_address:      '',
+  payslip_company_cin:          '',
+  payslip_company_registration: '',
+  payslip_footer_note:          '',
+  payslip_company_pf_no:        '',
+  payslip_company_esic_no:      '',
+  payslip_template:             'classic',
+  payslip_watermark_mode:       'logo',
+  payslip_watermark_text:       '',
+  payslip_custom_fields:        [],
 };
+
+// Fields the page can save. Everything else on the settings row (legacy payroll-side copies of working-day /
+// grace / statutory values) is left untouched in the database.
+const SAVE_KEYS = Object.keys(DEFAULTS);
+const NEW_COLUMN_KEYS = ['payslip_template', 'payslip_watermark_mode', 'payslip_watermark_text', 'payslip_custom_fields'];
 
 const TIMEZONES = [
   { value: 'Asia/Kolkata',       label: 'Asia/Kolkata (IST, UTC+5:30)' },
@@ -68,461 +78,137 @@ const TIMEZONES = [
   { value: 'UTC',                label: 'UTC' },
 ];
 
-function Toggle({ checked, onChange, disabled }) {
-  return (
-    <button
-      type="button"
-      onClick={() => !disabled && onChange(!checked)}
-      disabled={disabled}
-      className={cn(
-        'relative inline-flex h-5 w-9 items-center rounded-full transition-colors focus:outline-none',
-        checked ? 'bg-[#3525cd]' : 'bg-[#c7c4d8]',
-        disabled && 'opacity-50 cursor-not-allowed'
-      )}>
-      <span className={cn(
-        'inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform shadow-sm',
-        checked ? 'translate-x-4' : 'translate-x-1'
-      )} />
-    </button>
-  );
-}
+const DOW = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+const hhmm = t => (t ? String(t).slice(0, 5) : '—');
 
-function Section({ icon, title, subtitle, children }) {
+function Stat({ label, value, sign, tone = 'text-[#151c27]' }) {
   return (
-    <div className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm overflow-hidden">
-      <div className="flex items-center gap-3 px-5 py-4 border-b border-[#f0f3ff] bg-[#fafaff]">
-        <div className="w-8 h-8 rounded-lg bg-[#f0f3ff] flex items-center justify-center">
-          {icon}
-        </div>
-        <div>
-          <p className="text-sm font-bold text-[#151c27]">{title}</p>
-          {subtitle && <p className="text-[0.68rem] text-[#777587]">{subtitle}</p>}
-        </div>
-      </div>
-      <div className="px-5 py-5 space-y-5">{children}</div>
+    <div className="flex-1 min-w-[6rem] rounded-xl border border-[#e7eefe] bg-white px-4 py-3 text-center relative">
+      {sign && <span className="absolute -left-2.5 top-1/2 -translate-y-1/2 text-[#9ca3af] font-black">{sign}</span>}
+      <p className={cn('text-2xl font-black', tone)}>{value}</p>
+      <p className="text-[0.65rem] font-bold uppercase tracking-wider text-[#777587]">{label}</p>
     </div>
   );
 }
 
-function Row({ label, hint, children }) {
-  return (
-    <div className="flex items-start justify-between gap-4">
-      <div className="flex-1 min-w-0">
-        <p className="text-sm font-semibold text-[#151c27]">{label}</p>
-        {hint && <p className="text-[0.68rem] text-[#777587] mt-0.5">{hint}</p>}
-      </div>
-      <div className="flex-shrink-0">{children}</div>
-    </div>
-  );
-}
+// ── Working days + attendance rules, derived from Organization Settings ──────
+function OrgDerivedRules({ form, set, basePath }) {
+  const { selectedBranchId } = useBranch();
+  const now = new Date();
+  const [period, setPeriod] = useState({ month: now.getMonth() + 1, year: now.getFullYear() });
 
-function NumInput({ value, onChange, min, max, step = 1 }) {
-  return (
-    <input
-      type="number" min={min} max={max} step={step}
-      value={value}
-      onChange={e => onChange(Number(e.target.value))}
-      className="w-20 border border-[#c7c4d8] rounded-lg px-2.5 py-1.5 text-sm text-center text-[#151c27] focus:outline-none focus:border-[#3525cd] focus:ring-1 focus:ring-[#3525cd]/20"
-    />
-  );
-}
+  const { data, isLoading } = useQuery({
+    queryKey: ['payroll-org-rules', selectedBranchId, period.month, period.year],
+    meta: BRANCH_KEYED, placeholderData: keepPreviousData,
+    queryFn: () => apiGet('/payroll/settings/org-rules', { month: period.month, year: period.year }),
+  });
 
-function DayPicker({ value, onChange }) {
-  const days = Array.from({ length: 28 }, (_, i) => i + 1);
-  return (
-    <select
-      value={value ?? ''}
-      onChange={e => onChange(e.target.value || null)}
-      className="border border-[#c7c4d8] rounded-lg px-3 py-1.5 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd] bg-white">
-      <option value="">— same as payroll date —</option>
-      {days.map(d => (
-        <option key={d} value={String(d)}>{d}{['th','st','nd','rd'][([11,12,13].includes(d%100)?0:d%10)] || 'th'} of month</option>
-      ))}
-      <option value="LAST_DAY">Last day of month</option>
-      <option value="LAST_WORKING_DAY">Last working day</option>
-    </select>
-  );
-}
+  const shift = d => setPeriod(p => {
+    const m = p.month + d;
+    return m < 1 ? { month: 12, year: p.year - 1 } : m > 12 ? { month: 1, year: p.year + 1 } : { month: m, year: p.year };
+  });
 
-function TimeInput({ value, onChange }) {
-  return (
-    <input
-      type="time"
-      value={value || ''}
-      onChange={e => onChange(e.target.value || null)}
-      className="border border-[#c7c4d8] rounded-lg px-2.5 py-1.5 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd] focus:ring-1 focus:ring-[#3525cd]/20 w-32"
-    />
-  );
-}
-
-// ── Method badge ───────────────────────────────────────────────────────────────
-const METHOD_OPTS = [
-  { value: 'percentage', label: 'Percentage' },
-  { value: 'fixed',      label: 'Fixed Amount' },
-  { value: 'manual',     label: 'Manual' },
-  { value: 'remaining',  label: 'Remaining' },
-];
-
-const BASE_OPTS = [
-  { value: 'gross', label: 'of Gross' },
-  { value: 'basic', label: 'of Basic' },
-  { value: 'ctc',   label: 'of CTC' },
-];
-
-// Group labels / order for the rules table
-const GROUPS = [
-  { key: 'earning',   label: 'Earnings',                color: 'text-emerald-700 bg-emerald-50 border-emerald-200' },
-  { key: 'deduction', label: 'Employee Deductions',      color: 'text-rose-700 bg-rose-50 border-rose-200' },
-  { key: 'employer',  label: 'Employer Contributions',   color: 'text-blue-700 bg-blue-50 border-blue-200' },
-];
-
-// STATUTORY_COMPONENT_KEYS is imported from salaryCalculator — single definition.
-
-function ComponentRow({ comp, onChange }) {
-  const [open, setOpen] = useState(false);
-  const needsBase    = comp.method === 'percentage';
-  const needsValue   = comp.method === 'percentage' || comp.method === 'fixed';
-  const isRemaining  = comp.method === 'remaining';
-
-  return (
-    <div className={cn(
-      'rounded-xl border transition-all',
-      comp.enabled ? 'border-[#c7c4d8] bg-white' : 'border-[#e7eefe] bg-[#fafaff] opacity-60'
-    )}>
-      {/* Row header */}
-      <div className="flex items-center gap-3 px-4 py-3 cursor-pointer" onClick={() => comp.enabled && setOpen(o => !o)}>
-        <Toggle checked={comp.enabled} onChange={v => { onChange({ ...comp, enabled: v }); if (!v) setOpen(false); }} />
-        <span className={cn('text-sm font-semibold flex-1', comp.enabled ? 'text-[#151c27]' : 'text-[#9ca3af]')}>
-          {comp.label}
-        </span>
-        {comp.enabled && (
-          <span className="text-[0.65rem] text-[#777587] bg-[#f0f3ff] border border-[#c7c4d8] rounded-full px-2 py-0.5 font-semibold">
-            {comp.method === 'percentage' ? `${comp.value}% of ${comp.base}` :
-             comp.method === 'fixed'      ? `₹${Number(comp.value||0).toLocaleString('en-IN')} fixed` :
-             comp.method === 'remaining'  ? 'Remaining balance' :
-             'Manual entry'}
-          </span>
-        )}
-        {comp.enabled && (open ? <ChevronUp size={14} className="text-[#777587]" /> : <ChevronDown size={14} className="text-[#777587]" />)}
-      </div>
-
-      {/* Expanded config */}
-      {comp.enabled && open && (
-        <div className="px-4 pb-4 pt-0 space-y-3 border-t border-[#f0f3ff]">
-          {/* Method */}
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-3">
-            {METHOD_OPTS.map(m => (
-              <button key={m.value} type="button"
-                onClick={() => onChange({ ...comp, method: m.value })}
-                className={cn(
-                  'py-1.5 px-2 rounded-lg text-xs font-bold border transition-all text-center',
-                  comp.method === m.value
-                    ? 'bg-[#3525cd] text-white border-[#3525cd]'
-                    : 'bg-white text-[#464555] border-[#c7c4d8] hover:border-[#3525cd]/40'
-                )}>
-                {m.label}
-              </button>
-            ))}
-          </div>
-
-          {isRemaining && (
-            <p className="text-xs text-[#777587] bg-[#f0f3ff] rounded-lg px-3 py-2 flex items-start gap-2">
-              <Info size={13} className="text-[#3525cd] mt-0.5 flex-shrink-0" />
-              This component fills the gap so that earnings sum exactly equals the gross target derived from CTC.
-            </p>
-          )}
-
-          {needsValue && (
-            <div className="flex items-center gap-3 flex-wrap">
-              {/* Value */}
-              <div>
-                <label className="block text-[0.65rem] font-bold text-[#777587] uppercase mb-1">
-                  {comp.method === 'percentage' ? 'Percentage (%)' : 'Amount (₹)'}
-                </label>
-                <div className="relative">
-                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#9ca3af] text-xs">
-                    {comp.method === 'percentage' ? '%' : '₹'}
-                  </span>
-                  <input type="number" min={0} step={comp.method === 'percentage' ? 0.01 : 1}
-                    value={comp.value || ''}
-                    onChange={e => onChange({ ...comp, value: Number(e.target.value) })}
-                    className="w-28 border border-[#c7c4d8] rounded-lg pl-7 pr-2 py-1.5 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd] focus:ring-1 focus:ring-[#3525cd]/20"
-                  />
-                </div>
-              </div>
-
-              {/* Base (only for percentage) */}
-              {needsBase && (
-                <div>
-                  <label className="block text-[0.65rem] font-bold text-[#777587] uppercase mb-1">Base</label>
-                  <select value={comp.base || 'gross'}
-                    onChange={e => onChange({ ...comp, base: e.target.value })}
-                    className="border border-[#c7c4d8] rounded-lg px-3 py-1.5 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd] bg-white">
-                    {BASE_OPTS.map(b => <option key={b.value} value={b.value}>{b.label}</option>)}
-                  </select>
-                </div>
-              )}
-
-              {/* Cap (optional) */}
-              {comp.method === 'percentage' && (
-                <div>
-                  <label className="block text-[0.65rem] font-bold text-[#777587] uppercase mb-1">Max Cap (₹, optional)</label>
-                  <div className="relative">
-                    <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#9ca3af] text-xs">₹</span>
-                    <input type="number" min={0} step={1}
-                      placeholder="No cap"
-                      value={comp.cap || ''}
-                      onChange={e => onChange({ ...comp, cap: e.target.value ? Number(e.target.value) : null })}
-                      className="w-28 border border-[#c7c4d8] rounded-lg pl-7 pr-2 py-1.5 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd] focus:ring-1 focus:ring-[#3525cd]/20"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Threshold (eligibility condition) */}
-          <div className="flex items-center gap-3 flex-wrap pt-1 border-t border-[#f0f3ff]">
-            <div className="flex items-center gap-2">
-              <Toggle checked={!!comp.threshold_enabled} onChange={v => onChange({ ...comp, threshold_enabled: v })} />
-              <span className="text-xs font-semibold text-[#464555]">Eligibility threshold</span>
-            </div>
-            {comp.threshold_enabled && (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-[#777587]">Apply only if gross ≤</span>
-                <div className="relative">
-                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#9ca3af] text-xs">₹</span>
-                  <input type="number" min={0} step={1000}
-                    value={comp.threshold_value || ''}
-                    onChange={e => onChange({ ...comp, threshold_value: Number(e.target.value) })}
-                    className="w-28 border border-[#c7c4d8] rounded-lg pl-7 pr-2 py-1.5 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd] focus:ring-1 focus:ring-[#3525cd]/20"
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Probation Management section ──────────────────────────────────────────────
-function ProbationSection({ form, set, settings }) {
-  const toast = useToast();
-  const [applying,    setApplying]    = React.useState(false);
-  const [applyResult, setApplyResult] = React.useState(null);
-  const [confirmOpen, setConfirmOpen] = React.useState(false);
-
-  async function executeBulkApply() {
-    setApplying(true);
-    setApplyResult(null);
-    try {
-      const res = await apiPost('/payroll/apply-probation-bulk', {});
-      setApplyResult(res);
-      toast(
-        `Done — ${res.set_to_probation} set to Probation, ${res.set_to_active} set to Active (probation already completed).`,
-        'success'
-      );
-    } catch (e) {
-      toast(e.message || 'Failed to apply probation.', 'error');
-    } finally {
-      setApplying(false);
-    }
-  }
-
-  function handleApplyAll() {
-    setConfirmOpen(true);
-  }
+  const a = data?.attendance;
+  const workDays = (data?.workDays || []).map(d => DOW[d]).join(', ');
 
   return (
     <Section
-      icon={<Users size={15} className="text-[#3525cd]" />}
-      title="Probation Management"
-      subtitle="Configure company-wide probation defaults and leave rules during probation">
+      icon={<Calendar size={15} className="text-[#3525cd]" />}
+      title="Working Days & Attendance Rules"
+      subtitle="Taken from Organization Settings — nothing to configure twice">
 
-      <Row label="Enable Probation" hint="Turn on to allow setting probation periods for employees">
-        <Toggle checked={!!form.probation_enabled} onChange={v => set('probation_enabled', v)} />
-      </Row>
+      <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5">
+        <Info size={14} className="text-blue-500 flex-shrink-0 mt-0.5" />
+        <p className="text-xs text-blue-700">
+          Payroll counts working days as <strong>month days − weekly offs − holidays</strong>, using the work schedule and holidays
+          set in <Link to={`${basePath}/settings`} className="font-bold underline">Organization Settings</Link>. Change them there and payroll follows.
+        </p>
+      </div>
 
-      {form.probation_enabled && (
-        <>
-          <Row label="Default Probation Period" hint="Default number of months for new employees on probation">
-            <div className="flex items-center gap-2">
-              <NumInput
-                value={form.default_probation_months ?? 3}
-                onChange={v => set('default_probation_months', Math.max(1, v))}
-                min={1} max={24}
-              />
-              <span className="text-sm text-[#777587]">months</span>
-            </div>
-          </Row>
-
-          <Row
-            label="Paid Leave During Probation"
-            hint="If OFF, approved leaves during probation are treated as unpaid (LOP applies in payroll)">
-            <Toggle
-              checked={form.paid_leave_during_probation !== false}
-              onChange={v => set('paid_leave_during_probation', v)}
-            />
-          </Row>
-          {form.paid_leave_during_probation === false && (
-            <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5">
-              <Info size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
-              <p className="text-xs text-amber-700">
-                Employees on probation will have all leave marked as unpaid (LWP/LOP). Payroll will deduct salary for those leave days regardless of the leave policy's paid setting.
-              </p>
-            </div>
-          )}
-
-          {/* ── Apply Probation To ── */}
-          <div className="border-t border-[#f0f3ff] pt-4">
-            <p className="text-sm font-semibold text-[#151c27] mb-1">Apply Probation To</p>
-            <p className="text-[0.68rem] text-[#777587] mb-3">
-              Controls which employees receive probation. Existing statuses are never changed automatically
-              unless you explicitly click "Apply to All" below.
-            </p>
-            <div className="flex gap-3">
-              {[
-                { value: 'selected', label: 'Selected Employees', desc: 'HR sets probation per employee in the employee edit modal' },
-                { value: 'all',     label: 'All Employees',       desc: 'Auto-applies to every active employee based on Joining Date' },
-              ].map(opt => (
-                <button
-                  key={opt.value}
-                  type="button"
-                  onClick={() => set('probation_scope', opt.value)}
-                  className={cn(
-                    'flex-1 text-left rounded-xl border px-4 py-3 transition-all',
-                    (form.probation_scope ?? 'selected') === opt.value
-                      ? 'border-[#3525cd] bg-[#f0f3ff] ring-1 ring-[#3525cd]/20'
-                      : 'border-[#c7c4d8] bg-white hover:border-[#3525cd]/40'
-                  )}>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className={cn(
-                      'w-3.5 h-3.5 rounded-full border-2 flex-shrink-0',
-                      (form.probation_scope ?? 'selected') === opt.value
-                        ? 'border-[#3525cd] bg-[#3525cd]'
-                        : 'border-[#c7c4d8] bg-white'
-                    )} />
-                    <span className="text-sm font-bold text-[#151c27]">{opt.label}</span>
-                  </div>
-                  <p className="text-[0.68rem] text-[#777587] pl-5">{opt.desc}</p>
-                </button>
-              ))}
-            </div>
+      {/* Working-day calculation */}
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-sm font-semibold text-[#151c27]">Working days for the period</p>
+          <div className="flex items-center gap-1">
+            <button type="button" onClick={() => shift(-1)} className="w-7 h-7 rounded-lg border border-[#c7c4d8] flex items-center justify-center hover:bg-[#f0f3ff]"><ChevronLeft size={14} /></button>
+            <span className="text-sm font-bold text-[#151c27] w-32 text-center">{MONTHS[period.month - 1]} {period.year}</span>
+            <button type="button" onClick={() => shift(1)} className="w-7 h-7 rounded-lg border border-[#c7c4d8] flex items-center justify-center hover:bg-[#f0f3ff]"><ChevronRight size={14} /></button>
           </div>
-
-          {/* ── All Employees: bulk apply button ── */}
-          {(form.probation_scope ?? 'selected') === 'all' && (
-            <div className="bg-[#f0f3ff] border border-[#c7c4d8] rounded-xl p-4 space-y-3">
-              <div className="flex items-start gap-2">
-                <Info size={14} className="text-[#3525cd] flex-shrink-0 mt-0.5" />
-                <div className="text-xs text-[#464555] space-y-1">
-                  <p><strong>How it works:</strong> Click "Apply to All" after saving settings. Active employees still within their probation window are set to <em>Probation</em>; those whose window has already passed are set to <em>Active (Full Time)</em>. The daily cron auto-applies this to any new joiners overnight.</p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3 flex-wrap">
-                <button
-                  type="button"
-                  onClick={handleApplyAll}
-                  disabled={applying || !settings?.probation_enabled || settings?.probation_scope !== 'all'}
-                  className={cn(
-                    'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-bold transition-all',
-                    applying || !settings?.probation_enabled || settings?.probation_scope !== 'all'
-                      ? 'bg-[#e7eefe] text-[#9ca3af] cursor-not-allowed'
-                      : 'bg-[#3525cd] text-white hover:bg-[#2a1fb0]'
-                  )}>
-                  {applying
-                    ? <><span className="w-3.5 h-3.5 border-2 border-white/30 border-t-white rounded-full animate-spin" /> Applying…</>
-                    : <><Users size={13} /> Apply to All Eligible Employees</>}
-                </button>
-                {settings?.probation_enabled && settings?.probation_scope !== 'all' && (
-                  <span className="text-[0.68rem] text-amber-600 font-semibold">Save settings first to enable this button.</span>
-                )}
-                {applyResult && (
-                  <span className="text-[0.68rem] text-emerald-700 font-semibold">
-                    Done — {applyResult.set_to_probation} set to Probation, {applyResult.set_to_active} set to Active (completed).
-                  </span>
-                )}
-              </div>
+        </div>
+        {isLoading || !data ? (
+          <div className="flex justify-center py-6"><span className="w-5 h-5 border-2 border-[#3525cd]/30 border-t-[#3525cd] rounded-full animate-spin" /></div>
+        ) : (
+          <>
+            <div className="flex items-stretch gap-4 pl-3 flex-wrap">
+              <Stat label="Days in month" value={data.totalDays} />
+              <Stat label="Weekly offs" value={data.weeklyOffs} sign="−" tone="text-amber-600" />
+              <Stat label="Holidays" value={data.holidays} sign="−" tone="text-amber-600" />
+              <Stat label="Working days" value={data.workingDays} sign="=" tone="text-emerald-700" />
             </div>
-          )}
-        </>
-      )}
+            <p className="text-[0.68rem] text-[#777587] mt-2">
+              Working week: {workDays || '—'}.
+              {data.holidayList?.length > 0 && <> Holidays: {data.holidayList.map(h => `${fmtDate(h.date)} ${h.name}`).join(' · ')}.</>}
+            </p>
+          </>
+        )}
+      </div>
 
-      {/* Custom confirmation dialog — replaces native window.confirm */}
-      <ConfirmModal
-        open={confirmOpen}
-        variant="warning"
-        title="Apply Probation to All Employees?"
-        message={`Active employees joining within the last ${form.default_probation_months ?? 3} months will be set to Probation. Employees whose probation period has already ended will be set to Active (Full Time). Employees without a joining date are skipped. This action cannot be undone automatically.`}
-        confirmLabel="Yes, Apply"
-        onConfirm={executeBulkApply}
-        onCancel={() => setConfirmOpen(false)}
-      />
+      {/* Attendance rules (read-only) */}
+      <div className="border-t border-[#f0f3ff] pt-4">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-sm font-semibold text-[#151c27]">Attendance rules used by payroll</p>
+          <Link to={`${basePath}/settings`} className="text-xs font-bold text-[#3525cd] inline-flex items-center gap-1 hover:underline">
+            Edit in Organization Settings <ExternalLink size={11} />
+          </Link>
+        </div>
+        {a ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {[
+              ['Work hours', `${hhmm(a.start_time)} – ${hhmm(a.end_time)}`],
+              ['Late check-in after', a.late_entry_threshold_enabled ? hhmm(a.late_threshold) : 'Not enforced'],
+              ['Early leave before', a.early_exit_threshold_enabled ? hhmm(a.early_exit_threshold) : 'Not enforced'],
+              ['Half day below', a.half_day_hours != null ? `${a.half_day_hours} hrs` : '—'],
+              ['Full day from', a.full_day_hours != null ? `${a.full_day_hours} hrs` : '—'],
+              ['Early leaves allowed / month', a.max_early_leave_count != null ? `${a.max_early_leave_count} (extra → LOP)` : '—'],
+            ].map(([l, v]) => (
+              <div key={l} className="rounded-lg bg-[#fafaff] border border-[#e7eefe] px-3 py-2.5">
+                <p className="text-[0.62rem] font-bold uppercase tracking-wider text-[#777587]">{l}</p>
+                <p className="text-sm font-bold text-[#151c27]">{v}</p>
+              </div>
+            ))}
+          </div>
+        ) : <p className="text-xs text-[#9ca3af]">Loading…</p>}
+        <p className="text-[0.68rem] text-[#777587] mt-2">Shift-specific or branch-specific rules, where set, take priority for those employees.</p>
+      </div>
+
+      {/* The few LOP policies that only payroll owns */}
+      <div className="border-t border-[#f0f3ff] pt-4 space-y-4">
+        <p className="text-xs font-bold text-[#464555] uppercase tracking-wide">Payroll LOP policy</p>
+        <Row label="Count holidays as paid" hint="Public / organisation holidays are not treated as LOP">
+          <Toggle checked={form.count_holidays_as_paid} onChange={v => set('count_holidays_as_paid', v)} />
+        </Row>
+        <Row label="Per-day salary basis"
+          hint={form.per_day_salary_basis === 'calendar_days'
+            ? 'LOP per-day rate = Gross ÷ calendar days in the month. LOP day count still uses working days.'
+            : 'LOP per-day rate = Gross ÷ working days of the month.'}>
+          <div className="flex gap-2">
+            {[['working_days', 'Working days'], ['calendar_days', 'Calendar days']].map(([val, label]) => (
+              <button key={val} type="button" onClick={() => set('per_day_salary_basis', val)}
+                className={cn('px-3 py-1.5 rounded-lg text-xs font-bold border transition-all',
+                  form.per_day_salary_basis === val ? 'bg-[#3525cd] text-white border-[#3525cd]' : 'bg-white text-[#464555] border-[#c7c4d8] hover:border-[#3525cd]/40')}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </Row>
+        <Row label="Late arrivals forgiven per month" hint="Late check-ins (after the late threshold above) beyond this count start converting to half days">
+          <NumInput value={form.late_allowance_per_month} onChange={v => set('late_allowance_per_month', v)} min={0} max={31} />
+        </Row>
+        <Row label="Extra lates per half day" hint={`Every ${form.half_day_after_lates} late arrivals beyond the allowance = 1 half day LOP`}>
+          <NumInput value={form.half_day_after_lates} onChange={v => set('half_day_after_lates', v)} min={1} max={10} />
+        </Row>
+      </div>
     </Section>
-  );
-}
-
-// ── Salary Calculation Rules section ─────────────────────────────────────────
-function SalaryRulesSection({ rules, onChange }) {
-  const updateComp = (key, updated) => {
-    onChange({
-      ...rules,
-      components: rules.components.map(c => c.key === key ? updated : c),
-    });
-  };
-
-  return (
-    <div className="space-y-5">
-      {/* Master enable */}
-      <Row
-        label="Enable CTC-based Salary Calculation"
-        hint="When enabled, HR enters a monthly CTC and the system auto-calculates all components using the rules below.">
-        <Toggle checked={!!rules.enabled} onChange={v => onChange({ ...rules, enabled: v })} />
-      </Row>
-
-      {rules.enabled && (
-        <>
-          <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5">
-            <Info size={14} className="text-amber-600 flex-shrink-0 mt-0.5" />
-            <p className="text-xs text-amber-800">
-              Configure how each salary component is calculated from CTC.
-              <strong> Remaining</strong> = fills whatever balance is left so the earnings sum equals gross.
-              <strong> Manual</strong> = HR enters the amount directly.
-              Disabled components are excluded from calculations.
-            </p>
-          </div>
-
-          <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5">
-            <Info size={14} className="text-blue-500 flex-shrink-0 mt-0.5" />
-            <p className="text-xs text-blue-700">
-              PF, ESI, Professional Tax and TDS rates are configured in <strong>Payroll → Statutory Config</strong>.
-              Only non-statutory deductions (Other Deductions, Retention) appear here.
-            </p>
-          </div>
-
-          {GROUPS.map(group => {
-            const comps = rules.components.filter(c => c.group === group.key && !STATUTORY_COMPONENT_KEYS.has(c.key));
-            if (!comps.length) return null;
-            return (
-              <div key={group.key}>
-                <div className="flex items-center gap-2 mb-3">
-                  <span className={cn('text-[0.62rem] font-black uppercase tracking-widest px-2 py-0.5 rounded-full border', group.color)}>
-                    {group.label}
-                  </span>
-                </div>
-                <div className="space-y-2">
-                  {comps.map(comp => (
-                    <ComponentRow key={comp.key} comp={comp} onChange={updated => updateComp(comp.key, updated)} />
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </>
-      )}
-    </div>
   );
 }
 
@@ -530,16 +216,16 @@ function SalaryRulesSection({ rules, onChange }) {
 export default function PayrollSettings() {
   const toast = useToast();
   const qc    = useQueryClient();
+  const { user } = useAuth();
+  const basePath = user?.role === 'root_admin' ? '/root' : '';
   const [form, setForm]   = useState(DEFAULTS);
   const [dirty, setDirty] = useState(false);
-  const [salaryRules, setSalaryRules] = useState(mergeWithDefaults(null));
 
   const { data: settings, isLoading } = usePayrollSettings({ staleTime: 0 });
 
   useEffect(() => {
     if (settings) {
       setForm({ ...DEFAULTS, ...settings });
-      setSalaryRules(mergeWithDefaults(settings.salary_calculation_rules));
       setDirty(false);
     }
   }, [settings]);
@@ -549,16 +235,21 @@ export default function PayrollSettings() {
     setDirty(true);
   };
 
-  const handleRulesChange = (updated) => {
-    setSalaryRules(updated);
-    setDirty(true);
-  };
-
   const saveMut = useMutation({
-    mutationFn: () => apiPut('/payroll/settings', { ...form, salary_calculation_rules: salaryRules }),
+    mutationFn: () => {
+      const payload = {};
+      for (const k of SAVE_KEYS) {
+        // The template columns arrive with payroll_simplification_2026_10_07.sql — until a database has them,
+        // do not send untouched defaults (that would make every save fail on the unknown column).
+        if (NEW_COLUMN_KEYS.includes(k) && !(settings && k in settings) && JSON.stringify(form[k]) === JSON.stringify(DEFAULTS[k])) continue;
+        payload[k] = form[k];
+      }
+      return apiPut('/payroll/settings', payload);
+    },
     onSuccess: () => {
       toast('Payroll settings saved', 'success');
       qc.invalidateQueries({ queryKey: ['payroll-settings'] });
+      qc.invalidateQueries({ queryKey: ['probation-list'] });
       setDirty(false);
     },
     onError: e => toast(e.message, 'error'),
@@ -573,9 +264,7 @@ export default function PayrollSettings() {
   if (isLoading) {
     return (
       <div className="space-y-5">
-        <div className="page-header">
-          <div className="page-title">Payroll Settings</div>
-        </div>
+        <div className="page-header"><div className="page-title">Payroll Settings</div></div>
         <div className="flex items-center justify-center py-20">
           <div className="w-6 h-6 border-2 border-[#3525cd]/30 border-t-[#3525cd] rounded-full animate-spin" />
         </div>
@@ -585,7 +274,6 @@ export default function PayrollSettings() {
 
   return (
     <div className={`space-y-5${dirty ? ' pb-20' : ''}`}>
-      {/* Header */}
       <div className="page-header">
         <div>
           <div className="page-title">Payroll Settings</div>
@@ -598,12 +286,8 @@ export default function PayrollSettings() {
         <button
           onClick={() => saveMut.mutate()}
           disabled={!dirty || saveMut.isPending}
-          className={cn(
-            'flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all',
-            dirty
-              ? 'bg-[#3525cd] text-white hover:bg-[#2a1fb0] shadow-sm'
-              : 'bg-[#f0f3ff] text-[#777587] cursor-not-allowed'
-          )}>
+          className={cn('flex items-center gap-2 px-4 py-2.5 rounded-xl text-sm font-bold transition-all',
+            dirty ? 'bg-[#3525cd] text-white hover:bg-[#2a1fb0] shadow-sm' : 'bg-[#f0f3ff] text-[#777587] cursor-not-allowed')}>
           <Save size={15} />
           {saveMut.isPending ? 'Saving…' : 'Save Settings'}
         </button>
@@ -627,103 +311,25 @@ export default function PayrollSettings() {
         </Row>
       </Section>
 
-      {/* Working Days */}
-      <Section
-        icon={<Users size={15} className="text-[#3525cd]" />}
-        title="Working Days Rules"
-        subtitle="Controls how expected working days are calculated for LOP">
-        <Row label="Working Days Calculation" hint="Calendar: count from actual weekdays. Fixed: use a set number.">
-          <div className="flex gap-2">
-            {[['calendar','Calendar'], ['fixed','Fixed']].map(([val, label]) => (
-              <button key={val} onClick={() => set('working_days_rule', val)}
-                className={cn(
-                  'px-3 py-1.5 rounded-lg text-xs font-bold border transition-all',
-                  form.working_days_rule === val
-                    ? 'bg-[#3525cd] text-white border-[#3525cd]'
-                    : 'bg-white text-[#464555] border-[#c7c4d8] hover:border-[#3525cd]/40'
-                )}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </Row>
-        {form.working_days_rule === 'fixed' && (
-          <Row label="Fixed Working Days / Month" hint="Used as the denominator for per-day salary calculation">
-            <NumInput value={form.fixed_working_days} onChange={v => set('fixed_working_days', v)} min={1} max={31} />
-          </Row>
-        )}
-        <Row label="Weekend Policy" hint="Determines which days are weekends (unpaid)">
-          <select
-            value={form.weekend_policy}
-            onChange={e => set('weekend_policy', e.target.value)}
-            className="border border-[#c7c4d8] rounded-lg px-3 py-1.5 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd] bg-white">
-            <option value="sat_sun">Saturday + Sunday</option>
-            <option value="sun_only">Sunday Only</option>
-            <option value="alternate_sat">Alternate Saturday + Sunday</option>
-            <option value="none">No Weekends (6-day work week)</option>
-          </select>
-        </Row>
-        <Row label="Count Holidays as Paid" hint="Public/org holidays will not count as LOP">
-          <Toggle checked={form.count_holidays_as_paid} onChange={v => set('count_holidays_as_paid', v)} />
-        </Row>
-        <Row
-          label="Per-Day Salary Basis"
-          hint={form.per_day_salary_basis === 'calendar_days'
-            ? 'LOP per-day rate = Gross ÷ calendar days in month (e.g. Aug = ÷31). LOP day count still uses working days.'
-            : 'LOP per-day rate = Gross ÷ actual working (non-weekend) days in month.'}>
-          <div className="flex gap-2">
-            {[['working_days','Working Days'], ['calendar_days','Calendar Days']].map(([val, label]) => (
-              <button key={val} onClick={() => set('per_day_salary_basis', val)}
-                className={cn(
-                  'px-3 py-1.5 rounded-lg text-xs font-bold border transition-all',
-                  form.per_day_salary_basis === val
-                    ? 'bg-[#3525cd] text-white border-[#3525cd]'
-                    : 'bg-white text-[#464555] border-[#c7c4d8] hover:border-[#3525cd]/40'
-                )}>
-                {label}
-              </button>
-            ))}
-          </div>
-        </Row>
-      </Section>
+      <OrgDerivedRules form={form} set={set} basePath={basePath} />
 
-      {/* Attendance Rules */}
-      <Section
-        icon={<Clock size={15} className="text-[#3525cd]" />}
-        title="Attendance Rules"
-        subtitle="Controls how late arrivals, half days, and LOP are calculated">
-        <Row label="Grace Period (minutes)" hint="Arrivals within grace window are not counted as late">
-          <NumInput value={form.grace_minutes} onChange={v => set('grace_minutes', v)} min={0} max={60} />
-        </Row>
-        <Row label="Late Allowances per Month" hint="First N late arrivals are forgiven before counting toward half-day">
-          <NumInput value={form.late_allowance_per_month} onChange={v => set('late_allowance_per_month', v)} min={0} max={31} />
-        </Row>
-        <Row label="Early Exit Allowance (minutes)" hint="Leaving early by less than this is not penalized">
-          <NumInput value={form.early_exit_allowance_minutes} onChange={v => set('early_exit_allowance_minutes', v)} min={0} max={120} />
-        </Row>
-        <Row label="Lates Before Half Day" hint={`Every ${form.half_day_after_lates} additional lates (after allowance) = 1 half day`}>
-          <NumInput value={form.half_day_after_lates} onChange={v => set('half_day_after_lates', v)} min={1} max={10} />
-        </Row>
-        <Row label="Half Days Before LOP" hint={`Every ${form.lop_after_half_days} half days = 1 LOP day`}>
-          <NumInput value={form.lop_after_half_days} onChange={v => set('lop_after_half_days', v)} min={1} max={10} />
-        </Row>
-      </Section>
+      {/* Statutory + salary pointers (no duplicate configuration here) */}
+      <div className="rounded-xl border border-[#e7eefe] bg-[#f9f9ff] px-5 py-4 flex items-start gap-3">
+        <Scale size={15} className="text-[#3525cd] flex-shrink-0 mt-0.5" />
+        <p className="text-xs text-[#464555]">
+          <strong>PF, ESI, Professional Tax and TDS</strong> are configured in{' '}
+          <Link to={`${basePath}/statutory/config`} className="font-bold text-[#3525cd] underline">Statutory Compliance</Link> and used by payroll as-is.{' '}
+          <strong>CTC-based salary rules</strong> are on the{' '}
+          <Link to={`${basePath}/payroll/salary`} className="font-bold text-[#3525cd] underline">Salary Structure</Link> page.
+        </p>
+      </div>
 
-      {/* ── Salary Calculation Rules ─────────────────────────────────────── */}
-      <Section
-        icon={<IndianRupee size={15} className="text-[#3525cd]" />}
-        title="Salary Calculation Rules"
-        subtitle="Configure how CTC is broken down into individual salary components when setting salary structures">
-        <SalaryRulesSection rules={salaryRules} onChange={handleRulesChange} />
-      </Section>
+      <ProbationManager form={form} set={set} settings={settings} />
 
-      {/* ── Probation Management ─────────────────────────────────────────────── */}
-      <ProbationSection form={form} set={set} settings={settings} />
-
-      {/* Automation */}
+      {/* Payslip Generation Settings (formerly "Automation") */}
       <Section
         icon={<Settings size={15} className="text-[#3525cd]" />}
-        title="Automation"
+        title="Payslip Generation Settings"
         subtitle="Control automatic payroll generation, publishing, and payslip delivery">
         <Row label="Auto-generate Payroll" hint="Platform scheduler evaluates this organization's policy every hour">
           <Toggle checked={form.auto_generate_payroll} onChange={v => set('auto_generate_payroll', v)} />
@@ -738,20 +344,8 @@ export default function PayrollSettings() {
               <Row label="Generate Time" hint="Earliest hour (in org timezone) the scheduler may generate payroll">
                 <TimeInput value={form.payroll_generation_time} onChange={v => set('payroll_generation_time', v || '01:00')} />
               </Row>
-              <Row label="Generate For" hint="Which month's payroll to generate on the configured day">
-                <div className="flex gap-2">
-                  {[['PREVIOUS', 'Previous month'], ['CURRENT', 'Current month']].map(([val, label]) => (
-                    <button key={val} onClick={() => set('payroll_generate_for', val)}
-                      className={cn(
-                        'px-3 py-1.5 rounded-lg text-xs font-bold border transition-all',
-                        form.payroll_generate_for === val
-                          ? 'bg-[#3525cd] text-white border-[#3525cd]'
-                          : 'bg-white text-[#464555] border-[#c7c4d8] hover:border-[#3525cd]/40'
-                      )}>
-                      {label}
-                    </button>
-                  ))}
-                </div>
+              <Row label="Generate For" hint="Payroll is generated for the month that just ended — never for an incomplete month">
+                <span className="px-3 py-1.5 rounded-lg text-xs font-bold border bg-[#3525cd] text-white border-[#3525cd]">Previous month</span>
               </Row>
             </div>
             <div className="border-t border-[#f0f3ff] pt-4 space-y-4">
@@ -805,179 +399,8 @@ export default function PayrollSettings() {
         )}
       </Section>
 
-      {/* Payslip Branding */}
-      <Section icon={<IndianRupee size={16} className="text-[#3525cd]" />}
-        title="Payslip Branding"
-        subtitle="Company details printed on the payslip header and footer. Leave blank if not applicable.">
-        <div className="space-y-5">
+      <PayslipBranding form={form} set={set} />
 
-          {/* Priority note */}
-          <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-lg px-3 py-2.5">
-            <Info size={14} className="text-blue-500 flex-shrink-0 mt-0.5" />
-            <p className="text-xs text-blue-700">
-              When <strong>Registered Office</strong> or <strong>Corporate Office</strong> are filled in, the payslip shows them as separate labelled sections.
-              If only <strong>Generic Company Address</strong> is set, it is shown as a plain address block (backward-compatible).
-              <strong> Company Full Name</strong> overrides the organization name in the payslip header.
-            </p>
-          </div>
-
-          {/* ── Company Name ── */}
-          <div>
-            <p className="text-sm font-semibold text-[#151c27] mb-1">Company Full Name</p>
-            <p className="text-[0.68rem] text-[#777587] mb-1.5">
-              Full legal company name shown in bold at the top-right of every payslip.
-              If blank, the organization name is used.
-            </p>
-            <input type="text"
-              value={form.payslip_company_fullname || ''}
-              onChange={e => set('payslip_company_fullname', e.target.value)}
-              placeholder="e.g. Acme Technologies Pvt. Ltd."
-              className="w-full border border-[#c7c4d8] rounded-lg px-3 py-2 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd]"
-            />
-          </div>
-
-          {/* ── Registered Office ── */}
-          <div>
-            <p className="text-sm font-semibold text-[#151c27] mb-1">Registered Office</p>
-            <p className="text-[0.68rem] text-[#777587] mb-1.5">
-              Shown with a <strong>Registered Office</strong> label in the payslip header.
-              Use line breaks for multi-line addresses.
-            </p>
-            <textarea
-              rows={2}
-              value={form.payslip_registered_address || ''}
-              onChange={e => set('payslip_registered_address', e.target.value)}
-              placeholder={`e.g. Office No. 206 & 207, Dalal Street, Block 53, Zone 5\nGift City, Gandhinagar, Gujarat – 382050`}
-              className="w-full border border-[#c7c4d8] rounded-lg px-3 py-2 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd] resize-none"
-            />
-          </div>
-
-          {/* ── Corporate Office ── */}
-          <div>
-            <p className="text-sm font-semibold text-[#151c27] mb-1">Corporate Office</p>
-            <p className="text-[0.68rem] text-[#777587] mb-1.5">
-              Shown with a <strong>Corporate Office</strong> label in the payslip header.
-              Use line breaks for multi-line addresses.
-            </p>
-            <textarea
-              rows={2}
-              value={form.payslip_corporate_address || ''}
-              onChange={e => set('payslip_corporate_address', e.target.value)}
-              placeholder={`e.g. 2nd Floor, O Block, Mondeal Retail Park\nNr. Rajpath Club, S. G. Highway, Ahmedabad – 380059`}
-              className="w-full border border-[#c7c4d8] rounded-lg px-3 py-2 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd] resize-none"
-            />
-          </div>
-
-          {/* ── Contact Details ── */}
-          <div>
-            <p className="text-sm font-semibold text-[#151c27] mb-1">Contact Details</p>
-            <p className="text-[0.68rem] text-[#777587] mb-1.5">
-              Phone number and/or email shown below the office addresses on the payslip.
-            </p>
-            <input type="text"
-              value={form.payslip_contact_details || ''}
-              onChange={e => set('payslip_contact_details', e.target.value)}
-              placeholder="e.g. Office: +91 98765 43210  |  Mail: hr@company.in"
-              className="w-full border border-[#c7c4d8] rounded-lg px-3 py-2 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd]"
-            />
-          </div>
-
-          {/* ── Divider + Legacy fallback ── */}
-          <div className="border-t border-[#f0f3ff] pt-4">
-            <p className="text-[0.68rem] font-bold text-[#777587] uppercase tracking-wider mb-3">
-              Generic Address (fallback)
-            </p>
-            <div>
-              <p className="text-sm font-semibold text-[#151c27] mb-1">Company Address</p>
-              <p className="text-[0.68rem] text-[#777587] mb-1.5">
-                Used only when Registered Office and Corporate Office above are both blank.
-                Shown as a plain address block in the payslip header.
-              </p>
-              <textarea
-                rows={3}
-                value={form.payslip_company_address || ''}
-                onChange={e => set('payslip_company_address', e.target.value)}
-                placeholder={`e.g. 2nd Floor, O Block, Mondeal Retail Park\nSG Highway, Ahmedabad – 380054`}
-                className="w-full border border-[#c7c4d8] rounded-lg px-3 py-2 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd] resize-none"
-              />
-            </div>
-          </div>
-
-          {/* ── CIN / Registration / Footer ── */}
-          <div className="border-t border-[#f0f3ff] pt-4 space-y-4">
-            <p className="text-[0.68rem] font-bold text-[#777587] uppercase tracking-wider mb-1">
-              Legal &amp; Footer
-            </p>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <p className="text-sm font-semibold text-[#151c27] mb-1">CIN / GST Number</p>
-                <p className="text-[0.68rem] text-[#777587] mb-1.5">
-                  Company identification number shown below the company name.
-                </p>
-                <input type="text"
-                  value={form.payslip_company_cin || ''}
-                  onChange={e => set('payslip_company_cin', e.target.value)}
-                  placeholder="e.g. CIN No.: U67120GJ2012PTC116832"
-                  className="w-full border border-[#c7c4d8] rounded-lg px-3 py-2 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd]"
-                />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-[#151c27] mb-1">Company P.F. No.</p>
-                <p className="text-[0.68rem] text-[#777587] mb-1.5">
-                  Company-level PF registration number printed on all payslips (different from individual employee PF numbers).
-                </p>
-                <input type="text"
-                  value={form.payslip_company_pf_no || ''}
-                  onChange={e => set('payslip_company_pf_no', e.target.value)}
-                  placeholder="e.g. GJAHM0001234000"
-                  className="w-full border border-[#c7c4d8] rounded-lg px-3 py-2 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd]"
-                />
-              </div>
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div>
-                <p className="text-sm font-semibold text-[#151c27] mb-1">Company ESI No.</p>
-                <p className="text-[0.68rem] text-[#777587] mb-1.5">
-                  Company-level ESIC registration number printed on all payslips (different from individual employee ESI numbers).
-                </p>
-                <input type="text"
-                  value={form.payslip_company_esic_no || ''}
-                  onChange={e => set('payslip_company_esic_no', e.target.value)}
-                  placeholder="e.g. 37001945660000999"
-                  className="w-full border border-[#c7c4d8] rounded-lg px-3 py-2 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd]"
-                />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-[#151c27] mb-1">Registration Number</p>
-                <p className="text-[0.68rem] text-[#777587] mb-1.5">
-                  Any additional registration / licence number.
-                </p>
-                <input type="text"
-                  value={form.payslip_company_registration || ''}
-                  onChange={e => set('payslip_company_registration', e.target.value)}
-                  placeholder="e.g. SEBI Reg: INZ000242435"
-                  className="w-full border border-[#c7c4d8] rounded-lg px-3 py-2 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd]"
-                />
-              </div>
-            </div>
-            <div>
-              <p className="text-sm font-semibold text-[#151c27] mb-1">Payslip Footer Note</p>
-              <p className="text-[0.68rem] text-[#777587] mb-1.5">
-                Disclaimer text at the bottom of every payslip. If blank, a generic note is used.
-              </p>
-              <input type="text"
-                value={form.payslip_footer_note || ''}
-                onChange={e => set('payslip_footer_note', e.target.value)}
-                placeholder="e.g. This is a computer generated salary slip and does not require a signature."
-                className="w-full border border-[#c7c4d8] rounded-lg px-3 py-2 text-sm text-[#151c27] focus:outline-none focus:border-[#3525cd]"
-              />
-            </div>
-          </div>
-
-        </div>
-      </Section>
-
-      {/* Footer */}
       <div className="rounded-xl border border-[#e7eefe] bg-[#f9f9ff] px-5 py-4 flex items-start gap-3">
         <Info size={14} className="text-[#3525cd] flex-shrink-0 mt-0.5" />
         <p className="text-xs text-[#777587]">
@@ -986,13 +409,12 @@ export default function PayrollSettings() {
         </p>
       </div>
 
-      {/* Fixed save bar */}
       {dirty && (
         <div className="fixed bottom-0 left-0 md:left-64 right-0 z-20 bg-white border-t border-[#e7eefe] py-3 px-4 md:px-7 flex items-center justify-between shadow-lg">
           <p className="text-xs text-[#777587] font-semibold">You have unsaved changes.</p>
           <div className="flex items-center gap-2">
             <button
-              onClick={() => { setForm({ ...DEFAULTS, ...settings }); setSalaryRules(mergeWithDefaults(settings?.salary_calculation_rules)); setDirty(false); }}
+              onClick={() => { setForm({ ...DEFAULTS, ...settings }); setDirty(false); }}
               className="text-xs font-semibold text-[#777587] hover:text-[#464555] px-3 py-2">
               Discard
             </button>

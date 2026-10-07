@@ -2,6 +2,7 @@
 
 const { pool }           = require('../config/db');
 const { getTransporter } = require('./emailService');
+const { getPayslipTemplate } = require('./payslipTemplates');
 
 const CHUNK_SIZE     = parseInt(process.env.PAYROLL_EMAIL_CHUNK_SIZE     || '10', 10);
 const CHUNK_DELAY_MS = parseInt(process.env.PAYROLL_EMAIL_CHUNK_DELAY_MS || '500', 10);
@@ -43,18 +44,8 @@ function getTransport() { return getTransporter(); }
 async function fetchRichData(organizationId, userId, payslipId) {
   const [orgRes, psRes, statRes, bankRes, slipRes, clRes] = await Promise.all([
     pool.query('SELECT name, logo_url FROM organizations WHERE id = $1', [organizationId]),
-    // Try full query with new structured address fields; fall back to basic query if migration not yet run
-    pool.query(
-      `SELECT payslip_company_address, payslip_company_cin, payslip_footer_note,
-              payslip_company_fullname, payslip_registered_address,
-              payslip_corporate_address, payslip_contact_details,
-              payslip_company_pf_no, payslip_company_esic_no
-         FROM payroll_settings WHERE organization_id = $1`,
-      [organizationId]
-    ).catch(() => pool.query(
-      'SELECT payslip_company_address, payslip_company_cin, payslip_footer_note FROM payroll_settings WHERE organization_id = $1',
-      [organizationId]
-    )),
+    // SELECT * so branding columns that a given DB has not migrated yet are simply absent (→ defaults).
+    pool.query('SELECT * FROM payroll_settings WHERE organization_id = $1', [organizationId]),
     pool.query(
       'SELECT pan_number, uan_no, esi_no, pf_no, position FROM users WHERE id = $1',
       [userId]
@@ -120,6 +111,10 @@ async function fetchRichData(organizationId, userId, payslipId) {
     contactDetails:      ps.payslip_contact_details     || '',
     companyPfNo:         ps.payslip_company_pf_no        || '',
     companyEsiNo:        ps.payslip_company_esic_no      || '',
+    template:            ps.payslip_template             || 'classic',
+    watermarkMode:       ps.payslip_watermark_mode       || 'logo',
+    watermarkText:       ps.payslip_watermark_text       || '',
+    customFields:        Array.isArray(ps.payslip_custom_fields) ? ps.payslip_custom_fields : [],
     pan:      statRes.rows[0]?.pan_number || 'N/A',
     clBalance: (() => {
       const r = clRes.rows[0];
@@ -151,7 +146,9 @@ async function generatePayslipPDF(payslip, employee, orgName, organizationId) {
     orgName, logoBuffer: null, orgAddress: '', orgCin: '',
     footerNote: 'This is a computer generated salary slip and does not require a signature.',
     pan: 'N/A', uan: 'N/A', esiNo: 'N/A', pfNo: 'N/A', bankName: 'N/A', maskedAcc: 'N/A', position: '', attSnap: {},
+    template: 'classic', watermarkMode: 'logo', watermarkText: '', customFields: [],
   };
+  const tpl = () => getPayslipTemplate(rich.template);
   if (organizationId && payslip.user_id) {
     try {
       rich = await fetchRichData(organizationId, payslip.user_id, payslip.payslip_id);
@@ -214,8 +211,21 @@ async function generatePayslipPDF(payslip, employee, orgName, organizationId) {
     const W   = 535;      // usable width
     const R   = L + W;    // right edge
 
-    // ── Watermark: logo centred on page, drawn FIRST so all content renders on top ─
-    if (rich.logoBuffer) {
+    const T = tpl();
+    const customAt = pos => (rich.customFields || []).filter(f => f.position === pos && (f.label || f.value));
+
+    // ── Watermark: drawn FIRST so all content renders on top ───────────────────
+    // 'text' → admin-defined diagonal text, 'none' → nothing, 'logo' (default) → company logo.
+    if (rich.watermarkMode === 'text' && rich.watermarkText) {
+      try {
+        doc.save();
+        doc.opacity(0.1);
+        doc.fillColor(T.accent).font('Helvetica-Bold').fontSize(64);
+        doc.rotate(-35, { origin: [doc.page.width / 2, doc.page.height / 2] });
+        doc.text(rich.watermarkText, 0, doc.page.height / 2 - 32, { width: doc.page.width, align: 'center', lineBreak: false });
+        doc.restore();
+      } catch {}
+    } else if (rich.watermarkMode !== 'none' && rich.watermarkMode !== 'text' && rich.logoBuffer) {
       try {
         doc.save();
         doc.opacity(0.13);
@@ -284,16 +294,30 @@ async function generatePayslipPDF(payslip, employee, orgName, organizationId) {
       });
     }
 
+    // Admin-defined company details placed in the header
+    customAt('header').forEach(f => {
+      doc.font('Helvetica').fontSize(7.5).fillColor('#444')
+         .text(`${f.label}${f.label && f.value ? ': ' : ''}${f.value}`, AX, ry, { width: AW, align: 'center' });
+      ry = doc.y + 1;
+    });
+
     let y = Math.max(ry + 4, 88);
 
     // ── Title bar ─────────────────────────────────────────────────────────
-    doc.moveTo(L, y).lineTo(R, y).lineWidth(0.5).strokeColor('#999').stroke();
-    y += 3;
-    doc.font('Helvetica-Bold').fontSize(10).fillColor('#000')
-       .text(`Salary Slip for the Month of ${period}`, L, y, { width: W, align: 'center' });
-    y += 14;
-    doc.moveTo(L, y).lineTo(R, y).lineWidth(0.5).strokeColor('#999').stroke();
-    y += 8;
+    if (T.titleBar === 'filled') {
+      doc.rect(L, y, W, 18).fillColor(T.accent).fill();
+      doc.font('Helvetica-Bold').fontSize(10).fillColor(T.titleText)
+         .text(`Salary Slip for the Month of ${period}`, L, y + 4, { width: W, align: 'center' });
+      y += 18 + 8;
+    } else {
+      doc.moveTo(L, y).lineTo(R, y).lineWidth(0.5).strokeColor('#999').stroke();
+      y += 3;
+      doc.font('Helvetica-Bold').fontSize(10).fillColor('#000')
+         .text(`Salary Slip for the Month of ${period}`, L, y, { width: W, align: 'center' });
+      y += 14;
+      doc.moveTo(L, y).lineTo(R, y).lineWidth(0.5).strokeColor('#999').stroke();
+      y += 8;
+    }
 
     // ── Employee info (4 columns, no borders) ─────────────────────────────
     const ic1 = L,       iw1 = 92;
@@ -315,6 +339,11 @@ async function generatePayslipPDF(payslip, employee, orgName, organizationId) {
     infoRow('Department',    dept || '—',             'ESI No.',         rich.esiNo);
     infoRow('Bank Name',     rich.bankName,   'PAN No.',    rich.pan);
     infoRow('Bank A/c No.', rich.maskedAcc,  'Attendance', `${totalCalDays} out of ${totalCalDays}`);
+    const infoExtra = customAt('employee_info');
+    for (let i = 0; i < infoExtra.length; i += 2) {
+      const a = infoExtra[i], b = infoExtra[i + 1];
+      infoRow(a.label, a.value, b ? b.label : '', b ? b.value : '');
+    }
     y += 4;
 
     // ── Salary table ──────────────────────────────────────────────────────
@@ -326,22 +355,22 @@ async function generatePayslipPDF(payslip, employee, orgName, organizationId) {
 
     function tableRect(row, col, h, fill) {
       if (fill) doc.rect(tc[col], row, tw[col], h).fillColor(fill).fill();
-      doc.rect(tc[col], row, tw[col], h).strokeColor('#aaa').lineWidth(0.4).stroke();
+      doc.rect(tc[col], row, tw[col], h).strokeColor(T.border).lineWidth(0.4).stroke();
     }
 
     function allCols(row, h, fill) {
       tw.forEach((_, i) => tableRect(row, i, h, fill));
     }
 
-    function cellText(text, col, row, h, align, bold) {
-      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(8.5).fillColor('#000')
+    function cellText(text, col, row, h, align, bold, color) {
+      doc.font(bold ? 'Helvetica-Bold' : 'Helvetica').fontSize(8.5).fillColor(color || '#000')
          .text(text, tc[col] + 5, row + (h - 9) / 2, { width: tw[col] - 10, align: align || 'left', lineBreak: false });
     }
 
     // Header row
-    allCols(y, hH, '#e8e8e8');
+    allCols(y, hH, T.tableHead);
     ['Actuals','Amount(Rs)','Earnings','Amount(Rs)','Deductions','Amount(Rs)'].forEach((h, i) => {
-      cellText(h, i, y, hH, i % 2 === 1 ? 'right' : 'left', true);
+      cellText(h, i, y, hH, i % 2 === 1 ? 'right' : 'left', true, T.tableHeadText);
     });
     y += hH;
 
@@ -349,7 +378,7 @@ async function generatePayslipPDF(payslip, employee, orgName, organizationId) {
     for (let i = 0; i < maxRows; i++) {
       const er = earningRows[i];
       const dr = deductionRows[i];
-      allCols(y, rH, null);
+      allCols(y, rH, T.zebra && i % 2 === 1 ? T.zebra : null);
       if (er) {
         cellText(er.label,          0, y, rH, 'left');
         cellText(fmtAmt(er.value),  1, y, rH, 'right');
@@ -364,7 +393,7 @@ async function generatePayslipPDF(payslip, employee, orgName, organizationId) {
     }
 
     // Totals row
-    allCols(y, rH, '#f0f0f0');
+    allCols(y, rH, T.totals);
     [['Total',fmtAmt(grossSalary),'Gross',fmtAmt(grossSalary),'Deduction',fmtAmt(totalDed)]].forEach(row => {
       row.forEach((v, i) => cellText(v, i, y, rH, i % 2 === 1 ? 'right' : 'left', true));
     });
@@ -375,7 +404,7 @@ async function generatePayslipPDF(payslip, employee, orgName, organizationId) {
     // Columns 4 and 5 are individual cells for Net Salary label and value.
     const nH = 18;
     const mergedW = tc[4] - tc[0];  // width of merged cols 0-3
-    doc.rect(tc[0], y, mergedW, nH).strokeColor('#aaa').lineWidth(0.4).stroke();
+    doc.rect(tc[0], y, mergedW, nH).strokeColor(T.border).lineWidth(0.4).stroke();
     tableRect(y, 4, nH, null);
     tableRect(y, 5, nH, null);
     doc.font('Helvetica').fontSize(7.5).fillColor('#000')
@@ -431,6 +460,11 @@ async function generatePayslipPDF(payslip, employee, orgName, organizationId) {
     // ── Footer ────────────────────────────────────────────────────────────
     doc.moveTo(L, y).lineTo(R, y).lineWidth(0.5).strokeColor('#ddd').stroke();
     y += 5;
+    customAt('footer').forEach(f => {
+      doc.font('Helvetica').fontSize(7.5).fillColor('#444')
+         .text(`${f.label}${f.label && f.value ? ': ' : ''}${f.value}`, L, y, { width: W, align: 'center' });
+      y = doc.y + 2;
+    });
     doc.font('Helvetica').fontSize(7.5).fillColor('#555')
        .text(rich.footerNote, L, y, { width: W, align: 'center' });
     y += 11;

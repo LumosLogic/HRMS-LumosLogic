@@ -309,6 +309,7 @@ async function runProbationExpiryCheck() {
           AND COALESCE(probation_applicable, false) = false
           AND COALESCE(employee_status, 'active') NOT IN ('inactive', 'resigned', 'terminated', 'probation')
           AND COALESCE(joining_date::text, date_of_joining) IS NOT NULL
+          AND confirmation_date IS NULL
       `, [oId]);
 
       for (const emp of newEmps) {

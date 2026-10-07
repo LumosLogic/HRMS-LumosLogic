@@ -4,12 +4,12 @@ const { sameId } = require('../../utils/ids');
 const { db, pool } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
 const { hasPermission, hasAnyPermission } = require('../../middleware/permissions');
-const { orgId } = require('../../utils/helpers');
+const { orgId, getEffectiveWorkSchedule } = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { getFilterState, getBranchUserSQLFilter, resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
 const { validateBranchAccess, getUserBranchAccess } = require('../../services/branchService');
 const { calculatePayroll, PayrollError } = require('../../services/payrollEngine');
-const { computeProbationDates } = require('../../utils/employeeStatus');
+const { computeProbationDates, legacyStatusFor } = require('../../utils/employeeStatus');
 
 // users.ctc / users.salary_effective_date are only a display cache of the ACTIVE employee_salary_structures row
 // (payroll never reads them). Keep the cache in step so the Employees/Profile screens cannot show a different salary.
@@ -193,9 +193,71 @@ const SETTINGS_DEFAULTS = {
   // Company-level statutory references — separate from individual employee PF/ESIC
   payslip_company_pf_no:          null,
   payslip_company_esic_no:        null,
+  // Payslip look: selected template, watermark, and admin-defined company detail fields
+  payslip_template:               'classic',
+  payslip_watermark_mode:         'logo',     // 'logo' | 'text' | 'none'
+  payslip_watermark_text:         null,
+  payslip_custom_fields:          [],         // [{ label, value, position: 'header' | 'employee_info' | 'footer' }]
 };
 
+const { PAYSLIP_TEMPLATE_IDS, sanitizePayslipBranding } = require('../../services/payslipTemplates');
+
 const SETTINGS_FIELDS = Object.keys(SETTINGS_DEFAULTS);
+
+// GET /api/payroll/settings/org-rules?month=&year= — read-only view of the rules payroll CONSUMES from the
+// organisation settings (work schedule, holidays, attendance thresholds). Nothing here is configured in Payroll.
+router.get('/settings/org-rules', auth, hasPermission('payroll', 'view'), withBranchContext, async (req, res) => {
+  try {
+    const oId   = orgId(req);
+    const now   = new Date();
+    const month = parseInt(req.query.month, 10) || now.getMonth() + 1;
+    const year  = parseInt(req.query.year, 10)  || now.getFullYear();
+    const st    = getFilterState(req.branchContext);
+    const branchId = st.type === 'specific' ? Number(st.branchId) : null;
+
+    const sched = (await getEffectiveWorkSchedule(oId, branchId)) || {};
+    const workDays = new Set(String(sched.work_days || '1,2,3,4,5').split(',').map(Number).filter(n => !isNaN(n)));
+
+    const start = `${year}-${String(month).padStart(2, '0')}-01`;
+    const total = new Date(year, month, 0).getDate();
+    const end   = `${year}-${String(month).padStart(2, '0')}-${String(total).padStart(2, '0')}`;
+    const { rows: hols } = await pool.query(
+      `SELECT date::text AS date, name FROM holidays
+        WHERE organization_id = $1 AND date >= $2 AND date <= $3
+          AND ($4::bigint IS NULL OR branch_id IS NULL OR branch_id = $4)
+        ORDER BY date`, [oId, start, end, branchId]);
+
+    let weeklyOffs = 0, holidaysOnWorkDays = 0;
+    const holSet = new Set(hols.map(h => h.date));
+    for (let d = 1; d <= total; d++) {
+      const dow = new Date(year, month - 1, d).getDay();
+      const ds  = `${year}-${String(month).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+      if (!workDays.has(dow)) weeklyOffs++;
+      else if (holSet.has(ds)) holidaysOnWorkDays++;
+    }
+
+    res.json({
+      month, year, branchId,
+      totalDays:   total,
+      weeklyOffs,
+      holidays:    holidaysOnWorkDays,
+      holidayList: hols,
+      workingDays: total - weeklyOffs - holidaysOnWorkDays,
+      workDays:    [...workDays].sort(),
+      attendance: {
+        start_time:                   sched.start_time ?? null,
+        end_time:                     sched.end_time ?? null,
+        late_threshold:               sched.late_threshold ?? null,
+        late_entry_threshold_enabled: sched.late_entry_threshold_enabled !== false,
+        early_exit_threshold:         sched.early_exit_threshold ?? null,
+        early_exit_threshold_enabled: sched.early_exit_threshold_enabled !== false,
+        half_day_hours:               sched.half_day_hours ?? null,
+        full_day_hours:               sched.full_day_hours ?? null,
+        max_early_leave_count:        sched.max_early_leave_count ?? null,
+      },
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 
 // GET /api/payroll/settings
 router.get('/settings', auth, hasPermission('payroll', 'view'), async (req, res) => {
@@ -216,6 +278,10 @@ router.put('/settings', auth, hasPermission('payroll', 'manage_settings'), async
     for (const key of SETTINGS_FIELDS) {
       if (req.body[key] !== undefined) payload[key] = req.body[key];
     }
+    const brandingErr = sanitizePayslipBranding(payload);
+    if (brandingErr) return res.status(400).json({ error: brandingErr });
+    // JSONB column: the adapter would send a JS array as a Postgres array, so serialise explicitly
+    if (Array.isArray(payload.payslip_custom_fields)) payload.payslip_custom_fields = JSON.stringify(payload.payslip_custom_fields);
     if (!Object.keys(payload).length) {
       return res.status(400).json({ error: 'No valid fields provided' });
     }
@@ -246,6 +312,141 @@ router.put('/settings', auth, hasPermission('payroll', 'manage_settings'), async
     });
 
     res.json(result);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ─── Probation management: two lists + add / remove ──────────────────────────
+// These reuse the existing probation fields on users (probation_applicable, probation_months,
+// probation_start_date, probation_end_date, employee_status, employment_type, confirmation_date) — the same
+// fields the Employees form, the employee profile and the daily probation cron already read and write.
+
+const PROBATION_USER_COLS = `u.id, u.name, u.employee_id, u.department, u.position, u.avatar_color,
+       u.employee_status, u.employment_type, u.probation_months, u.confirmation_date,
+       u.probation_start_date::text AS probation_start_date, u.probation_end_date::text AS probation_end_date,
+       COALESCE(u.joining_date::text, u.date_of_joining, TO_CHAR(u.created_at, 'YYYY-MM-DD')) AS joining_date`;
+
+// GET /api/payroll/probation — { settings, onProbation[], notOnProbation[] }
+router.get('/probation', auth, hasPermission('payroll', 'view'), withBranchContext, async (req, res) => {
+  try {
+    const oId = orgId(req);
+    const branchState = getFilterState(req.branchContext);
+    const { data: settings } = await db.from('payroll_settings')
+      .select('probation_enabled, default_probation_months').eq('organization_id', oId).maybeSingle();
+    const out = {
+      settings: { probation_enabled: !!settings?.probation_enabled, default_probation_months: Number(settings?.default_probation_months) || 3 },
+      onProbation: [], notOnProbation: [],
+    };
+    if (branchState.type === 'none') return res.json(out);
+
+    const params = [oId];
+    const bf = getBranchUserSQLFilter(branchState, params.length, 'u');
+    if (bf.params?.length) params.push(...bf.params);
+    const { rows } = await pool.query(
+      `SELECT ${PROBATION_USER_COLS}
+         FROM users u
+        WHERE u.organization_id = $1 AND u.role = 'employee'
+          AND COALESCE(u.employee_status, 'active') NOT IN ('inactive', 'resigned', 'terminated')
+          ${bf.clause || ''}
+        ORDER BY u.name`,
+      params
+    );
+    for (const r of rows) (r.employee_status === 'probation' ? out.onProbation : out.notOnProbation).push(r);
+    res.json(out);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/payroll/probation/add { user_id, months? } — put an employee on probation
+router.post('/probation/add', auth, hasPermission('payroll', 'manage_settings'), withBranchContext, async (req, res) => {
+  try {
+    const oId = orgId(req);
+    const userId = parseInt(req.body.user_id, 10);
+    if (!userId) return res.status(400).json({ error: 'user_id is required' });
+
+    const { data: settings } = await db.from('payroll_settings')
+      .select('probation_enabled, default_probation_months').eq('organization_id', oId).maybeSingle();
+    if (!settings?.probation_enabled) return res.status(400).json({ error: 'Probation is not enabled. Turn it on in Payroll Settings first.' });
+
+    if (req.user.role !== 'root_admin' && !await canAdminAccessUser(req.branchContext, userId, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
+
+    const { rows } = await pool.query(
+      `SELECT id, name, employee_status, role,
+              COALESCE(joining_date::text, date_of_joining, TO_CHAR(created_at, 'YYYY-MM-DD')) AS joining
+         FROM users WHERE id = $1 AND organization_id = $2`, [userId, oId]);
+    const emp = rows[0];
+    if (!emp) return res.status(404).json({ error: 'Employee not found' });
+    if (['inactive', 'resigned', 'terminated'].includes(emp.employee_status))
+      return res.status(400).json({ error: `${emp.name} is ${emp.employee_status} and cannot be put on probation.` });
+    if (emp.employee_status === 'probation') return res.status(409).json({ error: `${emp.name} is already on probation.` });
+
+    const months = parseInt(req.body.months, 10) || Number(settings.default_probation_months) || 3;
+    const pd = computeProbationDates(emp.joining, months);
+    if (!pd) return res.status(400).json({ error: `${emp.name} has no joining date. Set the joining date in the employee profile first.` });
+    const today = new Date().toISOString().split('T')[0];
+    if (pd.end <= today) {
+      return res.status(400).json({
+        error: `Probation (${months} month${months === 1 ? '' : 's'} from joining on ${pd.start}) would already have ended on ${pd.end}. Choose a longer period or correct the joining date.`,
+      });
+    }
+
+    const { data, error } = await db.from('users').update({
+      probation_applicable: true,
+      probation_months:     months,
+      probation_start_date: pd.start,
+      probation_end_date:   pd.end,
+      employee_status:      'probation',
+      status:               legacyStatusFor('probation'),
+      confirmation_date:    null,
+    }).eq('id', userId).eq('organization_id', oId).select('id, name, employee_status, probation_start_date, probation_end_date').single();
+    if (error) throw error;
+
+    db.from('notifications').insert({
+      user_id: userId, title: 'Probation Period Started',
+      message: `You have been placed on a ${months}-month probation ending ${pd.end}.`,
+      type: 'general', organization_id: oId,
+    }).then(() => {}).catch(() => {});
+
+    res.json(data);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// POST /api/payroll/probation/remove { user_id } — end probation early: employee becomes confirmed / full-time
+router.post('/probation/remove', auth, hasPermission('payroll', 'manage_settings'), withBranchContext, async (req, res) => {
+  try {
+    const oId = orgId(req);
+    const userId = parseInt(req.body.user_id, 10);
+    if (!userId) return res.status(400).json({ error: 'user_id is required' });
+
+    if (req.user.role !== 'root_admin' && !await canAdminAccessUser(req.branchContext, userId, oId))
+      return res.status(403).json({ error: "You do not have access to this employee's branch." });
+
+    const { rows } = await pool.query(
+      'SELECT id, name, employee_status FROM users WHERE id = $1 AND organization_id = $2', [userId, oId]);
+    const emp = rows[0];
+    if (!emp) return res.status(404).json({ error: 'Employee not found' });
+    if (emp.employee_status !== 'probation') return res.status(409).json({ error: `${emp.name} is not on probation.` });
+
+    const today = new Date().toISOString().split('T')[0];
+    // Same end state as the daily probation cron when a probation completes (active + full time + confirmation date).
+    // Dates are cleared like the profile's "probation off" so payroll treats the employee as confirmed immediately.
+    const { data, error } = await db.from('users').update({
+      probation_applicable: false,
+      probation_start_date: null,
+      probation_end_date:   null,
+      employee_status:      'active',
+      status:               legacyStatusFor('active'),
+      employment_type:      'full_time',
+      confirmation_date:    today,
+    }).eq('id', userId).eq('organization_id', oId).select('id, name, employee_status, employment_type').single();
+    if (error) throw error;
+
+    db.from('notifications').insert({
+      user_id: userId, title: 'Probation Completed',
+      message: 'Your probation period has ended and you are now a confirmed Full Time employee.',
+      type: 'general', organization_id: oId,
+    }).then(() => {}).catch(() => {});
+
+    res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -291,6 +492,7 @@ router.post('/apply-probation-bulk', auth, hasPermission('payroll', 'manage_sett
         AND role = 'employee'
         AND COALESCE(employee_status, 'active') NOT IN ('inactive', 'resigned', 'terminated', 'probation')
         AND COALESCE(joining_date::text, date_of_joining) IS NOT NULL
+        AND confirmation_date IS NULL
     `, [oId]);
 
     let setToProbation = 0, setToActive = 0;
@@ -452,10 +654,27 @@ router.get('/salary-structures/history/:userId', auth, hasPermission('payroll', 
       .order('effective_from', { ascending: false });
 
     if (error) throw error;
+
+    // In-place corrections are not new versions; their before/after values live in the payroll audit log.
+    // Attach them to the version they edited so the screen can show previous → new and who changed it.
+    let corrections = [];
+    try {
+      const { rows } = await pool.query(
+        `SELECT entity_id, actor_name, created_at, old_values, new_values
+           FROM payroll_audit_log
+          WHERE organization_id = $1 AND entity_type = 'salary_structure'
+            AND action = 'salary_updated' AND target_user_id = $2
+          ORDER BY created_at DESC`, [oId, userId]);
+      corrections = rows;
+    } catch { /* audit table unavailable — history still shows versions */ }
+
     res.json((data || []).map(r => ({
       ...r,
       created_by_name: r.creator?.name || null,
       creator: undefined,
+      corrections: corrections
+        .filter(c => String(c.entity_id) === String(r.id) && c.old_values && String(c.old_values.id) === String(c.entity_id))
+        .map(c => ({ changed_by: c.actor_name, changed_at: c.created_at, previous: c.old_values, current: c.new_values })),
     })));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -618,7 +837,7 @@ router.post('/salary-structures', auth, hasPermission('payroll', 'manage_structu
       action: oldRecord ? 'salary_updated' : 'salary_created',
       entityType: 'salary_structure', entityId: newRecord.id,
       targetUserId: user_id,
-      oldValues: null,
+      oldValues: oldRecord,
       newValues: newRecord,
       ip: req.ip,
     });
@@ -664,7 +883,7 @@ router.put('/salary-structures/:id', auth, hasPermission('payroll', 'manage_stru
 
     // Only the currently active record (effective_to IS NULL) can be corrected
     const { rows: existing } = await pool.query(
-      `SELECT id, user_id, effective_from, notes AS existing_notes
+      `SELECT *, notes AS existing_notes
          FROM employee_salary_structures
         WHERE id = $1 AND organization_id = $2 AND effective_to IS NULL`,
       [id, oId]
@@ -739,7 +958,7 @@ router.put('/salary-structures/:id', auth, hasPermission('payroll', 'manage_stru
       oId, actorId: req.user.id, actorName: req.user.name,
       action: 'salary_updated', entityType: 'salary_structure', entityId: id,
       targetUserId: existing[0].user_id,
-      oldValues: { effective_from: existing[0].effective_from },
+      oldValues: existing[0],     // full previous values — shown as "previous → new" in the salary history
       newValues: updated[0],
       ip: req.ip,
     });

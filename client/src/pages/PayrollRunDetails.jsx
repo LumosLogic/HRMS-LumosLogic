@@ -12,6 +12,7 @@ import { useAuth } from '@/context/AuthContext';
 import { apiGet, apiPost, apiDelete } from '@/lib/api';
 import { Avatar } from '@/components/ui/Avatar';
 import { MONTHS, cn } from '@/lib/utils';
+import PayrollStepper, { nextActionLabel } from '@/components/PayrollStepper';
 
 const fmt  = n => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 0 });
 const fmtD = n => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 });
@@ -269,12 +270,12 @@ export default function PayrollRunDetails() {
   // Root keeps these actions; a custom-role user gets each one only with the matching payroll permission
   // (the API enforces the same permissions). HR Admin is unchanged.
   const may           = (action) => isRootAdmin || customCan('payroll', action);
-  const canLock       = run && may('lock') && ['completed', 'completed_with_errors', 'approved'].includes(run.status);
+  const canLock       = run && may('lock') && run.status === 'approved';
   const canUnlock     = run?.status === 'locked' && may('unlock');
   const canVerify     = run && adminCan('payroll', 'verify') && ['completed', 'completed_with_errors'].includes(run.status);
   const canApprove    = run?.status === 'verified' && may('approve');
   const canReopen     = run?.status === 'approved' && may('approve');
-  const canRegenerate = run && !['locked', 'paid'].includes(run.status) && may('generate');
+  const canRegenerate = run && !['locked', 'paid', 'approved', 'processing'].includes(run.status) && may('generate');
   const canPaid       = run && ['locked', 'approved'].includes(run.status) && may('mark_paid');
   const canAddAdj     = run && !['locked', 'paid'].includes(run.status);
 
@@ -398,7 +399,7 @@ export default function PayrollRunDetails() {
           {canLock && (
             <button onClick={() => setConfirmDlg({
                 title: 'Lock Payroll Run',
-                message: 'Lock this run? All payslips will become immutable and cannot be modified.',
+                message: 'Lock this run? All payslips will become immutable. Only an authorised admin can unlock it afterwards.',
                 onOk: () => lockMut.mutate(),
                 danger: true,
               })}
@@ -474,6 +475,12 @@ export default function PayrollRunDetails() {
             </div>
           )}
         </div>
+      </div>
+
+      {/* ── Lifecycle ── */}
+      <div className="bg-white border border-[#e2e0f0] rounded-xl px-5 py-4 flex items-center justify-between flex-wrap gap-3">
+        <PayrollStepper status={run.status} />
+        <span className="text-xs font-bold text-[#3525cd]">{nextActionLabel(run.status)}</span>
       </div>
 
       {/* ── Summary Cards ── */}

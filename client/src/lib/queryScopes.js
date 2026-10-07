@@ -29,6 +29,7 @@ export const ORG_LEVEL_QUERY_KEYS = new Set([
   'branches',            // branch list itself
   'payroll-settings',    // legal-entity payroll configuration
   'statutory-config',    // legal-entity statutory configuration
+  'statutory-pt-slabs',  // seeded state PT slab tables (reference data)
   'compliance-returns',
   'biometric-config',
   'biometric-auto-sync-config', // org-level ingestion schedule

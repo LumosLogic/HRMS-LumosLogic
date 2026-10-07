@@ -62,7 +62,9 @@ function isWeekendDay(dow, weekendPolicy, satSeq) {
 
 // ─── Build per-day classification map ────────────────────────────────────────
 // Returns Array<{ dateStr, dow, isWeekend, isHoliday, isWorkingDay }>
-function buildDateMap(year, month, weekendPolicy, holidaySet) {
+// workDaySet (Set<dow> from the org/branch work_schedule.work_days) is the single source of truth for weekly offs.
+// weekendPolicy is only the fallback when no work schedule exists; legacy 'alternate_sat' still alternates Saturdays.
+function buildDateMap(year, month, weekendPolicy, holidaySet, workDaySet = null) {
   const total  = daysInMonth(year, month);
   const result = [];
   let satSeq   = 0;
@@ -72,7 +74,13 @@ function buildDateMap(year, month, weekendPolicy, holidaySet) {
     const dow   = new Date(year, month - 1, d).getDay(); // 0=Sun,6=Sat
     if (dow === 6) satSeq++;
 
-    const isWe  = isWeekendDay(dow, weekendPolicy, satSeq);
+    let isWe;
+    if (workDaySet && workDaySet.size > 0) {
+      isWe = !workDaySet.has(dow);
+      if (!isWe && dow === 6 && weekendPolicy === 'alternate_sat') isWe = isWeekendDay(dow, 'alternate_sat', satSeq);
+    } else {
+      isWe = isWeekendDay(dow, weekendPolicy, satSeq);
+    }
     const isHol = !isWe && holidaySet.has(ds);
 
     result.push({
@@ -141,6 +149,7 @@ function calculateAttendance({
   maxEarlyLeaveCount, // number — early leaves within this limit are full-day; excess → LOP
   shiftDateMap,       // Map<dateStr, { workDays: Set<dow>|null, durationH: number }>
   orgHalfDayHours,    // org-level half_day_hours (from work_schedule) — used for short-shift reclassification
+  orgLateThreshold,   // org/branch late_threshold 'HH:MM' (null when disabled/unset → start time + payroll grace)
 }) {
   const orgSchedMins   = toMins(scheduleCheckIn);  // org-level fallback for late threshold
   const g              = Number(graceMins) || 0;
@@ -182,7 +191,12 @@ function calculateAttendance({
     }
 
     // Resolve per-day effective thresholds: shift-specific → org fallback
-    const dayLateThreshMins = shiftLateThreshMins ?? orgSchedMins;
+    // The configured attendance late threshold is the late line (no extra grace). Only when none is
+    // configured does the legacy start-time + payroll grace apply.
+    const orgLateMins       = toMins(orgLateThreshold);
+    const explicitLate      = shiftLateThreshMins ?? orgLateMins;
+    const dayLateThreshMins = explicitLate ?? orgSchedMins;
+    const dayGraceMins      = explicitLate !== null && explicitLate !== undefined ? 0 : g;
     const dayHalfDayH       = shiftHalfDayH       ?? orgHalfDayH;
     const dayMaxEarlyLeave  = shiftMaxEarlyLeave   ?? orgMaxEarlyLeave;
 
@@ -253,7 +267,7 @@ function calculateAttendance({
       // Late detection uses shift's late_threshold when configured; falls back to org schedule time
       if (dayLateThreshMins !== null && att?.check_in) {
         const cin = toMins(att.check_in);
-        if (cin !== null && cin > dayLateThreshMins + g) lateCount++;
+        if (cin !== null && cin > dayLateThreshMins + dayGraceMins) lateCount++;
       }
       continue;
     }
@@ -591,7 +605,8 @@ async function fetchAllData(oId, uId, month, year) {
       try {
         return await pool.query(
           `SELECT start_time AS check_in, end_time AS check_out,
-                  work_days, full_day_hours, half_day_hours, max_early_leave_count
+                  work_days, full_day_hours, half_day_hours, max_early_leave_count,
+                  late_threshold, late_entry_threshold_enabled
              FROM work_schedule
             WHERE organization_id = $1
             LIMIT 1`,
@@ -602,7 +617,8 @@ async function fetchAllData(oId, uId, month, year) {
       try {
         return await pool.query(
           `SELECT check_in, check_out,
-                  work_days, full_day_hours, half_day_hours, max_early_leave_count
+                  work_days, full_day_hours, half_day_hours, max_early_leave_count,
+                  late_threshold, late_entry_threshold_enabled
              FROM work_schedule
             WHERE organization_id = $1
             LIMIT 1`,
@@ -684,7 +700,8 @@ async function fetchAllData(oId, uId, month, year) {
     try {
       const branchSchedRes = await pool.query(
         `SELECT start_time AS check_in, end_time AS check_out,
-                work_days, full_day_hours, half_day_hours, max_early_leave_count
+                work_days, full_day_hours, half_day_hours, max_early_leave_count,
+                late_threshold, late_entry_threshold_enabled
            FROM branch_work_schedule
           WHERE organization_id = $1 AND branch_id = $2
           LIMIT 1`,
@@ -803,7 +820,7 @@ async function calculatePayroll({ organizationId, userId, month, year }) {
     }
   }
 
-  const dateMap = buildDateMap(y, m, settings.weekend_policy, holidaySet);
+  const dateMap = buildDateMap(y, m, settings.weekend_policy, holidaySet, parseShiftWorkDays(data.schedule?.work_days));
 
   // ── Per-employee shift map (built BEFORE workingDays so denominator can use it) ──
   // Value: { workDays: Set<dow>|null, durationH: number }
@@ -833,9 +850,9 @@ async function calculatePayroll({ organizationId, userId, month, year }) {
   // Weekday Shift which only covers DOW 1–5), that Saturday is excluded from the
   // working days count so LOP days are consistent with their actual schedule.
   // Fixed-rule orgs are unaffected.
-  const workingDays = settings.working_days_rule === 'fixed'
-    ? Math.max(1, Number(settings.fixed_working_days))
-    : Math.max(1, dateMap.reduce((n, d) => {
+  // Derived from the organisation's own settings: month days − weekly offs (work_schedule) − holidays.
+  // (The former separate payroll 'fixed working days' rule is no longer configurable.)
+  const workingDays = Math.max(1, dateMap.reduce((n, d) => {
         if (d.isWeekend) return n;
         if (shiftDateMap.has(d.dateStr)) {
           const si = shiftDateMap.get(d.dateStr);
@@ -870,6 +887,7 @@ async function calculatePayroll({ organizationId, userId, month, year }) {
     maxEarlyLeaveCount:   Number(data.schedule?.max_early_leave_count ?? 3),  // org-level fallback
     shiftDateMap,         // carries per-day shift-specific rules when configured
     orgHalfDayHours,      // org-level fallback for half-day reclassification
+    orgLateThreshold:     data.schedule?.late_entry_threshold_enabled === false ? null : (data.schedule?.late_threshold ?? null),
   });
 
   // ── LOP ───────────────────────────────────────────────────────────────────

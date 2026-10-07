@@ -31,7 +31,7 @@
 
 const { pool }                                = require('../config/db');
 const { isBranchFeatureEnabled }              = require('./branchService');
-const { generatePayrollRun, GenerationError } = require('./payrollGenerationService');
+const { generatePayrollRun, GenerationError, isPeriodComplete } = require('./payrollGenerationService');
 const { sendPayslipsBatch }                   = require('./payrollEmailService');
 const {
   notifyPayrollComplete,
@@ -175,7 +175,8 @@ function shouldGenerate(settings, now, holidays) {
   // Which month's payroll to generate?
   const genFor = settings.payroll_generate_for || 'PREVIOUS';
   if (genFor === 'CURRENT') {
-    return { payMonth: now.month, payYear: now.year };
+    // The current month is, by definition, not complete yet — payroll is never generated for an incomplete period.
+    return null;
   }
   // PREVIOUS: generate for the month that just ended
   return now.month === 1
@@ -358,7 +359,7 @@ async function generateBranchRun({ orgId, branchId, month, year, triggeredBy = '
     notifyPayrollComplete(orgId, result.runId, result, month, year).catch(() => {});
     return { branchId, status: 'generated', runId: result.runId, result };
   } catch (err) {
-    const isSkip = err instanceof GenerationError && err.code === 'PAYROLL_EXISTS';
+    const isSkip = err instanceof GenerationError && ['PAYROLL_EXISTS', 'PERIOD_INCOMPLETE'].includes(err.code);
     await pool.query(
       `UPDATE payroll_scheduler_runs SET status = $1, error_message = $2, completed_at = NOW() WHERE id = $3`,
       [isSkip ? 'skipped' : 'failed', (err.message || '').substring(0, 500), schedulerRunId]).catch(() => {});
@@ -440,7 +441,7 @@ async function handleOrgWideGeneration(orgId, settings, { payMonth, payYear }) {
     console.log(`[Scheduler] Org ${orgId} — ${payMonth}/${payYear} generated (${result.status})`);
 
   } catch (err) {
-    const isSkip     = err instanceof GenerationError && err.code === 'PAYROLL_EXISTS';
+    const isSkip     = err instanceof GenerationError && ['PAYROLL_EXISTS', 'PERIOD_INCOMPLETE'].includes(err.code);
     const finalState = isSkip ? 'skipped' : 'failed';
 
     await pool.query(
@@ -600,6 +601,14 @@ async function triggerManual({ organizationId, month, year, force = false, actor
   const m     = Number(month);
   const y     = Number(year);
   const name  = actorName || String(actorId);
+
+  // A manual trigger must not create a partial run for a month that has not finished yet.
+  if (!isPeriodComplete(m, y)) {
+    throw new GenerationError(
+      `Payroll for ${String(m).padStart(2, '0')}/${y} cannot be generated until the payroll period is complete.`,
+      'PERIOD_INCOMPLETE'
+    );
+  }
 
   // Branch-enabled organisation: payroll is per branch. `branchId` runs ONE branch (the caller's access to
   // it is verified by the route); without it, every active branch is run (all-branch callers only —
