@@ -91,6 +91,7 @@ function validateAll(form) {
 
 export default function Register() {
   const [step, setStep] = useState(1); // 1 = form, 2 = success
+  const [formStep, setFormStep] = useState(1); // 1 = basic details, 2 = organization details
 
   const [form, setForm] = useState({
     company_name:          '',
@@ -159,11 +160,28 @@ export default function Register() {
     setFieldErrors(fe => { const n = { ...fe }; delete n[k]; return n; });
   };
 
-  async function handleSubmit(e) {
-    e.preventDefault();
+  const STEP1_FIELDS = ['company_name', 'name', 'email', 'phone'];
+
+  function handleNext() {
     setError('');
     const errs = validateAll(form);
-    if (Object.keys(errs).length) { setFieldErrors(errs); return; }
+    const step1Errs = {};
+    STEP1_FIELDS.forEach(k => { if (errs[k]) step1Errs[k] = errs[k]; });
+    if (Object.keys(step1Errs).length) { setFieldErrors(step1Errs); return; }
+    setFieldErrors({});
+    setFormStep(2);
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault();
+    if (formStep === 1) { handleNext(); return; }
+    setError('');
+    const errs = validateAll(form);
+    if (Object.keys(errs).length) {
+      setFieldErrors(errs);
+      if (STEP1_FIELDS.some(k => errs[k])) setFormStep(1);
+      return;
+    }
     setFieldErrors({});
     setLoading(true);
     try {
@@ -277,8 +295,25 @@ export default function Register() {
             <p className="text-sm text-[#464555]">Submit your details — we'll review and email your credentials within 24 hours.</p>
           </div>
 
+          {/* Step indicator */}
+          <div className="flex items-center gap-2 mb-5">
+            {[1, 2].map(n => (
+              <div key={n} className="flex items-center gap-2 flex-1">
+                <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold flex-shrink-0
+                  ${formStep >= n ? 'bg-[#3525cd] text-white' : 'bg-[#e7eefe] text-[#777587]'}`}>
+                  {formStep > n ? <CheckCircle2 size={14} /> : n}
+                </div>
+                <span className={`text-xs font-semibold ${formStep >= n ? 'text-[#151c27]' : 'text-[#777587]'}`}>
+                  {n === 1 ? 'Basic details' : 'Organization'}
+                </span>
+                {n === 1 && <div className={`flex-1 h-0.5 rounded ${formStep > 1 ? 'bg-[#3525cd]' : 'bg-[#e7eefe]'}`} />}
+              </div>
+            ))}
+          </div>
+
           <form onSubmit={handleSubmit} className="space-y-3.5">
 
+            {formStep === 1 && (<>
             {/* Company Name */}
             <div>
               <label className="form-label">Company Name <span className="text-rose-500">*</span></label>
@@ -326,27 +361,34 @@ export default function Register() {
               {fieldErrors.email && <p className="text-[0.72rem] text-rose-600 mt-1">{fieldErrors.email}</p>}
             </div>
 
-            {/* Phone + Website */}
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="form-label">Phone <span className="text-[#777587] font-normal normal-case tracking-normal">(Optional)</span></label>
-                <div className="relative">
-                  <Phone size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#777587]" />
-                  <input type="tel" className={`form-control pl-9 ${fieldErrors.phone ? 'border-rose-500 focus:border-rose-500' : ''}`}
-                    placeholder="9876543210" value={form.phone}
-                    maxLength={10}
-                    onChange={handlePhoneChange} />
-                </div>
-                {fieldErrors.phone && <p className="text-[0.72rem] text-rose-600 mt-1">{fieldErrors.phone}</p>}
+            {/* Phone */}
+            <div>
+              <label className="form-label">Phone <span className="text-[#777587] font-normal normal-case tracking-normal">(Optional)</span></label>
+              <div className="relative">
+                <Phone size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#777587]" />
+                <input type="tel" className={`form-control pl-9 ${fieldErrors.phone ? 'border-rose-500 focus:border-rose-500' : ''}`}
+                  placeholder="9876543210" value={form.phone}
+                  maxLength={10}
+                  onChange={handlePhoneChange} />
               </div>
-              <div>
-                <label className="form-label">Website <span className="text-[#777587] font-normal normal-case tracking-normal">(Optional)</span></label>
-                <div className="relative">
-                  <Globe size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#777587]" />
-                  <input type="url" className="form-control pl-9"
-                    placeholder="https://…" value={form.website}
-                    onChange={e => setOther('website', e.target.value)} />
-                </div>
+              {fieldErrors.phone && <p className="text-[0.72rem] text-rose-600 mt-1">{fieldErrors.phone}</p>}
+            </div>
+
+            <button type="button" onClick={handleNext}
+              className="w-full py-3.5 bg-[#3525cd] text-white font-bold text-base rounded-xl hover:bg-[#4f46e5] transition-all shadow-lg shadow-[#3525cd]/20 active:scale-[0.98] flex items-center justify-center gap-2">
+              Next <ArrowRight size={16} />
+            </button>
+            </>)}
+
+            {formStep === 2 && (<>
+            {/* Website */}
+            <div>
+              <label className="form-label">Website <span className="text-[#777587] font-normal normal-case tracking-normal">(Optional)</span></label>
+              <div className="relative">
+                <Globe size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#777587]" />
+                <input type="url" className="form-control pl-9"
+                  placeholder="https://…" value={form.website}
+                  onChange={e => setOther('website', e.target.value)} />
               </div>
             </div>
 
@@ -445,14 +487,21 @@ export default function Register() {
               </div>
             )}
 
-            <button type="submit" disabled={loading}
-              className="w-full py-3.5 bg-[#3525cd] text-white font-bold text-base rounded-xl hover:bg-[#4f46e5] transition-all shadow-lg shadow-[#3525cd]/20 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
-              {loading ? (
-                <><span className="spinner w-4 h-4" /> Submitting request…</>
-              ) : (
-                <>Submit Registration Request <ArrowRight size={16} /></>
-              )}
-            </button>
+            <div className="flex gap-3">
+              <button type="button" onClick={() => { setError(''); setFormStep(1); }} disabled={loading}
+                className="px-5 py-3.5 border-2 border-[#e7eefe] text-[#464555] font-bold text-base rounded-xl hover:border-[#3525cd]/40 transition-all disabled:opacity-50">
+                Back
+              </button>
+              <button type="submit" disabled={loading}
+                className="flex-1 py-3.5 bg-[#3525cd] text-white font-bold text-base rounded-xl hover:bg-[#4f46e5] transition-all shadow-lg shadow-[#3525cd]/20 active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2">
+                {loading ? (
+                  <><span className="spinner w-4 h-4" /> Submitting…</>
+                ) : (
+                  <>Submit Request <ArrowRight size={16} /></>
+                )}
+              </button>
+            </div>
+            </>)}
           </form>
 
           <p className="text-center text-sm text-[#464555] mt-4">
