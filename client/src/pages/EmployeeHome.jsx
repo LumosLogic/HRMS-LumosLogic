@@ -390,7 +390,6 @@ export default function EmployeeHome() {
   nextWeek.setDate(nowDate.getDate() + 7);
   const { data: recentAttendance = [] } = useQuery({
     queryKey: ['my-att-recent', toISODate(thirtyDaysAgo), toISODate(nextWeek)],
-    staleTime: STALE.frequent,   // frequent
     queryFn: () => apiGet('/attendance', { startDate: toISODate(thirtyDaysAgo), endDate: toISODate(nextWeek) }),
     staleTime: 2 * 60 * 1000,
   });

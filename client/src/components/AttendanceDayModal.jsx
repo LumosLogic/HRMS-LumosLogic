@@ -352,7 +352,6 @@ export function AttendanceDayModal({ dateStr, initialTab = 'all', onClose, onRef
   const { data: attendance = [], refetch: refetchAtt } = useQuery({
     queryKey: ['att-day-modal', year, month, selectedBranchId],
     meta: BRANCH_KEYED,
-    staleTime: STALE.frequent,   // frequent
     queryFn:  () => apiGet('/attendance', { year, month }),
     staleTime: 30000,
   });

@@ -301,7 +301,6 @@ export default function TeamCalendar() {
   const { data: monthAttendance = [] } = useQuery({
     queryKey: ['team-attendance', year, month, selectedBranchId],
     meta: BRANCH_KEYED,
-    staleTime: STALE.frequent,   // frequent
     queryFn:  () => apiGet('/attendance', { year, month }).catch(() => []),
     staleTime: 60000,
   });
