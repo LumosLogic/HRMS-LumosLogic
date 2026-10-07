@@ -39,37 +39,37 @@ BEGIN;
 DO $$
 DECLARE
   org_slug      TEXT    := 'test-lumos-logic';   -- <-- CHANGE TO TARGET ORG SLUG
-  org_id        BIGINT;
+  v_org_id      BIGINT;
   root_user_ids BIGINT[];
   root_role_id  BIGINT;
   r             RECORD;
 BEGIN
-  SELECT id INTO org_id
+  SELECT id INTO v_org_id
   FROM organizations
   WHERE slug = org_slug;
 
-  IF org_id IS NULL THEN
+  IF v_org_id IS NULL THEN
     RAISE EXCEPTION 'Organization with slug ''%'' not found', org_slug;
   END IF;
 
   -- Capture the identities we must preserve BEFORE any deletes.
   SELECT COALESCE(array_agg(id), ARRAY[]::BIGINT[]) INTO root_user_ids
   FROM users
-  WHERE organization_id = org_id
+  WHERE organization_id = v_org_id
     AND role = 'root_admin';
 
   SELECT id INTO root_role_id
   FROM roles
-  WHERE org_id = org_id AND slug = 'root_admin'
+  WHERE org_id = v_org_id AND slug = 'root_admin'
   LIMIT 1;
 
   RAISE NOTICE 'Wiping org id=%, slug=%. Preserving root_admin users=% and role=%',
-    org_id, org_slug, root_user_ids, root_role_id;
+    v_org_id, org_slug, root_user_ids, root_role_id;
 
   -- Temp table of the users we will delete (everyone except root_admin).
   CREATE TEMP TABLE _del_users ON COMMIT DROP AS
     SELECT id FROM users
-    WHERE organization_id = org_id
+    WHERE organization_id = v_org_id
       AND NOT (id = ANY(root_user_ids));
 
   -- ───────────────────────────────────────────────────────────
@@ -87,7 +87,7 @@ BEGIN
       AND c.column_name = 'organization_id'
       AND c.table_name NOT IN ('organizations', 'organization_features', 'users')
   LOOP
-    EXECUTE format('DELETE FROM %I WHERE organization_id = %L', r.table_name, org_id);
+    EXECUTE format('DELETE FROM %I WHERE organization_id = %L', r.table_name, v_org_id);
   END LOOP;
 
   -- ───────────────────────────────────────────────────────────
@@ -104,7 +104,7 @@ BEGIN
       AND c.column_name = 'org_id'
       AND c.table_name NOT IN ('roles', 'user_roles')
   LOOP
-    EXECUTE format('DELETE FROM %I WHERE org_id = %L', r.table_name, org_id);
+    EXECUTE format('DELETE FROM %I WHERE org_id = %L', r.table_name, v_org_id);
   END LOOP;
 
   -- ───────────────────────────────────────────────────────────
@@ -113,22 +113,22 @@ BEGIN
   IF root_role_id IS NOT NULL THEN
     -- Remove all user->role mappings for the org except root_admin's.
     DELETE FROM user_roles
-    WHERE org_id = org_id
+    WHERE org_id = v_org_id
       AND NOT (role_id = root_role_id AND user_id = ANY(root_user_ids));
 
     -- Remove permissions of every non-root role.
     DELETE FROM role_permissions
     WHERE role_id IN (
-      SELECT id FROM roles WHERE org_id = org_id AND id <> root_role_id
+      SELECT id FROM roles WHERE org_id = v_org_id AND id <> root_role_id
     );
 
     -- Remove every role except root_admin.
     DELETE FROM roles
-    WHERE org_id = org_id AND id <> root_role_id;
+    WHERE org_id = v_org_id AND id <> root_role_id;
   ELSE
     -- No root_admin role exists; drop any mappings/roles outright.
-    DELETE FROM user_roles WHERE org_id = org_id;
-    DELETE FROM roles     WHERE org_id = org_id;
+    DELETE FROM user_roles WHERE org_id = v_org_id;
+    DELETE FROM roles     WHERE org_id = v_org_id;
   END IF;
 
   -- ───────────────────────────────────────────────────────────
@@ -148,8 +148,11 @@ BEGIN
   --    (FK enforcement is off, so this is a plain delete)
   -- ───────────────────────────────────────────────────────────
   DELETE FROM users
-  WHERE organization_id = org_id
+  WHERE organization_id = v_org_id
     AND NOT (id = ANY(root_user_ids));
+
+  -- Kept tables: null out dangling refs instead of deleting rows.
+  UPDATE roles SET created_by = NULL WHERE created_by IN (SELECT id FROM _del_users);
 
   -- ───────────────────────────────────────────────────────────
   -- 6) Clean up rows in tables WITHOUT org scope that still
@@ -171,7 +174,7 @@ BEGIN
       AND tc.table_schema    = 'public'
       AND ccu.table_name     = 'users'
       AND ccu.column_name    = 'id'
-      AND tc.table_name     <> 'users'
+      AND tc.table_name NOT IN ('users', 'roles', 'user_roles')
   LOOP
     EXECUTE format(
       'DELETE FROM %I WHERE %I IN (SELECT id FROM _del_users)',
@@ -188,6 +191,7 @@ BEGIN
      AND t.table_schema = c.table_schema
      AND t.table_type = 'BASE TABLE'
     WHERE c.table_schema = 'public'
+      AND c.table_name NOT IN ('users', 'roles', 'user_roles', 'role_permissions', 'organizations', 'organization_features')
       AND c.column_name IN (
         'user_id', 'target_user_id', 'sent_by', 'created_by',
         'approved_by', 'reviewed_by', 'reviewer_id', 'uploaded_by',
@@ -201,7 +205,7 @@ BEGIN
     );
   END LOOP;
 
-  RAISE NOTICE 'Purge complete for org id=% (slug=%)', org_id, org_slug;
+  RAISE NOTICE 'Purge complete for org id=% (slug=%)', v_org_id, org_slug;
 END $$;
 
 COMMIT;
@@ -215,13 +219,13 @@ SET session_replication_role = DEFAULT;
 
 DO $$
 DECLARE
-  org_id BIGINT;
+  v_org_id BIGINT;
   r RECORD;
   cnt   BIGINT;
 BEGIN
-  SELECT id INTO org_id FROM organizations WHERE slug = 'test-lumos-logic';
+  SELECT id INTO v_org_id FROM organizations WHERE slug = 'test-lumos-logic';
 
-  RAISE NOTICE 'Remaining data for org id=%:', org_id;
+  RAISE NOTICE 'Remaining data for org id=%:', v_org_id;
 
   FOR r IN
     SELECT c.table_name, c.column_name
@@ -237,7 +241,7 @@ BEGIN
   LOOP
     EXECUTE format(
       'SELECT COUNT(*) FROM %I WHERE %I = %L',
-      r.table_name, r.column_name, org_id
+      r.table_name, r.column_name, v_org_id
     ) INTO cnt;
     RAISE NOTICE '  % -> % row(s)', r.table_name, cnt;
   END LOOP;
