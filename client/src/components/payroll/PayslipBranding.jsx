@@ -39,9 +39,11 @@ function ScaledFrame({ html, visibleHeight }) {
   const doc = `<!DOCTYPE html><html><head><meta charset="utf-8"><style>${PRINT_PAGE_CSS} html,body{overflow:hidden}</style></head><body>${html}</body></html>`;
   const frameH = 1200;
   return (
-    <div ref={wrapRef} className="w-full overflow-hidden bg-white" style={{ height: visibleHeight ?? frameH * scale }}>
-      <iframe title="Payslip preview" srcDoc={doc} sandbox="" scrolling="no"
-        style={{ width: 820, height: frameH, border: 0, transform: `scale(${scale})`, transformOrigin: '0 0', pointerEvents: 'none' }} />
+    <div ref={wrapRef} className="w-full overflow-hidden bg-white" style={{ height: visibleHeight ?? Math.round(frameH * scale) }}>
+      <div style={{ width: 820, height: frameH, transform: `scale(${scale})`, transformOrigin: '0 0' }}>
+        <iframe title="Payslip preview" srcDoc={doc} scrolling="no"
+          style={{ width: 820, height: frameH, border: 0, pointerEvents: 'none' }} />
+      </div>
     </div>
   );
 }
