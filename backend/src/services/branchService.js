@@ -129,6 +129,15 @@ async function _resolveUserBranchAccess(userId, orgId, role) {
           // Treat as org-wide access so dashboards and all admin pages work normally.
           return { isRootAdmin: false, hasAllBranches: true, branchIds: null };
         }
+        // No grant rows, but the HR has a branch assigned on their own account (users.branch_id,
+        // e.g. set from the profile): treat that assignment as access to that branch.
+        // Explicit hr_branch_access grants, when present, always take precedence (handled above).
+        const own = await pool.query(
+          `SELECT branch_id FROM users WHERE id = $1 AND organization_id = $2`, [userId, orgId]);
+        const ownBid = own.rows[0]?.branch_id;
+        if (ownBid != null && sb.rows.some(b => Number(b.id) === Number(ownBid))) {
+          return { isRootAdmin: false, hasAllBranches: false, branchIds: [Number(ownBid)] };
+        }
         if (sb.rows.length === 1) {
           return { isRootAdmin: false, hasAllBranches: false, branchIds: [Number(sb.rows[0].id)] };
         }

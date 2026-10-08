@@ -391,7 +391,7 @@ export default function EmployeeHome() {
   const { data: recentAttendance = [] } = useQuery({
     queryKey: ['my-att-recent', toISODate(thirtyDaysAgo), toISODate(nextWeek)],
     queryFn: () => apiGet('/attendance', { startDate: toISODate(thirtyDaysAgo), endDate: toISODate(nextWeek) }),
-    staleTime: 2 * 60 * 1000,
+    staleTime: STALE.frequent,
   });
   const { data: leavePolicies = [] } = useLeavePolicies({ staleTime: 5 * 60 * 1000 });
   const { data: leaveBalance } = useQuery({

@@ -353,7 +353,7 @@ export function AttendanceDayModal({ dateStr, initialTab = 'all', onClose, onRef
     queryKey: ['att-day-modal', year, month, selectedBranchId],
     meta: BRANCH_KEYED,
     queryFn:  () => apiGet('/attendance', { year, month }),
-    staleTime: 30000,
+    staleTime: STALE.frequent,
   });
 
   const { data: employees = [] } = useEmployees({ lite: true, onlyEmployees: true });

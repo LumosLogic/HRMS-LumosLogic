@@ -302,7 +302,7 @@ export default function TeamCalendar() {
     queryKey: ['team-attendance', year, month, selectedBranchId],
     meta: BRANCH_KEYED,
     queryFn:  () => apiGet('/attendance', { year, month }).catch(() => []),
-    staleTime: 60000,
+    staleTime: STALE.frequent,
   });
   // Build a map: { 'YYYY-MM-DD': [{ user_id, name, avatar_color, status }] }
   const absentMap = {};
