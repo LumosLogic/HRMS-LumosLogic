@@ -983,12 +983,15 @@ router.put('/salary-structures/:id', auth, hasPermission('payroll', 'manage_stru
 // GET /api/payroll/structure?userId=
 // Returns the active salary structure for an employee as a single object.
 // Employees may view their own; admins need manage_structures to view others'.
-router.get('/structure', auth, async (req, res) => {
+router.get('/structure', auth, withBranchContext, async (req, res) => {
   try {
     const oId = orgId(req);
     const { userId } = req.query;
     const targetId = isAdmin(req.user.role) ? (userId || req.user.id) : req.user.id;
     if (isAdmin(req.user.role) && userId && String(userId) !== String(req.user.id)) {
+      // Branch isolation: an admin may only read the salary structure of an employee inside their branch scope.
+      if (!await canAdminAccessUser(req.branchContext, Number(userId), oId))
+        return res.status(403).json({ error: "You do not have access to this employee's branch." });
       const { resolvePermissions, hasPermissionCheck } = require('../../services/permissionService');
       const perms = await resolvePermissions(req.user.id, oId);
       if (!hasPermissionCheck(perms, 'payroll', 'manage_structures')) {
