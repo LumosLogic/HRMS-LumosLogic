@@ -279,6 +279,7 @@ async function runProbationExpiryCheck() {
                 message:         `${emp.name}'s probation period has ended. Status updated to Full Time (Active).`,
                 type:            'general',
                 organization_id: oId,
+                subject_user_id: emp.id,
               }))
             );
           }

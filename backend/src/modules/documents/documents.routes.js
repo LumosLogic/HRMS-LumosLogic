@@ -692,6 +692,7 @@ router.delete('/:id', auth, withBranchContext, async (req, res) => {
             message:         `Document "${doc.name}" was deleted by ${req.user.name}. Reason: ${reason.trim()}`,
             type:            'document',
             organization_id: oId,
+            subject_user_id: doc.user_id || null,
           })));
         }).catch(() => {});
     }

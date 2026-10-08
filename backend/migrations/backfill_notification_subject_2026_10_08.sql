@@ -42,3 +42,26 @@ SELECT type, COUNT(*) FILTER (WHERE subject_user_id IS NOT NULL) AS tagged,
        COUNT(*) FILTER (WHERE subject_user_id IS NULL) AS untagged
 FROM notifications GROUP BY type ORDER BY type;
 COMMIT;
+
+-- 3) Second pass (run after the first): probation notices (type 'general') and names embedded in file names
+--    ("Payslip_First_Last_08_2026" -> "first last"). Same unique-name rule as above.
+BEGIN;
+WITH uniq AS (
+  SELECT organization_id, lower(trim(name)) AS nm, MIN(id) AS uid
+  FROM users WHERE name IS NOT NULL AND trim(name) <> ''
+  GROUP BY organization_id, lower(trim(name)) HAVING COUNT(*) = 1
+),
+cand AS (
+  SELECT n.id AS nid, u.uid, length(u.nm) AS len,
+         ROW_NUMBER() OVER (PARTITION BY n.id ORDER BY length(u.nm) DESC) AS rn,
+         COUNT(*)     OVER (PARTITION BY n.id, length(u.nm)) AS same_len
+  FROM notifications n
+  JOIN uniq u ON u.organization_id = n.organization_id
+   AND replace(lower(n.message), '_', ' ') LIKE '%' || u.nm || '%'
+  WHERE n.subject_user_id IS NULL
+    AND ( (n.type = 'general' AND n.title LIKE 'Probation Completed%')
+       OR (n.type = 'document' AND n.title = 'Document Deleted') )
+)
+UPDATE notifications n SET subject_user_id = c.uid
+FROM cand c WHERE c.nid = n.id AND c.rn = 1 AND c.same_len = 1;
+COMMIT;
