@@ -105,7 +105,7 @@ function notify(userId, title, message, oId, subjectUserId = null) {
   // db adapter builder has no .catch(), so we avoid chaining on it.
   pool.query(
     `INSERT INTO notifications (user_id, title, message, type, organization_id, subject_user_id) VALUES ($1, $2, $3, $4, $5, $6)`,
-    [userId, title, message, 'leave', oId, subjectUserId]
+    [userId, title, message, 'leave', oId, subjectUserId ?? userId]   // addressed to the employee about their own leave → subject = recipient
   ).catch(() => {}); // fire-and-forget
 }
 

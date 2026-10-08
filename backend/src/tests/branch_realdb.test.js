@@ -132,6 +132,7 @@ function buildApp() {
   app.use('/api/dashboard-before', load('tests/fixtures/dashboard.before_parallelisation.js'));
   app.use('/api/biometric', load('modules/biometric/biometric.routes'));
   app.use('/api/payroll', load('modules/payroll/payroll.routes'));
+  app.use('/api/notifications', load('modules/notifications/notifications.routes'));
   app.use('/api/settings', load('modules/settings/settings.routes'));
   app.use('/api/leave-policies', load('modules/leave-policies/leavePolicies.routes'));
   app.use('/api/config-groups', load('modules/config-groups/configGroups.routes'));
@@ -1153,6 +1154,99 @@ async function devicePunch(sn, pin, when) {
     await S(`INSERT INTO payroll_runs (organization_id, month, year, status, branch_id) VALUES ($1,9,2026,'completed',$2)`, [ID.orgA, ID.dalal]);
     await assert.rejects(S(`INSERT INTO payroll_runs (organization_id, month, year, status, branch_id) VALUES ($1,9,2026,'completed',$2)`, [ID.orgA, ID.dalal]), /unique|duplicate/i);
     await S(`INSERT INTO payroll_runs (organization_id, month, year, status, branch_id) VALUES ($1,9,2026,'completed',$2)`, [ID.orgA, ID.bhuj]); // other branch same period is fine
+  });
+
+
+  console.log('\nSALARY STRUCTURE READ (GET /api/payroll/structure?userId=) — branch isolation');
+  await t('payroll/structure: HR sees own-branch employee, is refused other-branch / all-branches HR sees both / root sees both', async () => {
+    await resetAccess();
+    await S(`DELETE FROM employee_salary_structures WHERE user_id = ANY($1::bigint[])`, [[ID.empD, ID.empB]]);
+    for (const u of [ID.empD, ID.empB])
+      await S(`INSERT INTO employee_salary_structures (organization_id, user_id, effective_from, basic, hra, gross_salary, ctc) VALUES ($1,$2,'2026-01-01',30000,15000,45000,540000)`, [ID.orgA, u]);
+    const own = await call('GET', `/api/payroll/structure?userId=${ID.empD}`, { as: ID.hrD, branch: ID.dalal });
+    assert.strictEqual(own.status, 200, JSON.stringify(own.body));
+    assert.strictEqual(Number(own.body.user_id), ID.empD);
+    const cross = await call('GET', `/api/payroll/structure?userId=${ID.empB}`, { as: ID.hrD, branch: ID.dalal });
+    assert.strictEqual(cross.status, 403, 'HR Dalal must not read a Bhuj salary structure: ' + JSON.stringify(cross.body));
+    const crossNoHdr = await call('GET', `/api/payroll/structure?userId=${ID.empB}`, { as: ID.hrD });
+    assert.strictEqual(crossNoHdr.status, 403, 'no header must not widen access');
+    assert.strictEqual((await call('GET', `/api/payroll/structure?userId=${ID.empB}`, { as: ID.hrB, branch: ID.bhuj })).status, 200);
+    assert.strictEqual((await call('GET', `/api/payroll/structure?userId=${ID.empB}`, { as: ID.hrAll })).status, 200, 'all-branches HR');
+    assert.strictEqual((await call('GET', `/api/payroll/structure?userId=${ID.empB}`, { as: ID.root })).status, 200, 'root admin');
+    assert.strictEqual((await call('GET', `/api/payroll/structure?userId=${ID.empD}`, { as: ID.root })).status, 200, 'root admin');
+  });
+  await t('payroll/structure: multi-branch HR reads both of their branches, not a third', async () => {
+    const hrX = await one(`INSERT INTO users (name,email,password,role,organization_id,employee_status,status,joining_date) VALUES ('HR Multi2','hr.multi2@t.com','x','admin',$1,'active','active','2025-01-01') RETURNING id`, [ID.orgA]);
+    await S(`INSERT INTO hr_branch_access (user_id, org_id, branch_id, all_branches) VALUES ($1,$2,$3,false),($1,$2,$4,false)`, [hrX.id, ID.orgA, ID.dalal, ID.bhuj]);
+    await S(`INSERT INTO user_roles (user_id, role_id, org_id) SELECT $1, r.id, $2 FROM roles r WHERE r.org_id=$2 AND r.slug='hr_admin' ON CONFLICT DO NOTHING`, [hrX.id, ID.orgA]).catch(() => {});
+    const ahmEmp = await one(`INSERT INTO users (name,email,password,role,organization_id,branch_id,employee_status,status,joining_date) VALUES ('Emp Ahm','emp.ahm2@t.com','x','employee',$1,$2,'active','active','2025-01-01') RETURNING id`, [ID.orgA, ID.ahm]);
+    await S(`INSERT INTO employee_salary_structures (organization_id, user_id, effective_from, basic, hra, gross_salary, ctc) VALUES ($1,$2,'2026-01-01',1,1,2,24)`, [ID.orgA, ahmEmp.id]);
+    await resetAccess();
+    assert.strictEqual((await call('GET', `/api/payroll/structure?userId=${ID.empD}`, { as: Number(hrX.id) })).status, 200);
+    assert.strictEqual((await call('GET', `/api/payroll/structure?userId=${ID.empB}`, { as: Number(hrX.id) })).status, 200);
+    assert.strictEqual((await call('GET', `/api/payroll/structure?userId=${ahmEmp.id}`, { as: Number(hrX.id) })).status, 403, 'third branch refused');
+  });
+  await t('payroll/structure: cross-organisation read is impossible (root of org B reading an org A employee)', async () => {
+    const r = await call('GET', `/api/payroll/structure?userId=${ID.empD}`, { as: ID.froot });
+    assert.ok(r.status === 403 || r.body === null, `foreign root must get nothing: ${r.status} ${JSON.stringify(r.body)}`);
+    assert.ok(!r.body || !r.body.ctc, 'no salary data leaked across organisations');
+  });
+  await t('payroll/structure: Branching OFF org -> HR (no branch grants) reads any employee of their own org', async () => {
+    const hrC = await one(`INSERT INTO users (name,email,password,role,organization_id,employee_status,status,joining_date) VALUES ('HR C','hr.c@t.com','x','admin',$1,'active','active','2025-01-01') RETURNING id`, [ID.orgC]);
+    await S(`INSERT INTO user_roles (user_id, role_id, org_id) SELECT $1, r.id, $2 FROM roles r WHERE r.org_id=$2 AND r.slug='hr_admin' ON CONFLICT DO NOTHING`, [hrC.id, ID.orgC]).catch(() => {});
+    await S(`DELETE FROM employee_salary_structures WHERE user_id=$1`, [ID.empC]);
+    await S(`INSERT INTO employee_salary_structures (organization_id, user_id, effective_from, basic, hra, gross_salary, ctc) VALUES ($1,$2,'2026-01-01',20000,10000,30000,360000)`, [ID.orgC, ID.empC]);
+    await resetAccess();
+    const r = await call('GET', `/api/payroll/structure?userId=${ID.empC}`, { as: Number(hrC.id) });
+    assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+  });
+  await t('payroll/structure: an employee still only reads their own structure (userId ignored)', async () => {
+    const r = await call('GET', `/api/payroll/structure?userId=${ID.empB}`, { as: ID.empD });
+    assert.strictEqual(r.status, 200);
+    assert.strictEqual(Number(r.body?.user_id), ID.empD);
+  });
+
+  console.log('\nNOTIFICATIONS follow the selected branch (subject_user_id)');
+  await t('notification list + unread badge: branch selected -> that branch + employee-independent; legacy untagged stay visible; no header = everything', async () => {
+    await S(`DELETE FROM notifications WHERE user_id = $1`, [ID.root]);
+    const ins = (title, subj) => S(`INSERT INTO notifications (user_id,title,message,type,organization_id,subject_user_id) VALUES ($1,$2,'m','general',$3,$4)`, [ID.root, title, ID.orgA, subj]);
+    await ins('about Dalal emp', ID.empD); await ins('about Bhuj emp', ID.empB); await ins('legacy untagged', null);
+    const titles = (r) => r.body.map(n => n.title).sort();
+    assert.deepStrictEqual(titles(await call('GET', '/api/notifications', { as: ID.root, branch: ID.dalal })), ['about Dalal emp', 'legacy untagged']);
+    assert.deepStrictEqual(titles(await call('GET', '/api/notifications', { as: ID.root, branch: ID.bhuj })), ['about Bhuj emp', 'legacy untagged']);
+    assert.deepStrictEqual(titles(await call('GET', '/api/notifications', { as: ID.root })), ['about Bhuj emp', 'about Dalal emp', 'legacy untagged']);
+    assert.strictEqual((await call('GET', '/api/notifications/unread-count', { as: ID.root, branch: ID.dalal })).body.count, 2);
+    assert.strictEqual((await call('GET', '/api/notifications/unread-count', { as: ID.root })).body.count, 3);
+    assert.strictEqual((await call('GET', '/api/notifications', { as: ID.root, branch: ID.foreignBr })).status, 403, 'a foreign branch header is refused');
+  });
+  await t('notifications: a subject from ANOTHER organisation never matches a branch (org-guarded join)', async () => {
+    await S(`DELETE FROM notifications WHERE user_id = $1`, [ID.root]);
+    await S(`INSERT INTO notifications (user_id,title,message,type,organization_id,subject_user_id) VALUES ($1,'foreign subject','m','general',$2,$3)`, [ID.root, ID.orgA, ID.femp]);
+    assert.deepStrictEqual((await call('GET', '/api/notifications', { as: ID.root, branch: ID.dalal })).body, []);
+  });
+  await t('notifications: admin alerts are tagged at creation (regularization request carries the requesting employee)', async () => {
+    await S(`DELETE FROM notifications WHERE user_id = $1`, [ID.root]);
+    await S(`DELETE FROM attendance_regularization WHERE user_id=$1`, [ID.empD]).catch(() => {});
+    const r = await call('POST', '/api/regularization', { as: ID.empD, body: { date: '2026-09-02', type: 'check_time', requested_check_in: '09:00', requested_check_out: '18:00', reason: 'forgot' } });
+    if (r.status >= 400) console.log('    (regularization create returned', r.status, JSON.stringify(r.body), ')');
+    const row = await until(async () => (await S(`SELECT subject_user_id FROM notifications WHERE user_id=$1 AND type='regularization'`, [ID.root]))[0], 3000);
+    assert.ok(row, 'root was notified'); assert.strictEqual(Number(row.subject_user_id), ID.empD);
+  });
+
+
+  console.log('\nBRANCHING ON vs OFF: creating an employee');
+  await t('create employee, no branch given, 2+ active branches: ON -> "Branch is required"; OFF -> allowed (organisation-wide, nothing guessed)', async () => {
+    await S(`INSERT INTO branches (org_id, name, code, is_active) VALUES ($1,'C One','C1',true),($1,'C Two','C2',true)`, [ID.orgC]);
+    await S(`UPDATE organization_features SET enabled = true WHERE organization_id=$1 AND feature_key='branches'`, [ID.orgC]);
+    await resetAccess();
+    const on = await call('POST', '/api/employees', { as: ID.rootC, body: { name: 'New On', email: 'new.on@t.com' } });
+    assert.strictEqual(on.status, 400, JSON.stringify(on.body)); assert.match(on.body.error, /Branch is required/);
+    await S(`UPDATE organization_features SET enabled = false WHERE organization_id=$1 AND feature_key='branches'`, [ID.orgC]);
+    await resetAccess();
+    const off = await call('POST', '/api/employees', { as: ID.rootC, body: { name: 'New Off', email: 'new.off@t.com' } });
+    assert.ok(off.status < 300, 'OFF must not demand a branch: ' + off.status + ' ' + JSON.stringify(off.body));
+    const row = await one(`SELECT branch_id FROM users WHERE email='new.off@t.com'`);
+    assert.strictEqual(row.branch_id, null, 'no branch is guessed');
   });
 
   server.close();

@@ -1152,6 +1152,7 @@ function EmployeeFormModal({ open, onClose, employee, onSaved, departments = [],
   const { isRootAdmin }   = useAuth();
   const qc                = useQueryClient();
   const hasBiometric      = useFeature('biometric');
+  const branchingOn       = useFeature('branches');
   const navigate        = useNavigate();
   const location        = useLocation();
   const employeesBase   = location.pathname.startsWith('/root/') ? '/root/employees' : '/employees';
@@ -1878,7 +1879,7 @@ function EmployeeFormModal({ open, onClose, employee, onSaved, departments = [],
               <div>
                 <p className="text-[0.7rem] font-black text-[#464555] uppercase tracking-wider mb-2">Organisation</p>
                 <div className="grid grid-cols-3 gap-4">
-                  <div className="col-span-2">
+                  {branchingOn && <div className="col-span-2">
                     <label className="form-label">Branch</label>
                     <select className="form-control" value={form.branch_id} onChange={e => {
                       const bId = e.target.value;
@@ -1893,7 +1894,7 @@ function EmployeeFormModal({ open, onClose, employee, onSaved, departments = [],
                         <option key={b.id} value={b.id}>{b.name}{b.location ? ` · ${b.location}` : ''}</option>
                       ))}
                     </select>
-                  </div>
+                  </div>}
                   <div>
                     <label className="form-label">Grade</label>
                     <input className="form-control" placeholder="e.g. A" value={form.grade} onChange={e => set('grade', e.target.value)} />
@@ -2349,6 +2350,7 @@ export default function Employees() {
   const navigate = useNavigate();
   const location = useLocation();
   const { selectedBranchId, isBranchContextReady } = useBranch();
+  const branchingOn = useFeature('branches');
   const { id: routeId } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
   const employeesBase = location.pathname.startsWith('/root/') ? '/root/employees' : '/employees';
@@ -3065,7 +3067,7 @@ export default function Employees() {
                       Role / Designation <ArrowUpDown size={11} className={sortBy === 'position' ? 'text-[#3525cd]' : 'text-[#c7c4d8]'} />
                     </button>
                   </th>
-                  <th className="px-4 py-3 text-left text-xs font-black text-[#464555] uppercase tracking-wider">Branch</th>
+                  {branchingOn && <th className="px-4 py-3 text-left text-xs font-black text-[#464555] uppercase tracking-wider">Branch</th>}
                   <th className="px-4 py-3 text-left text-xs font-black text-[#464555] uppercase tracking-wider">Status</th>
                   <th className="px-4 py-3 text-left text-xs font-black text-[#464555] uppercase tracking-wider whitespace-nowrap">Leave Balance</th>
                   <th className="px-4 py-3 text-left">
@@ -3103,9 +3105,9 @@ export default function Employees() {
                         : emp.department || '—'}
                     </td>
                     <td className="px-4 py-3 text-xs text-[#464555]">{emp.position || '—'}</td>
-                    <td className="px-4 py-3 text-xs text-[#464555]">
+                    {branchingOn && <td className="px-4 py-3 text-xs text-[#464555]">
                       {emp.branch_id ? (branchList.find(b => b.id === emp.branch_id)?.name || '—') : '—'}
-                    </td>
+                    </td>}
                     <td className="px-4 py-3"><EmpStatusBadge status={emp.employee_status} /></td>
                     <td className="px-4 py-3"><LeaveBalanceChips empId={emp.id} ready={balancesReady} /></td>
                     <td className="px-4 py-3 text-xs text-[#464555] whitespace-nowrap">
@@ -3308,7 +3310,7 @@ export default function Employees() {
                             <p className="text-xs text-[#151c27]">Joined on {fmtDate(profileDrawerEmp.joining_date)}</p>
                           </div>
                         )}
-                        {branchName !== '—' && (
+                        {branchingOn && branchName !== '—' && (
                           <div className="flex items-center gap-3">
                             <div className="w-7 h-7 rounded-lg bg-[#f0f3ff] flex items-center justify-center flex-shrink-0">
                               <MapPin size={13} className="text-[#3525cd]" />

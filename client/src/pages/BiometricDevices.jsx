@@ -6,6 +6,7 @@ import { Plus, Fingerprint, Wifi, WifiOff, MapPin, Server, Eye, Trash2, History 
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
+import { useFeature } from '@/context/FeatureFlagContext';
 import { apiGet, apiPost, apiDelete } from '@/lib/api';
 import { STALE } from '@/lib/queryTiers';
 import { useBranchesList } from '@/hooks/useReferenceData';
@@ -32,6 +33,7 @@ function isOnline(lastSeen) {
 
 // ── Register Device Modal ─────────────────────────────────────────────────────
 function RegisterDeviceModal({ open, onClose, branches }) {
+  const branchingOn = useFeature('branches');
   const toast = useToast();
   const qc    = useQueryClient();
   const empty = { serial_number: '', device_name: '', location: '', area_code: '', device_ip: '', branch_id: '' };
@@ -86,7 +88,7 @@ function RegisterDeviceModal({ open, onClose, branches }) {
             <label className="form-label">Device IP Address</label>
             <input className="form-control font-mono" placeholder="e.g. 192.168.1.100" value={form.device_ip} onChange={e => set('device_ip', e.target.value)} />
           </div>
-          <div>
+          {branchingOn && <div>
             <label className="form-label">Branch</label>
             <select className="form-control" value={form.branch_id} onChange={e => set('branch_id', e.target.value)}>
               <option value="">— Select branch —</option>
@@ -94,7 +96,7 @@ function RegisterDeviceModal({ open, onClose, branches }) {
                 <option key={b.id} value={b.id}>{b.name}</option>
               ))}
             </select>
-          </div>
+          </div>}
         </div>
       </div>
     </Modal>

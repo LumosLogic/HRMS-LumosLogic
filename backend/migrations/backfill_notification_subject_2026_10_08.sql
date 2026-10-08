@@ -65,3 +65,13 @@ cand AS (
 UPDATE notifications n SET subject_user_id = c.uid
 FROM cand c WHERE c.nid = n.id AND c.rn = 1 AND c.same_len = 1;
 COMMIT;
+
+-- 4) Notifications addressed to a person about THEIR OWN request ("Your leave request ... approved") belong to that
+--    person. Tag subject = recipient so they follow the recipient's branch (a Root Admin has no branch, so these
+--    appear under "All branches" only, never inside another branch's view).
+BEGIN;
+UPDATE notifications SET subject_user_id = user_id
+WHERE subject_user_id IS NULL
+  AND type IN ('leave','regularization','expense','exit','document')
+  AND message LIKE 'Your %';
+COMMIT;

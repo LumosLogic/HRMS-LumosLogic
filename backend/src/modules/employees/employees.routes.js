@@ -8,7 +8,7 @@ const { hasPermission } = require('../../middleware/permissions');
 const { orgId, getOrgContext } = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { getFilterState, canAdminAccessUser } = require('../../utils/branchFilter');
-const { validateBranchIdList, clearBranchAccessCache } = require('../../services/branchService');
+const { validateBranchIdList, clearBranchAccessCache, isBranchFeatureEnabled } = require('../../services/branchService');
 
 // Every referenced department must belong to the caller's organisation.
 async function validateDepartmentIds(ids, oId) {
@@ -186,7 +186,7 @@ router.post('/', auth, hasPermission('employees', 'create'), withBranchContext, 
       resolvedBranchId = v.ids[0];
     } else if (activeBranchIds.length === 1) {
       resolvedBranchId = activeBranchIds[0];
-    } else if (activeBranchIds.length > 1 && (role || 'employee') === 'employee') {
+    } else if (activeBranchIds.length > 1 && (role || 'employee') === 'employee' && await isBranchFeatureEnabled(orgId(req))) {
       const sel = req.branchContext?.selectedBranchId;
       const acc = req.branchContext?.accessibleBranchIds;
       if (sel) resolvedBranchId = Number(sel);

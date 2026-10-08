@@ -5,6 +5,7 @@ import { Plus, Pencil, Trash2, ShieldCheck, Mail, Building2, Check, Inbox, Eye, 
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { useBranchesList } from '@/hooks/useReferenceData';
 import { useBranch } from '@/context/BranchContext';
+import { useFeature } from '@/context/FeatureFlagContext';
 import { Avatar } from '@/components/ui/Avatar';
 import { Modal } from '@/components/ui/Modal';
 import { useToast } from '@/context/ToastContext';
@@ -21,7 +22,8 @@ function HRFormModal({ open, onClose, editing }) {
 
   React.useEffect(() => { if (open) setForm(editing ? { ...editing, password: '' } : INITIAL); }, [editing, open]);
 
-  const { data: branches = [] } = useBranchesList({ enabled: open && !editing });
+  const branchingOn = useFeature('branches');
+  const { data: branches = [] } = useBranchesList({ enabled: open && !editing && branchingOn });
 
   const save = useMutation({
     mutationFn: () => {
@@ -95,7 +97,7 @@ function HRFormModal({ open, onClose, editing }) {
             <label className="form-label">Position</label>
             <input className="form-control" value={form.position} onChange={e => set('position', e.target.value)} />
           </div>
-          {!editing && branches.length > 0 && (
+          {!editing && branchingOn && branches.length > 0 && (
             <div className="col-span-2">
               <label className="form-label">Assign to Branch <span className="font-normal text-[#777587] normal-case tracking-normal">(optional)</span></label>
               <select className="form-control" value={form.branch_id} onChange={e => set('branch_id', e.target.value)}>
