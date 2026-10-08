@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { BRANCH_KEYED } from '@/lib/queryScopes';
+import { STALE } from '@/lib/queryTiers';
 import { Plus, Pencil, Trash2, Monitor, Package, Smartphone, Tablet, Headphones, CreditCard, CheckCircle2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
 import { useBranch } from '@/context/BranchContext';
@@ -163,9 +164,9 @@ export default function Assets() {
   const [confirmDel, setConfirmDel] = useState(null);
   const [filter,     setFilter]     = useState('all');
 
-  const { data: _aData, isLoading, isPlaceholderData: assetsStale } = useQuery({ queryKey: ['assets', filter, selectedBranchId], meta: BRANCH_KEYED, placeholderData: keepPreviousData, queryFn: () => apiGet('/assets', filter !== 'all' ? { status: filter } : {}) });
+  const { data: _aData, isLoading, isPlaceholderData: assetsStale } = useQuery({ queryKey: ['assets', filter, selectedBranchId], meta: BRANCH_KEYED, refetchOnWindowFocus: true, staleTime: STALE.frequent, placeholderData: keepPreviousData, queryFn: () => apiGet('/assets', filter !== 'all' ? { status: filter } : {}) });
   // Unfiltered list used for client-side duplicate validation in the modal
-  const { data: _allAData }         = useQuery({ queryKey: ['assets-all', selectedBranchId], meta: BRANCH_KEYED, placeholderData: keepPreviousData, queryFn: () => apiGet('/assets'), staleTime: 30000 });
+  const { data: _allAData }         = useQuery({ queryKey: ['assets-all', selectedBranchId], meta: BRANCH_KEYED, refetchOnWindowFocus: true, placeholderData: keepPreviousData, queryFn: () => apiGet('/assets'), staleTime: 30000 });
   const { data: _eData }            = useEmployees({ enabled: isAdmin });
   const assets    = Array.isArray(_aData)    ? _aData    : [];
   const allAssets = Array.isArray(_allAData) ? _allAData : [];
@@ -173,11 +174,13 @@ export default function Assets() {
 
   const delMut = useMutation({
     mutationFn: id => apiDelete(`/assets/${id}`),
-    onSuccess: () => { toast('Asset deleted', 'warning'); qc.invalidateQueries({ queryKey: ['assets'] }); },
+    onSuccess: () => { toast('Asset deleted', 'warning'); qc.invalidateQueries({ queryKey: ['assets'] }); qc.invalidateQueries({ queryKey: ['assets-all'] }); },
     onError: e => toast(e.message, 'error'),
   });
 
-  const counts = { available: assets.filter(a => a.status === 'available').length, assigned: assets.filter(a => a.status === 'assigned').length, in_repair: assets.filter(a => a.status === 'in_repair').length };
+  // Bug_039: the KPI cards describe ALL assets - they must not move when a status filter narrows the table below.
+  const kpiAssets = _allAData ? allAssets : (filter === 'all' ? assets : []);
+  const counts = { available: kpiAssets.filter(a => a.status === 'available').length, assigned: kpiAssets.filter(a => a.status === 'assigned').length, in_repair: kpiAssets.filter(a => a.status === 'in_repair').length };
 
   return (
     <div className={wrap}>
@@ -192,7 +195,7 @@ export default function Assets() {
       {/* Stats */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
         {[
-          { label: 'Total Assets',  value: assets.length,         color: 'from-[#f0f3ff] to-[#e7eefe]',    top: '#3525cd', text: 'text-[#3525cd]' },
+          { label: 'Total Assets',  value: kpiAssets.length,         color: 'from-[#f0f3ff] to-[#e7eefe]',    top: '#3525cd', text: 'text-[#3525cd]' },
           { label: 'Available',     value: counts.available,      color: 'from-emerald-50 to-emerald-100',  top: '#10B981', text: 'text-emerald-700' },
           { label: 'Assigned',      value: counts.assigned,       color: 'from-amber-50 to-amber-100',      top: '#F59E0B', text: 'text-amber-700' },
           { label: 'In Repair',     value: counts.in_repair,      color: 'from-rose-50 to-rose-100',        top: '#EF4444', text: 'text-rose-700' },

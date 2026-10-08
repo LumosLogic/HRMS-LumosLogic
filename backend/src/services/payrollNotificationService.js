@@ -9,20 +9,22 @@ const MONTHS = [
 
 // Attempt to insert into notifications table.
 // Falls back silently if the column set differs — notifications are advisory.
+// NB: the table's flag column is `is_read` (default false); this used to insert into a non-existent `read` column, so every payroll
+// notification failed silently and was never delivered (found by the real-database run, 2026-10-08).
 async function insertNotification({ userId, orgId, title, message, type = 'payroll', referenceId = null }) {
   try {
     await pool.query(
       `INSERT INTO notifications
-         (user_id, organization_id, title, message, type, reference_id, read)
-       VALUES ($1,$2,$3,$4,$5,$6,false)`,
+         (user_id, organization_id, title, message, type, reference_id)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
       [userId, orgId, title, message, type, referenceId]
     );
   } catch (err) {
     if (err.message?.includes('reference_id') || err.message?.includes('column')) {
       // Schema may not have reference_id — insert without it
       await pool.query(
-        `INSERT INTO notifications (user_id, organization_id, title, message, type, read)
-         VALUES ($1,$2,$3,$4,$5,false)`,
+        `INSERT INTO notifications (user_id, organization_id, title, message, type)
+         VALUES ($1,$2,$3,$4,$5)`,
         [userId, orgId, title, message, type]
       ).catch(() => {});
     }
@@ -86,7 +88,8 @@ async function notifyPayrollComplete(orgId, runId, result, month, year) {
     : `${result.successCount} payslip(s) generated. Total net: ₹${net}.`;
 
   await notifyAdmins(orgId, title, message);
-  if (runId) await notifyEmployeesPayslipsReady(orgId, runId, month, year);
+  // Employees are NOT told here: a freshly generated run is still unverified (Bug-104). They are notified when the
+  // run is approved and the payslips are published (notifyEmployeesPayslipsReady, called from the approve route).
 }
 
 // Called when payroll generation fails entirely

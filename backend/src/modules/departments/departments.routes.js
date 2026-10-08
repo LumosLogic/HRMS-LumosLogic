@@ -75,6 +75,7 @@ router.put('/:id', auth, hasPermission('departments', 'edit'), async (req, res) 
     // Fetch old name before update so we can sync the users.department string
     const { data: oldDept } = await db.from('departments')
       .select('name, head_user_id').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
+    if (!oldDept) return res.status(404).json({ error: 'Department not found' });
 
     // Only fields that were sent are changed: a rename (no head_user_id in the body) used to clear the head,
     // silently removing the dept-head approvals and RBAC grant.
@@ -127,7 +128,8 @@ router.delete('/:id', auth, hasPermission('departments', 'delete'), async (req, 
     // users.department_id is a plain FK (no ON DELETE action) and users.department a text copy: clear both so a
     // department can be deleted and no employee keeps pointing at / displaying a department that no longer exists.
     const { data: dd } = await db.from('departments').select('name').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
-    if (dd) {
+    if (!dd) return res.status(404).json({ error: 'Department not found' });
+    {
       await pool.query('UPDATE users SET department_id = NULL WHERE department_id = $1 AND organization_id = $2', [req.params.id, oId]);
       await pool.query(
         `UPDATE users u SET department = NULL

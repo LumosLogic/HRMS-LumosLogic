@@ -40,6 +40,9 @@ const TABS = [
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
+// EMP-061: show every assigned department (falls back to the primary department text)
+const deptNames = (o) => (Array.isArray(o?.departments) && o.departments.length ? o.departments.map(d => d.name).join(', ') : (o?.department || '—'));
+
 function maskAccount(num) {
   if (!num) return '—';
   const s = String(num);
@@ -306,7 +309,7 @@ function ProfilePrintModal({ empId, open, onClose }) {
             <div className="flex-1 min-w-0">
               <h1 className="text-xl font-black text-[#151c27]">{name}</h1>
               <p className="text-sm font-bold text-[#464555] mt-0.5">{ov?.position || '—'}</p>
-              <p className="text-xs text-[#777587] mt-0.5">{ov?.department || '—'}</p>
+              <p className="text-xs text-[#777587] mt-0.5">{deptNames(ov)}</p>
               <div className="flex flex-wrap gap-3 mt-3 text-xs text-[#464555]">
                 {ov?.email    && <span><strong>Email:</strong> {ov.email}</span>}
                 {ov?.phone    && <span><strong>Phone:</strong> {ov.phone}</span>}
@@ -326,7 +329,7 @@ function ProfilePrintModal({ empId, open, onClose }) {
             <div className="bg-gray-50 rounded-xl p-4">
               <p className="text-[0.65rem] font-black text-[#3525cd] uppercase tracking-widest mb-3">Professional Information</p>
               <Row label="Employee ID"      value={ov ? (ov.employee_id || ov.device_enrollment_id || `EMP${String(ov.id || '').padStart(3, '0')}`) : undefined} />
-              <Row label="Department"       value={ov?.department} />
+              <Row label="Department"       value={ov ? deptNames(ov) : undefined} />
               <Row label="Position / Title" value={ov?.position} />
               <Row label="Grade"            value={ov?.grade} />
               <Row label="Employment Type"  value={empType} />
@@ -666,7 +669,7 @@ function OverviewTab({ empId }) {
 
   const summaryCards = [
     { label: 'Employee ID',       value: overview.employee_id || overview.device_enrollment_id || `EMP${String(overview.id || '').padStart(3, '0')}`, icon: BadgeCheck },
-    { label: 'Department',        value: overview.department || '—',                          icon: Layers },
+    { label: 'Department',        value: deptNames(overview),                          icon: Layers },
     { label: 'Position / Title',  value: overview.position || '—',                           icon: Briefcase },
     { label: 'Joining Date',      value: joiningDate ? fmtDate(joiningDate) : '—',            icon: Calendar },
     { label: 'Experience',        value: experience,                                           icon: TrendingUp },

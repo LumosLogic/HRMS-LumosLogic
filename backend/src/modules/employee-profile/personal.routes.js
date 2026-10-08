@@ -1,5 +1,6 @@
 const express = require('express');
 const router  = express.Router();
+const { V, validateBody } = require('../../utils/fieldValidators');
 const { db }                      = require('../../config/db');
 const { auth, isAdminRole, selfOrAdmin } = require('../../middleware/auth');
 const { orgId }                         = require('../../utils/helpers');
@@ -42,7 +43,12 @@ router.get('/:id/personal', auth, async (req, res) => {
 
 // PUT /api/profile/:id/personal
 // Admins: full update. Employees: only SELF_EDITABLE fields.
-router.put('/:id/personal', auth, selfOrAdmin(SELF_EDITABLE), async (req, res) => {
+router.put('/:id/personal', auth, selfOrAdmin(SELF_EDITABLE), validateBody({
+  name: V.text('Full name'), middle_name: V.text('Middle name', { max: 50 }), surname: V.text('Surname', { max: 50 }),
+  phone: V.phone('Mobile number'), personal_email: V.email('Personal email'), date_of_birth: V.pastDate('Date of birth'),
+  nationality: V.text('Nationality', { max: 50 }), religion: V.text('Religion', { max: 50 }), citizenship: V.text('Citizenship', { max: 50 }),
+  current_country: V.text('Country', { max: 60 }), permanent_country: V.text('Country', { max: 60 }),
+}), async (req, res) => {
   try {
     const empId = parseInt(req.params.id);
     const isAdmin = isAdminRole(req.user.role);

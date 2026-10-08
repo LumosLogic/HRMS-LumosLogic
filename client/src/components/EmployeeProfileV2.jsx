@@ -219,7 +219,7 @@ function PersonalTab({ empId, isAdmin, onUnsavedChange }) {
       {/* ── Basic Information ── */}
       <SectionCard title="Basic Information" icon={User}
         action={isAdmin && (editSection === 'basic'
-          ? <TopSaveActions onSave={() => saveMut.mutate(form)} onCancel={cancelEdit} isPending={saveMut.isPending} />
+          ? null   // EMP-010: one Save/Cancel set only (the form footer has it)
           : <AdminBtn onClick={openBasic} />)}>
         {editSection === 'basic' ? (
           <div>
@@ -292,7 +292,7 @@ function PersonalTab({ empId, isAdmin, onUnsavedChange }) {
       {/* ── Addresses ── */}
       <SectionCard title="Addresses" icon={MapPin}
         action={isAdmin && (editSection === 'address'
-          ? <TopSaveActions onSave={() => saveMut.mutate(form)} onCancel={cancelEdit} isPending={saveMut.isPending} />
+          ? null   // EMP-010: one Save/Cancel set only (the form footer has it)
           : <AdminBtn onClick={openAddress} />)}>
         {editSection === 'address' ? (
           <div className="space-y-4">
@@ -389,7 +389,7 @@ function PersonalTab({ empId, isAdmin, onUnsavedChange }) {
       {/* ── Health Information ── */}
       <SectionCard title="Health Information" icon={Heart}
         action={isAdmin && (editSection === 'health'
-          ? <TopSaveActions onSave={() => saveHealthMut.mutate(form)} onCancel={cancelEdit} isPending={saveHealthMut.isPending} />
+          ? null   // EMP-010: one Save/Cancel set only (the form footer has it)
           : <AdminBtn onClick={openHealth} />)}>
         {editSection === 'health' ? (
           <div>
@@ -416,6 +416,8 @@ function PersonalTab({ empId, isAdmin, onUnsavedChange }) {
             <InfoRow label="Disabilities" value={health.disabilities} />
             {isAdmin && <InfoRow label="Insurance Provider" value={health.health_insurance_provider} />}
             {isAdmin && <InfoRow label="Insurance Number" value={health.health_insurance_number} />}
+            {/* EMP-011: the saved expiry was editable but never displayed */}
+            {isAdmin && <InfoRow label="Insurance Expiry" value={health.health_insurance_expiry ? fmtDate(String(health.health_insurance_expiry).slice(0, 10)) : null} />}
             <InfoRow label="Emergency Notes" value={health.emergency_medical_notes} />
           </div>
         )}
@@ -734,12 +736,7 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp, onUnsavedChange }) {
       {/* Employment Details — inline editing */}
       <SectionCard title="Employment Details" icon={Briefcase}
         action={isAdmin && (empDetailsEditing
-          ? <div className="flex items-center gap-1.5">
-              <button className="btn btn-outline py-0.5 px-2 text-xs h-auto" onClick={() => { setEmpDetailsEditing(false); onUnsavedChange?.(false); }}>Cancel</button>
-              <button className="btn btn-primary py-0.5 px-2 text-xs h-auto" onClick={() => { const { employee_id: _eid, ...saveable } = form; empDetailsMut.mutate(saveable); }} disabled={empDetailsMut.isPending}>
-                {empDetailsMut.isPending ? <Loader2 size={11} className="animate-spin" /> : <><Save size={11} />Save</>}
-              </button>
-            </div>
+          ? null   // EMP-020: one Save/Cancel set only (the form footer has it)
           : <AdminBtn onClick={() => {
               const initial = {
                 employee_id:     prof.employee_id     || '',
@@ -812,6 +809,10 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp, onUnsavedChange }) {
                 <input type="checkbox" checked={form.probation_applicable||false} onChange={e=>set('probation_applicable',e.target.checked)} className="accent-[#3525cd]"/>
                 Probation Applicable
               </label>
+              {/* EMP-069: the server forces status = Probation whenever Probation Applicable is saved as ON - say so before saving */}
+              {form.probation_applicable && form.employee_status !== 'probation' && (
+                <p className="col-span-2 -mt-2 text-[0.7rem] text-amber-700">Employee Status will change to <strong>Probation</strong> when you save.</p>
+              )}
               {form.probation_applicable && (
                 <div><label className="form-label">Probation Months</label><input type="number" className="form-control" min="1" max="24" value={form.probation_months||''} onChange={e=>set('probation_months',e.target.value)}/></div>
               )}
@@ -839,6 +840,8 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp, onUnsavedChange }) {
             <InfoRow label="Employment Type" value={prof.employment_type?.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())} />
             <InfoRow label="Work Mode" value={prof.work_mode?.replace(/\b\w/g, c => c.toUpperCase())} />
             <InfoRow label="Status" value={prof.employee_status?.replace(/\b\w/g, c => c.toUpperCase())} />
+            {/* EMP-058: saved probation period belongs in Employment Details (it was only shown in another card) */}
+            {prof.probation_applicable && <InfoRow label="Probation Period" value={prof.probation_months ? `${prof.probation_months} month${Number(prof.probation_months) === 1 ? '' : 's'}` : 'Not set'} />}
             {prof.reporting_to && <InfoRow label="Reporting Manager" value={prof.manager?.name} icon={User} />}
           </div>
         )}
@@ -847,12 +850,7 @@ function ProfessionalTab({ empId, isAdmin, onEdit, emp, onUnsavedChange }) {
       {/* Org Structure */}
       <SectionCard title="Organisation Structure" icon={Users}
         action={isAdmin && (orgStructEditing
-          ? <div className="flex items-center gap-1.5">
-              <button className="btn btn-outline py-0.5 px-2 text-xs h-auto" onClick={() => { setOrgStructEditing(false); onUnsavedChange?.(false); }}>Cancel</button>
-              <button className="btn btn-primary py-0.5 px-2 text-xs h-auto" onClick={() => orgStructMut.mutate(form)} disabled={orgStructMut.isPending}>
-                {orgStructMut.isPending ? <Loader2 size={11} className="animate-spin" /> : <><Save size={11} />Save</>}
-              </button>
-            </div>
+          ? null   // EMP-020: one Save/Cancel set only (the form footer has it)
           : <AdminBtn onClick={openOrgStruct} />
         )}>
 
@@ -1750,11 +1748,10 @@ function ComplianceTab({ empId, isAdmin, onEdit, emp }) {
               <InfoRow label="Expiry Date"       value={i.expiry_date ? fmtDate(i.expiry_date) : null} />
               <InfoRow label="Country"           value={i.country ? i.country.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) : null} />
               {i.remarks && <InfoRow label="Remarks" value={i.remarks} />}
-              {immigration.length > 1 && (
-                <div className="col-span-full mt-2">
-                  <button onClick={() => delImmi.mutate(i.id)} className="text-xs text-rose-500 flex items-center gap-1"><Trash2 size={11}/>Remove</button>
-                </div>
-              )}
+              {/* EMP-046: Remove was shown only when 2+ records existed; the server has no minimum-record rule */}
+              <div className="col-span-full mt-2">
+                <button onClick={() => delImmi.mutate(i.id)} className="text-xs text-rose-500 flex items-center gap-1"><Trash2 size={11}/>Remove</button>
+              </div>
             </div>
           ))
         )}

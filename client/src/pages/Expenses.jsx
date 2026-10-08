@@ -106,9 +106,11 @@ function ExpenseModal({ open, onClose, expense, allExpenses = [] }) {
   async function runDuplicateCheck() {
     const rn = form.receipt_number.trim();
     const mn = form.merchant_name.trim();
-    if (!rn && !mn) return null;   // nothing to check
+    // BUG_264: always ask the server. It also compares the receipt FILE and the title + amount + date, which this early
+    // return used to skip whenever the optional merchant / receipt-number boxes were left empty.
     try {
       return await apiPost('/expenses/check-duplicate', {
+        title: form.title.trim(),
         merchant_name: mn,
         receipt_number: rn,
         receipt_filename: form.receipt_filename || '',

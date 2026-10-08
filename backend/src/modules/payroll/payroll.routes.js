@@ -913,6 +913,13 @@ router.put('/salary-structures/:id', auth, hasPermission('payroll', 'manage_stru
       `ALTER TABLE employee_salary_structures ADD COLUMN IF NOT EXISTS retention NUMERIC DEFAULT 0`
     ).catch(() => {});
 
+    // SAL-005: same non-negative rule as the create path, checked BEFORE the deductions-vs-gross comparison so a
+    // negative amount gets its own message instead of "deductions cannot be greater than gross".
+    for (const [key, val] of Object.entries({ basic, hra, da, transport_allowance, medical_allowance, special_allowance, other_allowance })) {
+      if (Number(val) < 0)
+        return res.status(400).json({ error: `Salary amount for "${key.replace(/_/g, ' ')}" cannot be negative. Please enter a value of 0 or greater.` });
+    }
+
     const gross_salary = parseFloat((
       Number(basic) + Number(hra) + Number(da) +
       Number(transport_allowance) + Number(medical_allowance) +
@@ -1414,7 +1421,7 @@ router.put('/payslips/:id/publish', auth, hasPermission('payroll', 'generate'), 
 
     // FAIL-9 FIX: Fetch payslip with its run's branch_id for branch authorization.
     const { rows } = await pool.query(
-      `SELECT ps.id, ps.status, ps.locked, ps.payroll_run_id, pr.branch_id
+      `SELECT ps.id, ps.status, ps.locked, ps.payroll_run_id, pr.branch_id, pr.status AS run_status
          FROM payslips ps
          LEFT JOIN payroll_runs pr ON pr.id = ps.payroll_run_id AND pr.organization_id = $2
         WHERE ps.id = $1 AND ps.organization_id = $2`,
@@ -1424,6 +1431,11 @@ router.put('/payslips/:id/publish', auth, hasPermission('payroll', 'generate'), 
     const slip = rows[0];
     if (slip.locked) {
       return res.status(409).json({ error: 'Payslip is locked and cannot be published without unlocking.' });
+    }
+    // A payslip that belongs to a payroll run is published through the run's verify -> approve flow only;
+    // publishing it individually would show employees unverified figures (Bug-104).
+    if (slip.payroll_run_id != null && !['approved', 'locked', 'paid'].includes(slip.run_status)) {
+      return res.status(409).json({ error: `Payslip belongs to a payroll run that is '${slip.run_status}'. Verify and approve the run to publish it.` });
     }
     // If payslip belongs to a branch-specific run, validate branch access.
     // Payslips with no payroll_run or with a NULL-branch run are accessible to all org admins.
@@ -1565,24 +1577,7 @@ router.post('/lock/:id', auth, hasPermission('payroll', 'lock'), async (req, res
     });
     res.json(result);
 
-    // Fire-and-forget: notify every employee whose payslip is in this locked run
-    pool.query(
-      `SELECT ps.user_id, ps.net_salary, ps.month, ps.year
-         FROM payslips ps
-        WHERE ps.payroll_run_id = $1 AND ps.organization_id = $2`,
-      [runId, oId]
-    ).then(({ rows }) => {
-      if (!rows.length) return;
-      return db.from('notifications').insert(
-        rows.map(r => ({
-          user_id:         r.user_id,
-          title:           'Your Payslip is Ready',
-          message:         `Your payslip for ${String(r.month).padStart(2,'0')}/${r.year} has been finalized. Net pay: ₹${Number(r.net_salary).toFixed(2)}.`,
-          type:            'payroll',
-          organization_id: oId,
-        }))
-      );
-    }).catch(() => {});
+    // Employees were already notified when the run was approved and published.
   } catch (err) { genErrResponse(res, err); }
 });
 
@@ -1723,6 +1718,7 @@ router.get('/payslips/:id/details', auth, hasPermission('payroll', 'view'), asyn
     // Non-admin employees may only view their own payslips (unchanged behavior)
     if (!isAdmin(req.user.role)) {
       if (!sameId(slip.user_id, req.user.id)) return res.status(403).json({ error: 'Access denied' });
+      if (!slip.locked && slip.status !== 'published') return res.status(404).json({ error: 'Payslip not found' }); // Bug-104
     } else if (slip.user_branch_id != null) {
       // NR-1 FIX: Admin/HR must have branch access to view this employee's payslip
       const ok = await validateBranchAccess(req.user.id, oId, req.user.role, slip.user_branch_id);
@@ -1756,6 +1752,8 @@ router.get('/payslips/:id/pdf', auth, async (req, res) => {
     if (!isAdmin(req.user.role)) {
       // Employee path: self-access only — no RBAC permission needed for own payslip.
       if (Number(ps.user_id) !== Number(req.user.id)) return res.status(403).json({ error: 'Access denied' });
+      // Same rule as the list (Bug-104): an unverified / unpublished payslip is not the employee's to see or download.
+      if (!ps.locked && ps.status !== 'published') return res.status(404).json({ error: 'Payslip not found' });
     } else {
       // Admin/HR path: payroll.view required + branch isolation preserved.
       const { resolvePermissions, hasPermissionCheck } = require('../../services/permissionService');
@@ -1905,6 +1903,7 @@ router.get('/payslips/:id', auth, async (req, res) => {
     // Non-admin employees may only view their own payslips (unchanged behavior)
     if (!isAdmin(req.user.role)) {
       if (!sameId(slip.user_id, req.user.id)) return res.status(403).json({ error: 'Access denied' });
+      if (!slip.locked && slip.status !== 'published') return res.status(404).json({ error: 'Payslip not found' }); // Bug-104
     } else if (slip.user_branch_id != null) {
       // NR-1 FIX: Admin/HR must have branch access to view this employee's payslip
       const ok = await validateBranchAccess(req.user.id, oId, req.user.role, slip.user_branch_id);
@@ -2268,6 +2267,10 @@ router.post('/runs/:id/approve', auth, hasPermission('payroll', 'approve'), asyn
            WHERE payroll_run_id = $1 AND organization_id = $2 AND status = 'generated'`,
           [runId, oId]
         );
+        // Payslips are now visible to employees -> this (not generation) is when they get "payslip available".
+        await require('../../services/payrollNotificationService')
+          .notifyEmployeesPayslipsReady(oId, runId, runRow[0].month, runRow[0].year)
+          .catch(e => console.error('[payroll approve] employee notify failed:', e.message));
 
         // Only send emails if auto-email is enabled
         const { rows: [ps] } = await pool.query(
@@ -2366,6 +2369,23 @@ router.post('/runs/:id/mark-paid', auth, hasPermission('payroll', 'mark_paid'), 
       action: 'payroll_paid', entityType: 'payroll_run', entityId: runId, ip: req.ip });
 
     res.json(updated[0]);
+
+    // PAY-005: marking Paid also delivers the payslip emails when auto-email is on and they have not gone out yet
+    // (same once-per-run guard as approve, so nothing is ever sent twice). Fire-and-forget after the response.
+    setImmediate(async () => {
+      try {
+        await pool.query(
+          `UPDATE payslips SET status = 'published'
+            WHERE payroll_run_id = $1 AND organization_id = $2 AND status = 'generated'`, [runId, oId]);
+        const { rows: [cfg] } = await pool.query(
+          `SELECT payslip_auto_email FROM payroll_settings WHERE organization_id = $1`, [oId]);
+        if (!cfg?.payslip_auto_email) return;
+        const { rows: already } = await pool.query(
+          `SELECT 1 FROM payroll_email_log WHERE payroll_run_id = $1 AND organization_id = $2 AND status = 'sent' LIMIT 1`, [runId, oId]);
+        if (already.length) return;
+        await sendPayslipsBatch({ organizationId: oId, runId, month: updated[0].month, year: updated[0].year });
+      } catch (e) { console.error('[payroll mark-paid] auto-email failed:', e.message); }
+    });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -2433,14 +2453,16 @@ router.get('/dashboard', auth, hasPermission('payroll', 'view'), withBranchConte
     ]);
 
     // KPI cards — aggregate across all runs in the filter period
-    const kpi = summary.reduce((acc, r) => {
-      acc.totalPayroll    += Number(r.total_gross    || 0);
-      acc.totalNet        += Number(r.total_net      || 0);
-      acc.totalDeductions += Number(r.total_deductions || 0);
-      acc.employeesPaid   += Number(r.employee_count || 0);
-      acc.errorCount      += Number(r.error_count    || 0);
+    // The money/headcount KPIs are summed from the SAME payslip-level rows as the department breakdown, so the two
+    // can never disagree (the run-level totals ignored regenerated payslips and excluded adjustments). Tisha Bug_033-036.
+    const kpi = deptBreakdown.reduce((acc, d) => {
+      acc.totalPayroll    += Number(d.total_gross      || 0);
+      acc.totalNet        += Number(d.total_net        || 0);
+      acc.totalDeductions += Number(d.total_deductions || 0);
+      acc.employeesPaid   += Number(d.employee_count   || 0);
       return acc;
     }, { totalPayroll: 0, totalNet: 0, totalDeductions: 0, employeesPaid: 0, errorCount: 0 });
+    kpi.errorCount = summary.reduce((n, r) => n + Number(r.error_count || 0), 0);
 
     kpi.avgSalary = kpi.employeesPaid > 0 ? kpi.totalNet / kpi.employeesPaid : 0;
 

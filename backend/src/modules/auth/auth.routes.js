@@ -9,7 +9,7 @@ const cloudinary = require('cloudinary').v2;
 const { authenticator } = require('otplib');
 const qrcode = require('qrcode');
 const { db } = require('../../config/db');
-const { JWT_SECRET, auth, clearRoleChanged } = require('../../middleware/auth');
+const { JWT_SECRET, auth, clearRoleChanged, revokeSessions, revokeSessionsQuiet } = require('../../middleware/auth');
 const { orgId, getRecipients } = require('../../utils/helpers');
 const { sendMail, passwordResetHtml } = require('../../services/emailService');
 const { rateLimiter, LIMITS } = require('../../middleware/rateLimiter');
@@ -293,6 +293,7 @@ router.post('/reset-password', rateLimiter(LIMITS.RESET_PASSWORD), async (req, r
       password_reset_expires: null,
       force_password_change:  false,
     }).eq('id', user.id);
+    await revokeSessionsQuiet(user.id);
 
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -487,14 +488,20 @@ router.get('/login-history', auth, async (req, res) => {
 router.post('/logout-all-devices', auth, async (req, res) => {
   try {
     // Record this action in login history as a logout event
-    await db.from('login_history').insert({
-      user_id: req.user.id, organization_id: req.user.organization_id,
-      ip_address: req.ip, user_agent: req.headers['user-agent'] || '',
-      status: 'logout_all',
-    }).catch(() => {});
-    // Bump the user's token_version or last_password_change to invalidate old JWTs
-    await db.from('users').update({ last_password_changed_at: new Date().toISOString() }).eq('id', req.user.id);
-    res.json({ ok: true, message: 'All other sessions have been invalidated.' });
+    try {
+      await db.from('login_history').insert({
+        user_id: req.user.id, organization_id: req.user.organization_id,
+        ip_address: req.ip, user_agent: req.headers['user-agent'] || '',
+        status: 'logout_all',
+      });
+    } catch { /* history is best-effort; the db wrapper's builder has no .catch (API-01 root cause) */ }
+    // Kill every token issued before now, then hand this device a fresh one so it stays signed in.
+    await revokeSessions(req.user.id);
+    const token = jwt.sign(
+      { id: req.user.id, email: req.user.email, role: req.user.role, name: req.user.name, organization_id: req.user.organization_id, organization_slug: req.user.organization_slug || '' },
+      JWT_SECRET, { expiresIn: '7d' }
+    );
+    res.json({ ok: true, token, message: 'All other sessions have been invalidated.' });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

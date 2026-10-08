@@ -6,12 +6,20 @@ const { sectionGuard } = require('../../middleware/effectiveAccess');
 const { localDateStr, flat, orgId, getSettings } = require('../../utils/helpers');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { getFilterState } = require('../../utils/branchFilter');
+const { loadPendingApprovals, countPending } = require('../../services/pendingApprovalsSummary');
 
 // ─── Dashboard ────────────────────────────────────────────────────────────────
 router.get('/', auth, withBranchContext, async (req, res) => {
   let _step = 'init';
   try {
     const realToday = localDateStr();
+    // API-03 / API-04: `date` must be a real calendar date in YYYY-MM-DD (rejects 15/09/2026 and 2026-99-99).
+    if (req.query.date !== undefined) {
+      const d = String(req.query.date);
+      const dt = new Date(d + 'T00:00:00Z');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || isNaN(dt) || dt.toISOString().slice(0, 10) !== d)
+        return res.status(400).json({ error: 'date must be a valid date in YYYY-MM-DD format.' });
+    }
     const today     = req.query.date || realToday;
     const isToday   = today === realToday;
 
@@ -68,7 +76,7 @@ router.get('/', auth, withBranchContext, async (req, res) => {
     // BUG_054/056/070: Count ALL pending statuses including pending_approval
     const ALL_PENDING = ['pending', 'pending_root', 'pending_dept', 'pending_approval'];
 
-    const [attRes, talRes, pendLeaveRes, regRes, expRes, plRes, myTodayRes] = await Promise.all([
+    const [attRes, talRes, pendLeaveRes, regRes, expRes, plRes, myTodayRes, pendingSummary] = await Promise.all([
       // selected-date attendance — employees only
       empIds.length > 0
         ? db.from('attendance').select('*, users(name, avatar_color, department)')
@@ -80,14 +88,13 @@ router.get('/', auth, withBranchContext, async (req, res) => {
             .eq('organization_id', orgIdVal).eq('status', 'approved')
             .lte('start_date', today).gte('end_date', today).in('user_id', empIds)
         : null,
-      noScope ? null : byUsers(db.from('leaves').select('*', { count: 'exact', head: true })
+      // Admin callers: the Pending Approvals card is counted from the SAME source as the Pending Approvals page (below).
+      (noScope || isAdminCaller) ? null : byUsers(db.from('leaves').select('*', { count: 'exact', head: true })
         .in('status', ALL_PENDING).eq('organization_id', orgIdVal)),
       // Bug_023: dashboard "Pending Approvals" must match what the PendingApprovals page shows
       // (it also lists regularizations and expenses with status='pending').
-      (isAdminCaller && !noScope) ? byUsers(db.from('attendance_regularization').select('*', { count: 'exact', head: true })
-        .eq('status', 'pending').eq('organization_id', orgIdVal)) : null,
-      (isAdminCaller && !noScope) ? byUsers(db.from('expenses').select('*', { count: 'exact', head: true })
-        .eq('status', 'pending').eq('organization_id', orgIdVal)) : null,
+      null,
+      null,
       isAdminCaller
         // BUG_070: include all pending statuses so the widget shows actual pending requests
         ? (noScope ? null : byUsers(db.from('leaves')
@@ -98,6 +105,7 @@ router.get('/', auth, withBranchContext, async (req, res) => {
             .eq('user_id', req.user.id).eq('organization_id', orgIdVal)
             .order('created_at', { ascending: false }).limit(5),
       db.from('attendance').select('*').eq('user_id', req.user.id).eq('date', today).maybeSingle(),
+      (isAdminCaller && !noScope) ? loadPendingApprovals(req).catch(e => { console.error('[Dashboard] pending summary:', e.message); return null; }) : null,
     ]);
     const todayRecords = attRes ? flat(attRes.data) : [];
 
@@ -145,19 +153,22 @@ router.get('/', auth, withBranchContext, async (req, res) => {
     const recentActivity = [...activityMap.values()].slice(0, 15);
 
     // ── 5. Pending leaves (branch-scoped when in a specific branch context) ───
-    const pendingLeaveCount = pendLeaveRes?.count || 0;
-    const pendingRegCount   = regRes?.count || 0;
-    const pendingExpCount   = expRes?.count || 0;
+    const sum = pendingSummary ? countPending(pendingSummary) : null;
+    const pendingLeaveCount = sum ? sum.leaves          : (pendLeaveRes?.count || 0);
+    const pendingRegCount   = sum ? sum.regularizations : (regRes?.count || 0);
+    const pendingExpCount   = sum ? sum.expenses        : (expRes?.count || 0);
     const pendingLeaves = pendingLeaveCount + pendingRegCount + pendingExpCount;
     const pendingLeaveList = plRes ? flat(plRes.data) : [];
     const myToday = myTodayRes?.data ?? null;
 
-    const payload = { totalEmployees, presentToday, onLeaveToday, lateToday, earlyExitToday, halfDayToday, wfhToday, checkedInToday, newThisMonth, pendingLeaves, recentActivity, pendingLeaveList, myToday, today, isToday, newJoiners };
+    const payload = { totalEmployees, presentToday, onLeaveToday, lateToday, earlyExitToday, halfDayToday, wfhToday, checkedInToday, newThisMonth, pendingLeaves, pendingRegCount, pendingExpCount, recentActivity, pendingLeaveList, myToday, today, isToday, newJoiners };
     // Custom-role caller: only the sections their custom role covers (Root / HR / system roles are never trimmed).
     const can = await sectionGuard(req);
     if (!can('attendance')) Object.assign(payload, { presentToday: 0, onLeaveToday: 0, lateToday: 0, earlyExitToday: 0, halfDayToday: 0, wfhToday: 0, checkedInToday: 0, recentActivity: [] });
     if (!can('employees')) Object.assign(payload, { totalEmployees: 0, newThisMonth: 0, newJoiners: [] });
     if (!can('leaves')) Object.assign(payload, { pendingLeaveList: [] });
+    if (!can('attendance', 'approve_regularization')) payload.pendingRegCount = 0;
+    if (!can('expenses', 'approve')) payload.pendingExpCount = 0;
     payload.pendingLeaves = (can('leaves') ? pendingLeaveCount : 0)
       + (can('attendance', 'approve_regularization') ? pendingRegCount : 0)
       + (can('expenses', 'approve') ? pendingExpCount : 0);

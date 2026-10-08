@@ -8,6 +8,8 @@
 const path = require('path');
 const fs = require('fs');
 const assert = require('assert');
+// Tests must never send real mail: dotenv does not override variables that are already set, so blank SMTP credentials stay blank.
+require('./helpers/realdb_env'); // blanks every provider credential, fakes Cloudinary, blocks non-local network (see helper)
 require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 
 const SCHEMA = process.env.REAL_DB_SCHEMA || 'bsv_verify';
@@ -16,7 +18,8 @@ process.env.PGOPTIONS = `-c search_path=${SCHEMA}`;
 process.env.JWT_SECRET = process.env.JWT_SECRET || 'bgv-realdb-test-secret';
 process.env.PAYROLL_SCHEDULER_ENABLED = 'false';
 // Hermetic: never let real SpringVerify credentials from .env reach this test (no live calls, ever).
-for (const k of ['SPRINGVERIFY_BASE_URL', 'SPRINGVERIFY_API_TOKEN', 'SPRINGVERIFY_PACKAGE_IDENTIFIER']) delete process.env[k];
+// Blank (not delete): dotenv, loaded again by the app, re-fills deleted variables from .env but never overrides ones that are set.
+for (const k of ['SPRINGVERIFY_BASE_URL', 'SPRINGVERIFY_API_TOKEN', 'SPRINGVERIFY_PACKAGE_IDENTIFIER']) process.env[k] = '';
 process.env.BGV_PROVIDER_MODE = 'mock';
 // The legacy invite route is disabled by default in the app; these older tests exercise it, so opt in here only.
 process.env.BGV_LEGACY_INVITE_ENABLED = 'true';
@@ -394,7 +397,7 @@ const bgvRow = (id) => one('SELECT * FROM bgv_requests WHERE id=$1', [id]);
     });
     global.fetch = realFetch;
     process.env.BGV_PROVIDER_MODE = 'mock';
-    for (const k of ['SPRINGVERIFY_BASE_URL', 'SPRINGVERIFY_API_TOKEN', 'SPRINGVERIFY_PACKAGE_IDENTIFIER']) delete process.env[k];
+    for (const k of ['SPRINGVERIFY_BASE_URL', 'SPRINGVERIFY_API_TOKEN', 'SPRINGVERIFY_PACKAGE_IDENTIFIER']) process.env[k] = '';
     await S(`UPDATE bgv_requests SET status='cancelled' WHERE organization_id=$1 AND status IN ('pending','in_progress')`, [ID.orgA]);
   }
 
@@ -530,7 +533,7 @@ const bgvRow = (id) => one('SELECT * FROM bgv_requests WHERE id=$1', [id]);
     assert.deepStrictEqual(outbound, [], 'no outbound SpringVerify request happened anywhere in the scaffold tests');
     global.fetch = realFetch;
     process.env.BGV_PROVIDER_MODE = 'mock';
-    for (const k of ['SPRINGVERIFY_BASE_URL', 'SPRINGVERIFY_API_TOKEN', 'SPRINGVERIFY_PACKAGE_IDENTIFIER']) delete process.env[k];
+    for (const k of ['SPRINGVERIFY_BASE_URL', 'SPRINGVERIFY_API_TOKEN', 'SPRINGVERIFY_PACKAGE_IDENTIFIER']) process.env[k] = '';
   }
 
   server.close();

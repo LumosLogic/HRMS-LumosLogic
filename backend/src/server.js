@@ -254,6 +254,9 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, '../../public', 'index.html'));
 });
 
+// JSON errors for anything thrown outside a route's own try/catch (multer, body-parser) — must come after all routes.
+app.use(require('./middleware/apiErrorHandler').apiErrorHandler);
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 async function runStartupMigrations() {
   const { pool } = require('./config/db');

@@ -1,5 +1,6 @@
 const express = require('express');
 const router  = express.Router();
+const { V, validateBody } = require('../../utils/fieldValidators');
 const { db }              = require('../../config/db');
 const { auth, adminOnly, isAdminRole } = require('../../middleware/auth');
 const { orgId }                 = require('../../utils/helpers');
@@ -22,7 +23,9 @@ router.get('/:id/immigration', auth, async (req, res) => {
 });
 
 // POST /api/profile/:id/immigration
-router.post('/:id/immigration', auth, adminOnly, async (req, res) => {
+const IMM_RULES = { citizenship: V.text('Citizenship', { max: 60 }), country: V.text('Country', { max: 60 }) };
+
+router.post('/:id/immigration', auth, adminOnly, validateBody(IMM_RULES), async (req, res) => {
   try {
     const empId = parseInt(req.params.id);
     const {
@@ -47,7 +50,7 @@ router.post('/:id/immigration', auth, adminOnly, async (req, res) => {
 });
 
 // PUT /api/profile/:id/immigration/:recordId
-router.put('/:id/immigration/:recordId', auth, adminOnly, async (req, res) => {
+router.put('/:id/immigration/:recordId', auth, adminOnly, validateBody(IMM_RULES), async (req, res) => {
   try {
     const {
       citizenship, immigration_type, immigration_no, passport_number,

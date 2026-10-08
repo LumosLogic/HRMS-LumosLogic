@@ -19,6 +19,7 @@ import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-quer
 import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
+import { useCheckInStatus } from '@/hooks/useCheckInStatus';
 import { useBranch } from '@/context/BranchContext';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { STALE } from '@/lib/queryTiers';
@@ -76,6 +77,7 @@ const hoverCursor = (event, elements) => {
 // ── Check-in Widget ────────────────────────────────────────────────────────────
 function CheckinWidget({ onRefresh }) {
   const toast = useToast();
+  const { blocked: checkInBlocked, reason: checkInReason } = useCheckInStatus();
   const qc = useQueryClient();
   const [record, setRecord] = useState(null);
   const [elapsed, setElapsed] = useState('');
@@ -151,7 +153,7 @@ function CheckinWidget({ onRefresh }) {
                 <p className="text-xs text-[#777587]">You haven't checked in today</p>
               </div>
             </div>
-            <button onClick={checkIn} disabled={busy}
+            <button onClick={checkIn} disabled={busy || checkInBlocked} title={checkInReason || undefined}
               className="w-full flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 text-white font-bold text-sm px-4 py-2.5 rounded-xl transition-all shadow-sm">
               <CheckCircle2 size={14} /> {busy ? 'Checking in…' : 'Check In Now'}
             </button>
@@ -1122,8 +1124,22 @@ export default function Dashboard() {
                 <div className="w-10 h-10 rounded-full bg-emerald-50 border border-emerald-200 flex items-center justify-center mx-auto mb-2">
                   <CheckCircle2 size={18} className="text-emerald-500" />
                 </div>
-                <p className="text-xs font-semibold text-[#151c27]">No pending requests</p>
-                <p className="text-[0.62rem] text-[#777587] mt-1">All leave requests have been reviewed.</p>
+                {pending > 0 ? (
+                  // The card counts leaves + regularizations + expenses; this list shows leaves only. Never say "clear" while the card says otherwise.
+                  <>
+                    <p className="text-xs font-semibold text-[#151c27]">No pending leave requests</p>
+                    <p className="text-[0.62rem] text-[#777587] mt-1">
+                      {[d?.pendingRegCount > 0 && `${d.pendingRegCount} regularization`, d?.pendingExpCount > 0 && `${d.pendingExpCount} expense`].filter(Boolean).join(' · ') || 'Other requests'} awaiting approval.
+                    </p>
+                    <button onClick={() => navigate(hasCustomAccess ? '/leaves?status=pending' : '/pending-approvals')}
+                      className="mt-2 text-[0.68rem] font-bold text-[#3525cd] hover:underline">Open Pending Approvals</button>
+                  </>
+                ) : (
+                  <>
+                    <p className="text-xs font-semibold text-[#151c27]">No pending requests</p>
+                    <p className="text-[0.62rem] text-[#777587] mt-1">All leave requests have been reviewed.</p>
+                  </>
+                )}
               </div>
             ) : (d?.pendingLeaveList || []).map(l => (
               <div key={l.id} className="flex items-start gap-2.5 px-4 py-3 hover:bg-[#fafaff] cursor-pointer transition-colors"

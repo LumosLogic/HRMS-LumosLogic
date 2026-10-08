@@ -130,7 +130,7 @@ router.post('/', auth, hasPermission('announcements', 'create'), withBranchConte
     if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin only' });
     const oId = resolveOrgId(req);
     const { title, content, type, priority, target_audience, pinned, expires_at, scheduled_at, file_url, file_name, file_type } = req.body;
-    if (!title || !content) return res.status(400).json({ error: 'title and content required' });
+    if (!title || !content || !String(content).replace(/<[^>]*>|&nbsp;/g, '').trim()) return res.status(400).json({ error: 'title and content required' });
     // BUG_088: enforce field length limits at API level
     if (title.trim().length > 100) return res.status(400).json({ error: 'Title must be 100 characters or fewer.' });
     if (!/[a-zA-Z]/.test(title.trim())) return res.status(400).json({ error: 'Title must contain at least one letter.' });

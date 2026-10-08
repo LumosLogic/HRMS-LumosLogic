@@ -16,6 +16,8 @@
 const path = require('path');
 const fs = require('fs');
 const assert = require('assert');
+// Tests must never send real mail: dotenv does not override variables that are already set, so blank SMTP credentials stay blank.
+require('./helpers/realdb_env'); // blanks every provider credential, fakes Cloudinary, blocks non-local network (see helper)
 require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 
 const SCHEMA = process.env.REAL_DB_SCHEMA || 'bsv_verify';

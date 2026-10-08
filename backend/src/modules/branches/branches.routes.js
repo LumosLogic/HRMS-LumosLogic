@@ -459,12 +459,22 @@ router.get('/', auth, async (req, res) => {
 
 // POST /api/branches — BUG_064: gate with hasPermission so the button can be hidden in the UI
 // when the user doesn't have branches.create; run fix_branches_hr_permissions.sql first.
+// Branch name / code sanity (Tisha Branch BUG-08/10): a name needs at least one letter ("123" and "@@@" are not names).
+function branchNameError(name) {
+  const n = String(name || '').trim();
+  if (n.length < 2) return 'Branch name must be at least 2 characters.';
+  if (n.length > 100) return 'Branch name must be 100 characters or fewer.';
+  if (!/\p{L}/u.test(n)) return 'Branch name must contain at least one letter.';
+  return null;
+}
+
 router.post('/', auth, hasPermission('branches', 'create'), async (req, res) => {
   if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin access required to create branches.' });
   try {
     const { name, code, location, address, is_active } = req.body;
     if (!name || !name.trim()) return res.status(400).json({ error: 'Branch name is required' });
-    if (name.trim().length < 2) return res.status(400).json({ error: 'Branch name must be at least 2 characters.' });
+    const nameErr = branchNameError(name);
+    if (nameErr) return res.status(400).json({ error: nameErr });
 
     const orgId = req.user.organization_id;
 
@@ -524,6 +534,22 @@ router.put('/:id', auth, hasPermission('branches', 'manage'), async (req, res) =
 
     // Full update from edit form — name is required
     if (!name || !name.trim()) return res.status(400).json({ error: 'Branch name is required' });
+    const nameErr = branchNameError(name);
+    if (nameErr) return res.status(400).json({ error: nameErr });
+
+    // Same duplicate rules as create, excluding this branch itself (BUG_253: the edit path let a name/code be duplicated).
+    {
+      const dupName = await pool.query(
+        `SELECT 1 FROM branches WHERE org_id = $1 AND LOWER(name) = LOWER($2) AND id <> $3`,
+        [req.user.organization_id, name.trim(), req.params.id]);
+      if (dupName.rows.length) return res.status(400).json({ error: `A branch named "${name.trim()}" already exists in your organization.` });
+      if (code && String(code).trim()) {
+        const dupCode = await pool.query(
+          `SELECT 1 FROM branches WHERE org_id = $1 AND LOWER(code) = LOWER($2) AND id <> $3`,
+          [req.user.organization_id, String(code).trim(), req.params.id]);
+        if (dupCode.rows.length) return res.status(400).json({ error: `Branch code "${String(code).trim()}" is already in use. Please choose a different code.` });
+      }
+    }
 
     // Scope by org first (cross-org edits are impossible), then check whether
     // this request actually changes the active state.
@@ -566,7 +592,11 @@ router.delete('/:id', auth, async (req, res) => {
     );
     if (!result.rows.length) return res.status(404).json({ error: 'Branch not found' });
     res.json({ ok: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
+  } catch (err) {
+    // A branch that still owns records (payroll runs, etc.) hits a foreign key; say so instead of a raw 500.
+    if (err.code === '23503') return res.status(409).json({ error: 'This branch still has linked records (for example payroll runs) and cannot be deleted. Deactivate it instead.' });
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = router;

@@ -1,5 +1,6 @@
 const express = require('express');
 const router  = express.Router();
+const { V, validateBody } = require('../../utils/fieldValidators');
 const { db }                       = require('../../config/db');
 const { auth, adminOnly, isAdminRole }   = require('../../middleware/auth');
 const { orgId }                          = require('../../utils/helpers');
@@ -25,7 +26,9 @@ router.get('/:id/certifications', auth, async (req, res) => {
 });
 
 // POST /api/profile/:id/certifications
-router.post('/:id/certifications', auth, adminOnly, async (req, res) => {
+const CERT_RULES = { issue_date: V.pastDate('Issue date') };
+
+router.post('/:id/certifications', auth, adminOnly, validateBody(CERT_RULES), async (req, res) => {
   try {
     const empId = parseInt(req.params.id);
     const {
@@ -60,7 +63,7 @@ router.post('/:id/certifications', auth, adminOnly, async (req, res) => {
 });
 
 // PUT /api/profile/:id/certifications/:recordId
-router.put('/:id/certifications/:recordId', auth, adminOnly, async (req, res) => {
+router.put('/:id/certifications/:recordId', auth, adminOnly, validateBody(CERT_RULES), async (req, res) => {
   try {
     const empId    = parseInt(req.params.id);
     const recordId = parseInt(req.params.recordId);

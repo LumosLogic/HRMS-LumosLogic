@@ -1,5 +1,6 @@
 const express    = require('express');
 const router     = express.Router();
+const { V, firstError } = require('../../utils/fieldValidators');
 const { sameId } = require('../../utils/ids');
 const { db } = require('../../config/db');
 const { auth } = require('../../middleware/auth');
@@ -158,7 +159,13 @@ router.get('/', auth, withBranchContext, async (req, res) => {
           return false;
         };
 
-        const docs = (data || []).filter(d => isSelfOrAssigned(d) || sharedInBranch(d));
+        // DOC-003: a document shared specifically WITH this admin always reaches them ("Shared with Me"), even when
+        // it was uploaded under a different branch than the one currently selected.
+        const { data: myShareRows } = await db.from('document_shares').select('document_id')
+          .eq('shared_with_user_id', req.user.id).eq('organization_id', oId);
+        const sharedWithMe = new Set((myShareRows || []).map(r => String(r.document_id)));
+
+        const docs = (data || []).filter(d => isSelfOrAssigned(d) || sharedInBranch(d) || sharedWithMe.has(String(d.id)));
         return res.json(await attachUserInfo(await attachShares(docs, oId), oId));
       }
     }
@@ -229,9 +236,11 @@ router.post('/upload', auth, hasPermission('documents', 'upload'), withBranchCon
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     ];
     if (!allowedMIMEs.includes(req.file.mimetype))
-      return res.status(400).json({ error: 'Invalid file type. Only PDF, Images, and Word documents are permitted.' });
+      return res.status(400).json({ error: `${(req.file.originalname.match(/\.[A-Za-z0-9]+$/) || ['This file type'])[0].toLowerCase()} files are not supported. Allowed formats: PDF, JPG, PNG, WEBP, DOC, DOCX.` });
 
     const { name, category, userId, expiry_date, visibility, shared_with } = req.body;
+    const nameBad = firstError({ name }, { name: V.text('Document name', { max: 150 }) });   // DOC-005: not only digits / symbols
+    if (nameBad) return res.status(400).json(nameBad);
     const targetId = isAdmin(req.user.role) && userId ? Number(userId) : req.user.id;
 
     // Branch isolation: when admin uploads for another employee, validate branch access.
@@ -398,6 +407,8 @@ router.patch('/:id', auth, withBranchContext, upload.single('file'), async (req,
     if (isAdmin(req.user.role) && !await canAdminAccessDoc(req, doc)) return res.status(403).json(DOC_DENY);
 
     const { name, category, expiry_date, visibility, shared_with, targetUserId } = req.body;
+    const nameBad = firstError({ name }, { name: V.text('Document name', { max: 150 }) });   // DOC-016
+    if (nameBad) return res.status(400).json(nameBad);
 
     // Resolve visibility (employees can only use self/specific)
     let newVisibility = doc.visibility || 'self';
@@ -433,7 +444,7 @@ router.patch('/:id', auth, withBranchContext, upload.single('file'), async (req,
         'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       ];
       if (!allowedMIMEs.includes(req.file.mimetype))
-        return res.status(400).json({ error: 'Invalid file type.' });
+        return res.status(400).json({ error: `${(req.file.originalname.match(/\.[A-Za-z0-9]+$/) || ['This file type'])[0].toLowerCase()} files are not supported. Allowed formats: PDF, JPG, PNG, WEBP, DOC, DOCX.` });
 
       // Delete old file from Cloudinary
       const oldPublicId = doc.file_url.split('/').slice(-2).join('/').replace(/\.[^.]+$/, '');

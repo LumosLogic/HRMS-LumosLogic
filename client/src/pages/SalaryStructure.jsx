@@ -577,6 +577,9 @@ function ManualModal({ employee, onClose, onSaved, modeToggle }) {
           <button
             onClick={() => {
               if (gross === 0) { toast('Enter at least one earning amount.', 'error'); return; }
+              // SAL-005: say what is actually wrong before the (misleading) deductions-vs-gross comparison.
+              const negEarning = EARN_ROWS.find(([k]) => num(k) < 0);
+              if (negEarning) { toast(`${negEarning[1]} cannot be negative. Salary amounts must be ₹0 or more.`, 'error'); return; }
               if (empDed > gross) { toast(`Total deductions (${fmtD(empDed)}) cannot be greater than Gross Salary (${fmtD(gross)}).`, 'error'); return; }
               mut.mutate();
             }}
@@ -683,6 +686,20 @@ function StructureBreakdown({ h }) {
   );
 }
 
+// Full earnings / deductions / employer-contribution breakdown of one past or active version (SAL-001, SAL-004).
+function VersionDetails({ h }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-2 pt-2 border-t border-[#e7eefe]">
+      <button type="button" onClick={() => setOpen(o => !o)}
+        className="text-[0.68rem] font-bold text-[#3525cd] hover:underline">
+        {open ? 'Hide full breakdown' : 'View full breakdown'}
+      </button>
+      {open && <div className="mt-2"><StructureBreakdown h={h} /></div>}
+    </div>
+  );
+}
+
 function HistoryModal({ employee, onClose }) {
   const { data: history = [], isLoading, error: histError } = useQuery({
     queryKey: ['salary-history', employee.id],
@@ -690,7 +707,13 @@ function HistoryModal({ employee, onClose }) {
     retry: false,
   });
   const [tab, setTab] = useState('current');
-  const current = history.find(h => h.effective_to === null) || history[0];
+  // A version dated in the future is "Upcoming", not the current one (SAL-002): the structure in force today is the newest
+  // one that has already started and has not ended.
+  const todayYmd = new Date().toLocaleDateString('en-CA');   // YYYY-MM-DD in the viewer's local calendar
+  const ymd = d => String(d || '').slice(0, 10);
+  const isUpcoming = h => ymd(h.effective_from) > todayYmd;
+  const current = history.find(h => !isUpcoming(h) && (h.effective_to == null || ymd(h.effective_to) >= todayYmd))
+    || history.find(h => h.effective_to === null) || history[0];
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -737,22 +760,27 @@ function HistoryModal({ employee, onClose }) {
             <div className="space-y-3">
               {history.map((h, i) => {
                 const prev = history[i + 1]; // list is newest-first
-                const isActive = h.effective_to === null;
+                const upcoming = isUpcoming(h);
+                const isActive = !upcoming && h.id === current?.id;
                 return (
-                  <div key={h.id} className={cn('rounded-xl border p-4', isActive ? 'border-[#3525cd]/30 bg-[#f0f3ff]' : 'border-[#e7eefe] bg-white')}>
+                  <div key={h.id} className={cn('rounded-xl border p-4', isActive ? 'border-[#3525cd]/30 bg-[#f0f3ff]' : upcoming ? 'border-sky-200 bg-sky-50' : 'border-[#e7eefe] bg-white')}>
                     <div className="flex items-center justify-between mb-2">
                       <div className="flex items-center gap-2">
-                        <span className={cn('text-[0.6rem] font-bold px-1.5 py-0.5 rounded-full', isActive ? 'bg-[#3525cd] text-white' : 'bg-slate-100 text-slate-600')}>
-                          {isActive ? 'Active' : 'Past'}
+                        <span className={cn('text-[0.6rem] font-bold px-1.5 py-0.5 rounded-full', isActive ? 'bg-[#3525cd] text-white' : upcoming ? 'bg-sky-600 text-white' : 'bg-slate-100 text-slate-600')}>
+                          {isActive ? 'Active' : upcoming ? 'Upcoming' : 'Past'}
                         </span>
                         <span className="text-xs font-semibold text-[#151c27]">
-                          {fmtDate(h.effective_from)}{h.effective_to ? ` → ${fmtDate(h.effective_to)}` : ' → Present'}
+                          {upcoming
+                            ? `Effective from ${fmtDate(h.effective_from)}`
+                            : `${fmtDate(h.effective_from)}${h.effective_to ? ` → ${fmtDate(h.effective_to)}` : ' → Present'}`}
                         </span>
                       </div>
                       <span className="text-sm font-black text-[#3525cd]">{fmt(h.gross_salary)}/mo</span>
                     </div>
                     <p className="text-[0.65rem] text-[#9ca3af] mb-2">
                       CTC {fmt(h.ctc)}/mo{h.created_by_name && ` · Set by ${h.created_by_name}`}
+                      {/* SAL-003: an in-place correction keeps the original creator, so name who actually made the latest change */}
+                      {h.corrections?.[0]?.changed_by && ` · Updated by ${h.corrections[0].changed_by}`}
                       {h.created_at && ` · ${fmtDate(h.created_at)}`}
                     </p>
                     {prev ? (
@@ -771,6 +799,7 @@ function HistoryModal({ employee, onClose }) {
                         <DiffList diff={diffOf(c.previous, c.current)} />
                       </div>
                     ))}
+                    <VersionDetails h={h} />
                     {h.notes && <p className="text-[0.65rem] italic text-[#777587] mt-2 truncate">{h.notes}</p>}
                   </div>
                 );

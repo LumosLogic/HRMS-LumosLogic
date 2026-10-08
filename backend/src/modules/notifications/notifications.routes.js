@@ -103,9 +103,10 @@ router.get('/unread-count', auth, withBranchContext, async (req, res) => {
 // PUT /api/notifications/:id/read
 router.put('/:id/read', auth, async (req, res) => {
   try {
-    const { error } = await db.from('notifications')
-      .update({ is_read: true }).eq('id', req.params.id).eq('user_id', req.user.id);
-    if (error) throw error;
+    if (!/^\d+$/.test(String(req.params.id))) return res.status(400).json({ error: 'Invalid notification id' });
+    const { rowCount } = await sqlPool.query(
+      'UPDATE notifications SET is_read = true WHERE id = $1 AND user_id = $2', [req.params.id, req.user.id]);
+    if (!rowCount) return res.status(404).json({ error: 'Notification not found' });
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Outlet } from 'react-router-dom';
-import { NavLink, useNavigate } from 'react-router-dom';
+import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useTour } from '@/hooks/useTour';
 import { employeeTourSteps } from '@/lib/tours';
 import { Header } from '@/components/layout/Header';
@@ -80,6 +80,13 @@ function EmployeeSidebar({ onClose, onMenuClick, onSearchOpen }) {
   });
   const pendingDeptCount = pendingDept.length;
 
+  // EMP-063: after navigating (e.g. from a profile 'View' link) keep the highlighted item inside the visible sidebar area
+  const navRef = useRef(null);
+  const { pathname: currentPath } = useLocation();
+  useEffect(() => {
+    navRef.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: 'nearest' });
+  }, [currentPath]);
+
   function handleLogout() { logout(); navigate('/login'); }
 
   return (
@@ -113,7 +120,7 @@ function EmployeeSidebar({ onClose, onMenuClick, onSearchOpen }) {
         </button>
       </div>
 
-      <nav className="flex-1 px-3 pb-3 pt-1 overflow-y-auto space-y-1">
+      <nav ref={navRef} className="flex-1 px-3 pb-3 pt-1 overflow-y-auto space-y-1">
         {sections.map((sec, idx) => (
           <div key={sec.title} id={`tour-emp-${['workspace','selfservice','growth','company'][idx] || idx}`} className="mb-2">
             <p className="text-[0.6rem] font-black uppercase tracking-[0.14em] text-[#777587] px-2.5 py-2">{sec.title}</p>
@@ -178,9 +185,12 @@ function EmployeeSidebar({ onClose, onMenuClick, onSearchOpen }) {
           )}>
           {() => (
             <>
-              <div className="w-9 h-9 rounded-full flex items-center justify-center text-[0.78rem] font-black text-white flex-shrink-0 border-2 border-white shadow-sm"
+              <div className="w-9 h-9 rounded-full flex items-center justify-center text-[0.78rem] font-black text-white flex-shrink-0 border-2 border-white shadow-sm overflow-hidden"
                 style={{ background: user?.avatar_color || '#3525cd' }}>
-                {initials(user?.name || '')}
+                {/* EMP-068: show the uploaded photo (kept in the auth user by the profile page); initials remain the fallback */}
+                {user?.avatar_url
+                  ? <img src={user.avatar_url} alt="" className="w-full h-full object-cover" />
+                  : initials(user?.name || '')}
               </div>
               <div className="flex-1 min-w-0">
                 <p className="text-[0.84rem] font-black text-[#151c27] leading-tight truncate">{user?.name}</p>

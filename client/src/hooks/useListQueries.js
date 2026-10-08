@@ -48,6 +48,7 @@ function useListQuery(root, extraKey, endpoint, params, { enabled = true, staleT
   const result = useQuery({
     queryKey: [...root, ...extraKey, selectedBranchId, query],
     meta: BRANCH_KEYED,
+    refetchOnWindowFocus: true,   // edited by other people -> catch up when the tab regains focus (only refetches if stale)
     queryFn: () => apiGet(endpoint, query),
     enabled: enabled && isBranchContextReady,
     placeholderData: keepPreviousData,

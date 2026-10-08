@@ -108,6 +108,33 @@ async function getActiveShiftConfig(userId, today) {
   } catch { return null; }
 }
 
+// Why an employee cannot check in on `date` (Bug-160 / Bug-161): a holiday for their branch (or organisation-wide), or an
+// approved FULL-day leave. Half-day leave and WFH do not block (the employee still works part of / that day).
+// Returns a human message, or null when check-in is allowed.
+async function getCheckInBlock(userId, oId, branchId, date) {
+  const { rows: hol } = await pool.query(
+    `SELECT name FROM holidays WHERE organization_id = $1 AND LEFT(date, 10) = $2 AND (branch_id IS NULL OR branch_id = $3) LIMIT 1`,   // holidays.date is TEXT
+    [oId, date, branchId ?? null]);
+  if (hol.length) return `Today is a holiday${hol[0].name ? ` (${hol[0].name})` : ''}. Check-in is not available on a holiday.`;
+  const { rows: lv } = await pool.query(
+    `SELECT 1 FROM leaves
+      WHERE user_id = $1 AND organization_id = $2 AND status = 'approved'
+        AND LEFT(start_date, 10) <= $3 AND LEFT(end_date, 10) >= $3   -- leaves.*_date are TEXT
+        AND COALESCE(leave_time, 'full') NOT IN ('half', 'wfh') AND COALESCE(leave_type, '') <> 'wfh' LIMIT 1`,
+    [userId, oId, date]);
+  if (lv.length) return 'You are on approved leave today. Check-in is not available on a leave day.';
+  return null;
+}
+
+// GET /api/attendance/check-in-status — lets the UI disable the Check-in button with the reason (same rule the POST enforces)
+router.get('/check-in-status', auth, async (req, res) => {
+  try {
+    const { data: emp } = await db.from('users').select('branch_id').eq('id', req.user.id).eq('organization_id', orgId(req)).maybeSingle();
+    const reason = await getCheckInBlock(req.user.id, orgId(req), emp?.branch_id, localDateStr());
+    res.json({ allowed: !reason, reason });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ─── Attendance: Check-in ─────────────────────────────────────────────────────
 router.post('/checkin', auth, async (req, res) => {
   try {
@@ -122,6 +149,8 @@ router.post('/checkin', auth, async (req, res) => {
 
     if (existing?.check_in && !existing?.check_out) return res.status(400).json({ error: 'Already checked in today' });
     if (existing?.check_in && existing?.check_out)  return res.status(400).json({ error: 'You have already checked out today' });
+    const blocked = await getCheckInBlock(req.user.id, orgId(req), empBranch?.branch_id, today);
+    if (blocked) return res.status(409).json({ error: blocked, code: 'CHECKIN_BLOCKED' });
 
     // Use shift's late_threshold if configured; fall back to org-wide late_threshold
     const shift = await getActiveShiftConfig(req.user.id, today);
@@ -251,6 +280,38 @@ router.post('/break-out', auth, async (req, res) => {
 });
 
 // ─── Attendance: Admin Edit (by ID) ──────────────────────────────────────────
+// Late / early-exit flags for an admin-edited record. They are DERIVED from the punch times against the same thresholds the
+// employee check-in / check-out use (shift first, then branch/org schedule) — never trusted from the form, which still
+// carried the old "Late" flag after the check-in time was corrected (Report BUG-04). When a time was not changed the
+// stored flag is kept, so a deliberate manual flag survives an unrelated edit.
+async function deriveLateEarlyFlags({ userId, oId, date, checkIn, checkOut, existing, sent }) {
+  const out = { is_late: !!sent.is_late, is_early_exit: !!sent.is_early_exit };
+  const sameTime = (a, b) => String(a || '').slice(0, 5) === String(b || '').slice(0, 5);
+  const inChanged  = !existing || !sameTime(existing.check_in, checkIn);
+  const outChanged = !existing || !sameTime(existing.check_out, checkOut);
+  if (!inChanged && !outChanged) return out;
+  const { data: emp } = await db.from('users').select('branch_id').eq('id', userId).eq('organization_id', oId).maybeSingle();
+  const settings = await getEffectiveWorkSchedule(oId, emp?.branch_id);
+  const shift = await getActiveShiftConfig(userId, date);
+  if (inChanged) {
+    if (!checkIn) out.is_late = false;
+    else {
+      const enabled = (shift?.late_entry_threshold_enabled != null) ? shift.late_entry_threshold_enabled : (settings.late_entry_threshold_enabled ?? true);
+      const threshold = shift?.late_threshold || settings.late_threshold;
+      out.is_late = !!(enabled && threshold && toMinutes(checkIn) > toMinutes(threshold));
+    }
+  }
+  if (outChanged) {
+    if (!checkOut) out.is_early_exit = false;
+    else {
+      const enabled = (shift?.early_exit_threshold_enabled != null) ? shift.early_exit_threshold_enabled : (settings.early_exit_threshold_enabled ?? true);
+      const threshold = shift?.early_exit_threshold || shift?.end_time || settings.early_exit_threshold;
+      out.is_early_exit = !!(enabled && threshold && toMinutes(checkOut) < toMinutes(threshold));
+    }
+  }
+  return out;
+}
+
 router.put('/:id', auth, hasPermission('attendance', 'edit'), withBranchContext, async (req, res) => {
   try {
     // Branch isolation: verify the attendance record's owner is in an accessible branch.
@@ -259,7 +320,11 @@ router.put('/:id', auth, hasPermission('attendance', 'edit'), withBranchContext,
       if (att && !await canAdminAccessUser(req.branchContext, att.user_id, orgId(req)))
         return res.status(403).json({ error: "You do not have access to this employee's branch." });
     }
-    const { check_in, check_out, status, is_late, is_early_exit, notes } = req.body;
+    const { check_in, check_out, status, notes } = req.body;
+    const { data: before } = await db.from('attendance').select('user_id, date, check_in, check_out').eq('id', req.params.id).eq('organization_id', orgId(req)).maybeSingle();
+    if (!before) return res.status(404).json({ error: 'Attendance record not found' });
+    const { is_late, is_early_exit } = await deriveLateEarlyFlags({
+      userId: before.user_id, oId: orgId(req), date: String(before.date).slice(0, 10), checkIn: check_in, checkOut: check_out, existing: before, sent: req.body });
     // gross_hours = raw span between check_in and check_out (no break deduction)
     const gross_hours = check_in && check_out
       ? Math.max(0, (toMinutes(check_out) - toMinutes(check_in)) / 60) : 0;
@@ -306,7 +371,7 @@ router.post('/mark-absent', auth, hasPermission('attendance', 'edit'), withBranc
 // Admin create or fully edit any attendance record
 router.post('/admin-edit', auth, hasPermission('attendance', 'edit'), withBranchContext, async (req, res) => {
   try {
-    const { user_id, date, check_in, check_out, status, is_late, is_early_exit, notes } = req.body;
+    const { user_id, date, check_in, check_out, status, notes } = req.body;
     if (!user_id || !date) return res.status(400).json({ error: 'user_id and date required' });
     // Branch isolation.
     if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
@@ -315,6 +380,9 @@ router.post('/admin-edit', auth, hasPermission('attendance', 'edit'), withBranch
     }
     const gross_hours = check_in && check_out
       ? Math.max(0, (toMinutes(check_out) - toMinutes(check_in)) / 60) : 0;
+    const { data: existingRow } = await db.from('attendance').select('check_in, check_out').eq('user_id', parseInt(user_id)).eq('date', date).eq('organization_id', orgId(req)).maybeSingle();
+    const { is_late, is_early_exit } = await deriveLateEarlyFlags({
+      userId: parseInt(user_id), oId: orgId(req), date, checkIn: check_in, checkOut: check_out, existing: existingRow, sent: req.body });
     const { data, error } = await db.from('attendance')
       .upsert({
         user_id: parseInt(user_id), date,
@@ -341,6 +409,9 @@ router.post('/late-early', auth, hasPermission('attendance', 'edit'), withBranch
   try {
     const { user_id, date, late_come, late_come_time, early_exit, early_exit_time } = req.body;
     if (!user_id || !date) return res.status(400).json({ error: 'user_id and date are required' });
+    for (const [k, v] of [['late_come', late_come], ['early_exit', early_exit]])
+      if (v !== undefined && v !== null && v !== '' && !['yes', 'no', 'none'].includes(v))
+        return res.status(400).json({ error: `${k} must be one of: yes, no, none` });
     // Branch isolation.
     if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
       if (!await canAdminAccessUser(req.branchContext, user_id, orgId(req)))
@@ -429,6 +500,9 @@ router.get('/late-early', auth, withBranchContext, async (req, res) => {
 router.put('/late-early/:id', auth, hasPermission('attendance', 'edit'), withBranchContext, async (req, res) => {
   try {
     const { late_come, late_come_time, early_exit, early_exit_time } = req.body;
+    for (const [k, v] of [['late_come', late_come], ['early_exit', early_exit]])
+      if (v !== undefined && v !== null && v !== '' && !['yes', 'no', 'none'].includes(v))
+        return res.status(400).json({ error: `${k} must be one of: yes, no, none` });
 
     const { data: existing, error: fetchErr } = await db.from('attendance')
       .select('*').eq('id', req.params.id).eq('organization_id', orgId(req)).single();

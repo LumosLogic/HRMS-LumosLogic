@@ -15,6 +15,7 @@ import { useAnnouncements } from '@/hooks/useReferenceData';
 import { useLeavesList, useRegularizations, useExpenses, useLeavePolicies } from '@/hooks/useListQueries';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
+import { useCheckInStatus } from '@/hooks/useCheckInStatus';
 import { Avatar } from '@/components/ui/Avatar';
 import { invalidateMyAttendance } from '@/hooks/useAttendanceDay';
 import { todayStr, fmtDate, fmtTime, fmtHours, countWorkingDaysInRange, toISODate } from '@/lib/utils';
@@ -284,6 +285,7 @@ const PER_PAGE = 3;
 
 export default function EmployeeHome() {
   const { user } = useAuth();
+  const { blocked: checkInBlocked, reason: checkInReason } = useCheckInStatus();
   const navigate  = useNavigate();
   const toast     = useToast();
   const qc        = useQueryClient();
@@ -615,7 +617,7 @@ export default function EmployeeHome() {
                 <Play size={15} /> {breakBusy ? 'Ending…' : 'End Break'}
               </button>
             ) : !attRecord?.check_in ? (
-              <button onClick={checkIn} disabled={checkBusy}
+              <button onClick={checkIn} disabled={checkBusy || checkInBlocked} title={checkInReason || undefined}
                 className="flex items-center gap-2 text-sm font-bold px-5 py-2.5 rounded-xl bg-white text-[#3525cd] hover:bg-white/90 transition-all disabled:opacity-60 shadow-sm">
                 <LogIn size={15} /> {checkBusy ? 'Checking in…' : 'Check In'}
               </button>

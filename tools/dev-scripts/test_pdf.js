@@ -1,5 +1,5 @@
-const { pool } = require('./backend/src/config/db');
-const { generatePayslipPDF } = require('./backend/src/services/payrollEmailService');
+const { pool } = require('../../backend/src/config/db');
+const { generatePayslipPDF } = require('../../backend/src/services/payrollEmailService');
 async function test() {
   const sql = "SELECT ps.*, u.name, u.email, u.employee_id, u.department FROM payslips ps JOIN users u ON u.id = ps.user_id WHERE ps.organization_id = 2 AND ps.status = 'published' ORDER BY ps.id DESC LIMIT 1";
   const { rows } = await pool.query(sql);

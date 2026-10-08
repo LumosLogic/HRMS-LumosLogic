@@ -13,6 +13,7 @@ import { apiGet, apiPost } from '@/lib/api';
 import { STALE } from '@/lib/queryTiers';
 import { useHolidays, useWorkSchedule } from '@/hooks/useReferenceData';
 import { useToast } from '@/context/ToastContext';
+import { useCheckInStatus } from '@/hooks/useCheckInStatus';
 import { useAuth } from '@/context/AuthContext';
 
 function fmtTime(t) {
@@ -45,6 +46,7 @@ function fmtPunchTime(ts) {
 // ─── AttendanceCheckinCard — DO NOT MODIFY ────────────────────────────────────
 function AttendanceCheckinCard({ onRefreshed }) {
   const toast = useToast();
+  const { blocked: checkInBlocked, reason: checkInReason } = useCheckInStatus();
   const qc = useQueryClient();
   const [record, setRecord] = useState(null);
   const [elapsed, setElapsed] = useState('');
@@ -189,7 +191,7 @@ function AttendanceCheckinCard({ onRefreshed }) {
         {/* Action buttons */}
         <div className="shrink-0 flex gap-2 flex-wrap">
           {!record?.check_in ? (
-            <button onClick={checkIn} disabled={busy}
+            <button onClick={checkIn} disabled={busy || checkInBlocked} title={checkInReason || undefined}
               className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-60 text-white font-bold text-sm px-5 py-2.5 rounded-xl transition-all shadow-sm">
               <LogIn size={15} /> {busy ? 'Checking in…' : 'Check In'}
             </button>

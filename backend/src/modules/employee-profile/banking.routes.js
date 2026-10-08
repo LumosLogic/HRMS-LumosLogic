@@ -1,5 +1,6 @@
 const express = require('express');
 const router  = express.Router();
+const { V, validateBody } = require('../../utils/fieldValidators');
 const { db }                      = require('../../config/db');
 const { auth, adminOnly, isAdminRole, selfOrAdmin } = require('../../middleware/auth');
 const { orgId }                         = require('../../utils/helpers');
@@ -39,7 +40,12 @@ router.get('/:id/banking', auth, withBranchContext, async (req, res) => {
 });
 
 // POST /api/profile/:id/banking
-router.post('/:id/banking', auth, selfOrAdmin(SELF_EDITABLE), async (req, res) => {
+const BANK_RULES = {
+  bank_name: V.text('Bank name'), branch_name: V.text('Branch name'), account_holder_name: V.text('Account holder name'),
+  account_number: V.digitsRange('Account number', 9, 18), ifsc_code: V.ifsc('IFSC code'),
+};
+
+router.post('/:id/banking', auth, selfOrAdmin(SELF_EDITABLE), validateBody(BANK_RULES), async (req, res) => {
   try {
     const empId = parseInt(req.params.id);
     const {
@@ -86,7 +92,7 @@ router.post('/:id/banking', auth, selfOrAdmin(SELF_EDITABLE), async (req, res) =
 });
 
 // PUT /api/profile/:id/banking/:recordId
-router.put('/:id/banking/:recordId', auth, selfOrAdmin(SELF_EDITABLE), async (req, res) => {
+router.put('/:id/banking/:recordId', auth, selfOrAdmin(SELF_EDITABLE), validateBody(BANK_RULES), async (req, res) => {
   try {
     const empId    = parseInt(req.params.id);
     const recordId = parseInt(req.params.recordId);

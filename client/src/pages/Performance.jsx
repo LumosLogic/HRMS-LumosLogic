@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { BRANCH_KEYED } from '@/lib/queryScopes';
+import { STALE } from '@/lib/queryTiers';
 import { useSearchParams } from 'react-router-dom';
 import { Plus, Target, Star, TrendingUp, Pencil, Trash2, ChevronDown, ChevronUp, CheckCircle2, Search, X, Filter, Paperclip, MessageSquare, Send, Upload, Loader2 } from 'lucide-react';
 import { useAuth } from '@/context/AuthContext';
@@ -389,8 +390,8 @@ export default function Performance() {
   const highlightGoalId = searchParams.get('highlight') ? parseInt(searchParams.get('highlight'), 10) : null;
   const [highlightActive, setHighlightActive] = useState(true);
 
-  const { data: _goalsData,   isLoading: gLoad } = useQuery({ queryKey: ['perf-goals',   cycle, selectedBranchId], meta: BRANCH_KEYED, queryFn: () => apiGet('/performance/goals',   { cycle }) });
-  const { data: _reviewsData, isLoading: rLoad } = useQuery({ queryKey: ['perf-reviews', cycle, selectedBranchId], meta: BRANCH_KEYED, queryFn: () => apiGet('/performance/reviews', { cycle }) });
+  const { data: _goalsData,   isLoading: gLoad } = useQuery({ queryKey: ['perf-goals',   cycle, selectedBranchId], meta: BRANCH_KEYED, refetchOnWindowFocus: true, staleTime: STALE.frequent, queryFn: () => apiGet('/performance/goals',   { cycle }) });
+  const { data: _reviewsData, isLoading: rLoad } = useQuery({ queryKey: ['perf-reviews', cycle, selectedBranchId], meta: BRANCH_KEYED, refetchOnWindowFocus: true, staleTime: STALE.frequent, queryFn: () => apiGet('/performance/reviews', { cycle }) });
   const { data: _empData }                       = useEmployees({ enabled: isAdmin });
   const goals     = Array.isArray(_goalsData)   ? _goalsData   : [];
   const reviews   = Array.isArray(_reviewsData) ? _reviewsData : [];

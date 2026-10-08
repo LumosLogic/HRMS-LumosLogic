@@ -97,6 +97,14 @@ router.post('/', auth, withBranchContext, async (req, res) => {
     const { title, category, amount, expense_date, description, receipt_url, receipt_filename, merchant_name, receipt_number, user_id } = req.body;
     if (!title || !title.trim()) return res.status(400).json({ error: 'Expense title is required. Please enter a description of the expense.' });
     if (!expense_date) return res.status(400).json({ error: 'Expense date is required. Please select the date when this expense was incurred.' });
+    {
+      const ds = String(expense_date).slice(0, 10);
+      const dt = new Date(ds + 'T00:00:00Z');
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(ds) || isNaN(dt) || dt.toISOString().slice(0, 10) !== ds)
+        return res.status(400).json({ error: 'Expense date must be a valid date in YYYY-MM-DD format.' });
+      if (ds > new Date(Date.now() + 24 * 3600 * 1000).toISOString().slice(0, 10)) // +1 day tolerance for timezones
+        return res.status(400).json({ error: 'Expense date cannot be in the future.' });
+    }
     const amountErr = validateExpenseAmount(amount);
     if (amountErr) return res.status(400).json({ error: amountErr });
 
@@ -170,7 +178,7 @@ router.post('/check-duplicate', auth, async (req, res) => {
   try {
     const oId    = req.user.organization_id;
     const userId = req.user.id;
-    const { merchant_name, receipt_number, receipt_filename, amount, expense_date, exclude_id } = req.body;
+    const { merchant_name, receipt_number, receipt_filename, amount, expense_date, exclude_id, title } = req.body;
 
     const rn = (receipt_number   || '').trim();
     const mn = (merchant_name    || '').trim();
@@ -206,6 +214,15 @@ router.post('/check-duplicate', auth, async (req, res) => {
     if (fn) {
       const { data } = await excl(base().ilike('receipt_filename', fn));
       if (data?.length) return res.json({ type: 'soft', existing: data[0], reason: 'filename' });
+    }
+
+    // 5. Soft warn: same title + amount + date (BUG_264 — "same expense details"); works when no merchant / receipt number was given
+    const tt = (title || '').trim();
+    if (tt && amount && expense_date) {
+      const { data } = await excl(
+        base().ilike('title', tt).eq('amount', Number(amount)).eq('expense_date', expense_date)
+      );
+      if (data?.length) return res.json({ type: 'soft', existing: data[0], reason: 'details' });
     }
 
     res.json({ type: null });

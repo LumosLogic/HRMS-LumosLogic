@@ -1,5 +1,6 @@
 const express = require('express');
 const router  = express.Router();
+const { V, validateBody } = require('../../utils/fieldValidators');
 const { db }              = require('../../config/db');
 const { auth, adminOnly, isAdminRole } = require('../../middleware/auth');
 const { orgId }                 = require('../../utils/helpers');
@@ -24,7 +25,18 @@ router.get('/:id/training', auth, async (req, res) => {
 });
 
 // POST /api/profile/:id/training
-router.post('/:id/training', auth, adminOnly, async (req, res) => {
+// Start date vs status: a Planned training may start in the future; In Progress / Completed may not (EMP-031).
+const TRAIN_RULES = {
+  start_date: (v, body) => {
+    const d = String(v).slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || isNaN(new Date(d + 'T00:00:00Z'))) return 'Start date must be a valid date (YYYY-MM-DD).';
+    const status = body.completion_status || 'in_progress';
+    return (status === 'in_progress' || status === 'completed') && d > new Date().toISOString().slice(0, 10)
+      ? `Start date cannot be in the future for a training that is ${status === 'completed' ? 'completed' : 'in progress'}.` : null;
+  },
+};
+
+router.post('/:id/training', auth, adminOnly, validateBody(TRAIN_RULES), async (req, res) => {
   try {
     const empId = parseInt(req.params.id);
     const {
@@ -52,7 +64,7 @@ router.post('/:id/training', auth, adminOnly, async (req, res) => {
 });
 
 // PUT /api/profile/:id/training/:recordId
-router.put('/:id/training/:recordId', auth, adminOnly, async (req, res) => {
+router.put('/:id/training/:recordId', auth, adminOnly, validateBody(TRAIN_RULES), async (req, res) => {
   try {
     const {
       training_name, training_type, training_provider, start_date, end_date,
@@ -113,7 +125,7 @@ router.get('/:id/certifications', auth, async (req, res) => {
 });
 
 // POST /api/profile/:id/certifications
-router.post('/:id/certifications', auth, adminOnly, async (req, res) => {
+router.post('/:id/certifications', auth, adminOnly, validateBody({ issue_date: V.pastDate('Issue date') }), async (req, res) => {
   try {
     const empId = parseInt(req.params.id);
     const { certification_name, issuing_authority, issue_date, expiry_date, certification_number, file_url, is_lifetime } = req.body;
@@ -136,7 +148,7 @@ router.post('/:id/certifications', auth, adminOnly, async (req, res) => {
 });
 
 // PUT /api/profile/:id/certifications/:recordId
-router.put('/:id/certifications/:recordId', auth, adminOnly, async (req, res) => {
+router.put('/:id/certifications/:recordId', auth, adminOnly, validateBody({ issue_date: V.pastDate('Issue date') }), async (req, res) => {
   try {
     const { certification_name, issuing_authority, issue_date, expiry_date, certification_number, file_url, is_lifetime } = req.body;
 

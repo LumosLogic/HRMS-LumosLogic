@@ -242,9 +242,43 @@ router.get('/my-history', auth, async (req, res) => {
         const key = String(r.leave_id) + '-' + r.action;
         if (!seen.has(key)) { rows.push(r); seen.add(key); }
       }
-      rows.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     } catch (e) { console.warn("[my-history] legacy query failed:", e.message); }
-    res.json(rows);
+
+    // BUG_269: label every leave/WFH row, then add the other approval types this user acted on, so "My Recent Approval
+    // Actions" is no longer leave-only. Each source is best-effort: one failing never hides the others.
+    for (const r of rows) {
+      r.kind = r.leave_type === 'wfh' ? 'wfh' : 'leave';
+      r.outcome = /reject/i.test(r.action) ? 'rejected' : 'approved';
+    }
+    try {
+      const { rows: regRows } = await pool.query(
+        `SELECT r.id, r.status, r.type, r.date, r.reviewer_notes AS notes, r.reviewed_at AS created_at, u.name AS employee_name, u.department, u.avatar_color
+           FROM attendance_regularization r JOIN users u ON u.id = r.user_id
+          WHERE r.organization_id = $1 AND r.reviewed_by = $2 AND r.status IN ('approved','rejected') AND r.reviewed_at >= $3
+          ORDER BY r.reviewed_at DESC LIMIT 100`, [Number(oId), req.user.id, since]);
+      for (const r of regRows) rows.push({ kind: 'regularization', outcome: r.status, action: r.status, notes: r.notes, created_at: r.created_at,
+        employee_name: r.employee_name, department: r.department, avatar_color: r.avatar_color,
+        detail: `${r.type === 'early_leave' ? 'Early leave' : 'Attendance correction'} · ${String(r.date).slice(0, 10)}` });
+    } catch (e) { console.warn('[my-history] regularization query failed:', e.message); }
+    try {
+      const { rows: expRows } = await pool.query(
+        `SELECT e.id, e.title, e.amount, e.status, e.reviewed_by, e.manager_id, e.reviewer_notes, e.manager_notes, e.reviewed_at, e.manager_approved_at,
+                u.name AS employee_name, u.department, u.avatar_color
+           FROM expenses e JOIN users u ON u.id = e.user_id
+          WHERE e.organization_id = $1 AND ((e.reviewed_by = $2 AND e.status IN ('approved','rejected') AND e.reviewed_at >= $3)
+                OR (e.manager_id = $2 AND e.manager_approved_at >= $3))
+          ORDER BY COALESCE(e.reviewed_at, e.manager_approved_at) DESC LIMIT 100`, [Number(oId), req.user.id, since]);
+      for (const e of expRows) {
+        const asReviewer = String(e.reviewed_by) === String(req.user.id) && e.reviewed_at;
+        const outcome = asReviewer ? e.status : (e.status === 'rejected' ? 'rejected' : 'approved');
+        rows.push({ kind: 'expense', outcome, action: outcome, notes: asReviewer ? e.reviewer_notes : e.manager_notes,
+          created_at: asReviewer ? e.reviewed_at : e.manager_approved_at,
+          employee_name: e.employee_name, department: e.department, avatar_color: e.avatar_color,
+          detail: `Expense · ${e.title || ''} · ₹${Number(e.amount || 0).toLocaleString('en-IN')}${asReviewer ? '' : ' (as manager)'}` });
+      }
+    } catch (e) { console.warn('[my-history] expense query failed:', e.message); }
+    rows.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    res.json(rows.slice(0, 100));
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1195,6 +1229,26 @@ router.post('/', auth, withBranchContext, async (req, res) => {
 
     const targetUserId = (isAdminRole(req.user.role) && user_id) ? parseInt(user_id) : req.user.id;
     const isOnBehalf   = isAdminRole(req.user.role) && targetUserId !== req.user.id;
+
+    if (leave_time === 'half' && half_type && !['first_half', 'second_half'].includes(half_type))
+      return res.status(400).json({ error: 'half_type must be first_half or second_half.' });
+
+    // No two live requests may cover the same day (API-19 / leave BUG-01). The only allowed overlap is a
+    // first-half + second-half pair on one day. Rejected / cancelled / withdrawn requests do not count.
+    {
+      const { rows: clash } = await pool.query(
+        `SELECT id, start_date::text AS s, end_date::text AS e, leave_time, half_type FROM leaves
+          WHERE user_id = $1 AND organization_id = $2
+            AND status NOT IN ('rejected','cancelled','withdrawn')
+            AND LEFT(start_date, 10) <= $4 AND LEFT(end_date, 10) >= $3`,   // leaves.*_date are TEXT (ISO): compare as text
+        [targetUserId, orgId(req), String(start_date).slice(0, 10), String(end_date).slice(0, 10)]);
+      const newHalf = leave_time === 'half' ? (half_type || 'first_half') : null;
+      const blocking = clash.find(c => !(newHalf && start_date === end_date && c.leave_time === 'half'
+        && c.s === c.e && c.half_type && c.half_type !== newHalf));
+      if (blocking) return res.status(409).json({
+        error: `You already have a leave request covering ${blocking.s === blocking.e ? blocking.s : `${blocking.s} to ${blocking.e}`}. Cancel it or choose different dates.`,
+      });
+    }
 
     // ── LEAVE-002: Balance + policy rules for employee self-submissions ─────────────────────────────
     // Skip for WFH and admin on-behalf. The balance is the SAME computation the employee sees (loadUserBalances):

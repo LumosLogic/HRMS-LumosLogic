@@ -20,20 +20,22 @@ import { BRANCH_KEYED } from '@/lib/queryScopes';
  * ['holidays']), so the longer cache never shows pre-save values.
  */
 
-function useOrgQuery(key, endpoint, params, { enabled = true, staleTime = STALE.static, select } = {}) {
+function useOrgQuery(key, endpoint, params, { enabled = true, staleTime = STALE.static, select, refetchOnFocus = false } = {}) {
   return useQuery({
     queryKey: key,
+    refetchOnWindowFocus: refetchOnFocus,
     queryFn: () => apiGet(endpoint, params),
     enabled, staleTime,
     ...(select ? { select } : {}),
   });
 }
 
-function useBranchQuery(rootKey, extraKey, endpoint, params, { enabled = true, staleTime = STALE.config, placeholder = true } = {}) {
+function useBranchQuery(rootKey, extraKey, endpoint, params, { enabled = true, staleTime = STALE.config, placeholder = true, refetchOnFocus = false } = {}) {
   const { selectedBranchId, isBranchContextReady } = useBranch();
   const query = useQuery({
     queryKey: [...rootKey, ...extraKey, selectedBranchId],
     meta: BRANCH_KEYED,
+    refetchOnWindowFocus: refetchOnFocus,
     queryFn: () => apiGet(endpoint, params),
     enabled: enabled && isBranchContextReady,
     staleTime,
@@ -43,7 +45,7 @@ function useBranchQuery(rootKey, extraKey, endpoint, params, { enabled = true, s
 }
 
 // ── organisation-level ──────────────────────────────────────────────────────────
-export const useBranchesList     = (opts) => useOrgQuery(['branches'], '/branches', undefined, { staleTime: STALE.static, ...opts });
+export const useBranchesList     = (opts) => useOrgQuery(['branches'], '/branches', undefined, { staleTime: STALE.static, refetchOnFocus: true, ...opts });
 export const useDepartmentsList  = (opts) => useOrgQuery(['departments'], '/departments', undefined, { staleTime: STALE.static, ...opts });
 export const useDesignationsList = (departmentId, opts) =>
   useOrgQuery(['designations', departmentId ?? null], '/designations', departmentId ? { department_id: departmentId } : {}, { staleTime: STALE.static, ...opts });
@@ -57,5 +59,5 @@ export const usePayrollSettings  = (opts) => useOrgQuery(['payroll-settings'], '
 export const useHolidays = (year, opts) =>
   useBranchQuery(['holidays'], [year ?? 'all'], '/holidays', year ? { year } : undefined, opts);
 export const useShiftsList = (opts) => useBranchQuery(['shifts'], [], '/shifts', undefined, opts);
-export const useAnnouncements = (opts) => useBranchQuery(['announcements'], [], '/announcements', undefined, { staleTime: STALE.frequent, ...opts });
-export const useDocumentsList = (opts) => useBranchQuery(['documents', 'list'], [], '/documents', undefined, { staleTime: STALE.frequent, ...opts });
+export const useAnnouncements = (opts) => useBranchQuery(['announcements'], [], '/announcements', undefined, { staleTime: STALE.frequent, refetchOnFocus: true, ...opts });
+export const useDocumentsList = (opts) => useBranchQuery(['documents', 'list'], [], '/documents', undefined, { staleTime: STALE.frequent, refetchOnFocus: true, ...opts });

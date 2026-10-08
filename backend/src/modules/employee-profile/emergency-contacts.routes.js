@@ -1,5 +1,6 @@
 const express = require('express');
 const router  = express.Router();
+const { V, validateBody } = require('../../utils/fieldValidators');
 const { db }              = require('../../config/db');
 const { auth, adminOnly, isAdminRole, selfOrAdmin } = require('../../middleware/auth');
 const { orgId }                 = require('../../utils/helpers');
@@ -24,7 +25,12 @@ router.get('/:id/emergency-contacts', auth, async (req, res) => {
 });
 
 // POST /api/profile/:id/emergency-contacts
-router.post('/:id/emergency-contacts', auth, selfOrAdmin(SELF_EDITABLE), async (req, res) => {
+const EMERGENCY_RULES = {
+  contact_name: V.text('Contact name', { min: 2, max: 100 }), relationship: V.text('Relationship', { min: 2, max: 50 }),
+  mobile_number: V.phone('Mobile number'), alternate_number: V.phone('Alternate number'), email: V.email('Email'),
+};
+
+router.post('/:id/emergency-contacts', auth, selfOrAdmin(SELF_EDITABLE), validateBody(EMERGENCY_RULES), async (req, res) => {
   try {
     const empId = parseInt(req.params.id);
     const { contact_name, relationship, mobile_number, alternate_number, email, address, is_primary } = req.body;
@@ -52,7 +58,7 @@ router.post('/:id/emergency-contacts', auth, selfOrAdmin(SELF_EDITABLE), async (
 });
 
 // PUT /api/profile/:id/emergency-contacts/:recordId
-router.put('/:id/emergency-contacts/:recordId', auth, selfOrAdmin(SELF_EDITABLE), async (req, res) => {
+router.put('/:id/emergency-contacts/:recordId', auth, selfOrAdmin(SELF_EDITABLE), validateBody(EMERGENCY_RULES), async (req, res) => {
   try {
     const empId    = parseInt(req.params.id);
     const recordId = parseInt(req.params.recordId);

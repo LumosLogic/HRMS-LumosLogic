@@ -20,6 +20,8 @@
 const path = require('path');
 const fs = require('fs');
 const assert = require('assert');
+// Tests must never send real mail: dotenv does not override variables that are already set, so blank SMTP credentials stay blank.
+require('./helpers/realdb_env'); // blanks every provider credential, fakes Cloudinary, blocks non-local network (see helper)
 require('dotenv').config({ path: path.join(__dirname, '../../../.env') });
 
 const SCHEMA = process.env.REAL_DB_SCHEMA || 'bsv_verify';
@@ -801,7 +803,20 @@ async function devicePunch(sn, pin, when) {
     for (const who of [{ as: ID.root }, { as: ID.hrD, branch: ID.dalal }, { as: ID.hrB, branch: ID.bhuj }, { as: ID.hrAll }, { as: ID.hrAll, branch: ID.dalal }, { as: ID.empD }, { as: ID.empB }, { as: ID.froot }, { as: ID.root, branch: ID.bhuj }]) {
       const a = await call('GET', '/api/dashboard-before', who), b = await call('GET', '/api/dashboard', who);
       assert.strictEqual(b.status, a.status, 'status ' + JSON.stringify(who));
-      assert.deepStrictEqual(strip(b.body), strip(a.body), 'body ' + JSON.stringify(who));
+      // BUG_116 / BUG_191 (intentional change): for admin callers the Pending Approvals card is counted from the SAME source as
+      // the Pending Approvals page, so pendingLeaves / pendingRegCount / pendingExpCount legitimately differ from the old
+      // handler's own head-counts. Everything else must stay byte-identical; the counts are asserted against the page below.
+      const COUNT_KEYS = ['pendingLeaves', 'pendingRegCount', 'pendingExpCount'];
+      const A = strip(a.body), B = strip(b.body);
+      const pageCounts = { pendingLeaves: B.pendingLeaves, pendingRegCount: B.pendingRegCount, pendingExpCount: B.pendingExpCount };
+      for (const k of COUNT_KEYS) { delete A[k]; delete B[k]; }
+      assert.deepStrictEqual(B, A, 'body ' + JSON.stringify(who));
+      if (b.status === 200 && who.as !== ID.empD && who.as !== ID.empB) {
+        const pa = (await call('GET', '/api/pending-approvals', who)).body;
+        const total = (pa.leaves || []).length + (pa.my_approvals || []).length + (pa.regularizations || []).length + (pa.expenses || []).length;
+        const cardTotal = pageCounts.pendingLeaves || 0;   // /dashboard's pendingLeaves is already leaves + regularizations + expenses (pendingRegCount / pendingExpCount are its parts)
+        assert.strictEqual(cardTotal, total, 'dashboard card total == Pending Approvals page total ' + JSON.stringify(who));
+      }
     }
     const r = (await call('GET', '/api/dashboard', { as: ID.root })).body;
     assert.ok(r.totalEmployees >= 4 && r.checkedInToday >= 2 && r.onLeaveToday >= 1 && r.pendingLeaves >= 1, 'non-trivial stats were compared: ' + JSON.stringify({ t: r.totalEmployees, c: r.checkedInToday, l: r.onLeaveToday, p: r.pendingLeaves }));

@@ -1,5 +1,6 @@
 const express = require('express');
 const router  = express.Router();
+const { V, validateBody } = require('../../utils/fieldValidators');
 const { db }          = require('../../config/db');
 const { auth, adminOnly }   = require('../../middleware/auth');
 const { orgId }             = require('../../utils/helpers');
@@ -26,7 +27,10 @@ router.get('/:id/statutory', auth, adminOnly, async (req, res) => {
 });
 
 // PUT /api/profile/:id/statutory  — admin only
-router.put('/:id/statutory', auth, adminOnly, async (req, res) => {
+router.put('/:id/statutory', auth, adminOnly, validateBody({
+  aadhar_no: V.digits('Aadhaar number', 12), pan_number: V.pan('PAN number'), pan_name: V.text('Name on PAN'),
+  uan_no: V.digits('UAN number', 12), esi_no: V.digits('ESI number', 17), pf_no: V.pfNumber('PF number'),
+}), async (req, res) => {
   try {
     const empId = parseInt(req.params.id);
     const {

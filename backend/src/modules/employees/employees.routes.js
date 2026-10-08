@@ -2,7 +2,8 @@ const express = require('express');
 const router  = express.Router();
 const bcrypt   = require('bcryptjs');
 const { db, pool } = require('../../config/db');
-const { auth, isAdminRole, blockUser, unblockUser, markRoleChanged } = require('../../middleware/auth');
+const { V, validateBody } = require('../../utils/fieldValidators');
+const { auth, isAdminRole, blockUser, unblockUser, markRoleChanged, revokeSessionsQuiet } = require('../../middleware/auth');
 const { clearUserCache } = require('../../services/permissionService');
 const { hasPermission } = require('../../middleware/permissions');
 const { orgId, getOrgContext } = require('../../utils/helpers');
@@ -129,7 +130,14 @@ router.get('/', auth, hasPermission('employees', 'view'), withBranchContext, asy
 });
 
 // ─── Employees: Create ────────────────────────────────────────────────────────
-router.post('/', auth, hasPermission('employees', 'create'), withBranchContext, async (req, res) => {
+// Shared by create + edit (EMP-xxx: name / position / phone / email / DOB / probation validation).
+const EMPLOYEE_FIELD_RULES = {
+  name: V.text('Full name'), position: V.text('Position / title'), phone: V.phone('Mobile number'),
+  personal_email: V.email('Personal email'), date_of_birth: V.pastDate('Date of birth'),
+  probation_months: V.nonNegativeInt('Probation months'),
+};
+
+router.post('/', auth, hasPermission('employees', 'create'), validateBody(EMPLOYEE_FIELD_RULES), withBranchContext, async (req, res) => {
   try {
     const { name, email, role, department, position, avatar_color, date_of_birth } = req.body;
     if (!name || !email) return res.status(400).json({ error: 'Name and email are required' });
@@ -349,7 +357,7 @@ router.post('/', auth, hasPermission('employees', 'create'), withBranchContext, 
 });
 
 // ─── Employees: Update ────────────────────────────────────────────────────────
-router.put('/:id', auth, hasPermission('employees', 'edit'), withBranchContext, async (req, res) => {
+router.put('/:id', auth, hasPermission('employees', 'edit'), validateBody(EMPLOYEE_FIELD_RULES), withBranchContext, async (req, res) => {
   try {
     // Branch isolation: admin must have access to the target employee's branch.
     if (isAdminRole(req.user.role) && req.user.role !== 'root_admin') {
@@ -597,6 +605,8 @@ router.put('/:id', auth, hasPermission('employees', 'edit'), withBranchContext, 
       if (error) throw new Error(error.message);
       data = updated;
     }
+    // An admin changing someone else's password ends that person's existing sessions (EMP-050).
+    if (password && String(req.user.id) !== String(empId)) await revokeSessionsQuiet(empId);
 
     // Auto-sync device_enrollment_id → biometric_employee_map (shared with create).
     if (device_enrollment_id !== undefined) await lifecycle.syncBiometricPin({ orgId: orgId(req), userId: empId, pin: device_enrollment_id });
@@ -806,6 +816,8 @@ router.post('/:id/send-credentials', auth, withBranchContext, async (req, res) =
       force_password_change:    true,
       last_credentials_sent_at: sentAt,
     }).eq('id', empId).eq('organization_id', oId);
+    // Password reset by an admin must end any session the old password opened (EMP-050).
+    await revokeSessionsQuiet(empId);
 
     // Audit log (fire-and-forget)
     db.from('platform_activity').insert({

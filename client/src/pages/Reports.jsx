@@ -2,6 +2,7 @@ import React, { useState, useMemo, useEffect } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query';
 import { BRANCH_KEYED } from '@/lib/queryScopes';
+import { STALE } from '@/lib/queryTiers';
 import {
   Download, BarChart3, Users, FileText, CalendarDays, TrendingUp,
   Search, Filter, X, ChevronUp, ChevronDown, Printer,
@@ -449,6 +450,7 @@ export default function Reports() {
     queryKey: viewMode === 'yearly' ? ['report-attendance', 'yearly', year, selectedBranchId] : ['report-attendance', 'monthly', year, month, selectedBranchId],
     queryFn:  () => apiGet('/reports/attendance', queryParams),
     enabled:  isBranchContextReady,
+    staleTime: STALE.frequent, refetchOnWindowFocus: true,   // today's punches change constantly
   });
 
   const { data: _lvData = [], isLoading: lvLoading } = useQuery({

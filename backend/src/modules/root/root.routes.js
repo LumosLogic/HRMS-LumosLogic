@@ -8,12 +8,13 @@ router.use((req, res, next) => {
 });
 const bcrypt   = require('bcryptjs');
 const { db, pool } = require('../../config/db');
-const { auth, adminOnly, rootAdminOnly, unblockUser } = require('../../middleware/auth');
+const { auth, adminOnly, rootAdminOnly, unblockUser, revokeSessionsQuiet } = require('../../middleware/auth');
 const { flat, orgId, getOrgContext } = require('../../utils/helpers');
 const { sendMail, welcomeEmployeeHtml } = require('../../services/emailService');
 const { sendPushToUsers } = require('../../services/pushService');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { getFilterState } = require('../../utils/branchFilter');
+const { loadPendingApprovals, countPending } = require('../../services/pendingApprovalsSummary');
 const { hasPermissionOrLegacyAdmin } = require('../../middleware/permissions');
 const { resolveBroadcastRecipients } = require('../../utils/broadcastTargeting');
 
@@ -204,8 +205,9 @@ router.get('/dashboard', auth, rootAdminOnly, withBranchContext, async (req, res
       { data: upcomingHolidays },
       { data: upcomingEventsRaw },
       { count: pendingReg },
-      { count: pendingExp },
+      { count: pendingExpLegacy },
       { count: totalDepartments },
+      pendingSummary,
     ] = await Promise.all([
       // Count HR admins assigned to the selected branch (or all org HR admins if no branch)
       branchState.type === 'specific'
@@ -264,7 +266,13 @@ router.get('/dashboard', auth, rootAdminOnly, withBranchContext, async (req, res
         .eq('status', 'pending').eq('organization_id', oid),
       db.from('departments').select('*', { count: 'exact', head: true })
         .eq('organization_id', oid),
+      // The Pending Approvals card is counted from the same source as the Pending Approvals page (BUG_116 / BUG_191).
+      loadPendingApprovals(req).catch(e => { console.error('[root dashboard] pending summary:', e.message); return null; }),
     ]);
+    const _pendSum = pendingSummary ? countPending(pendingSummary) : null;
+    const pendingLeavesFinal = _pendSum ? _pendSum.leaves          : (pendingLeavesCount || 0);
+    const pendingRegFinal    = _pendSum ? _pendSum.regularizations : (pendingReg || 0);
+    const pendingExp         = _pendSum ? _pendSum.expenses        : (pendingExpLegacy || 0);
 
     // BUG_117: separate active vs all employees; exclude resigned/terminated/inactive from active count
     const allEmployees = allEmployeesRaw || [];
@@ -279,7 +287,7 @@ router.get('/dashboard', auth, rootAdminOnly, withBranchContext, async (req, res
     // BUG_116: pendingLeaves counts leaves+WFH (they share the leaves table).
     // pendingReg is separate. The frontend KPI adds them together; we also expose
     // pendingRegCount so the frontend can use it without a second API call.
-    const pendingLeaves = pendingLeavesCount || 0;
+    const pendingLeaves = pendingLeavesFinal;
 
     // Attendance breakdown today
     const attendanceBreakdown = {};
@@ -412,8 +420,8 @@ router.get('/dashboard', auth, rootAdminOnly, withBranchContext, async (req, res
 
     // Action center items (use raw individual counts for granular labels)
     const actionCenter = [];
-    if (pendingLeavesCount > 0) actionCenter.push({ type: 'leaves', label: `${pendingLeavesCount} leave/WFH approval${pendingLeavesCount !== 1 ? 's' : ''} pending`, priority: pendingLeavesCount > 5 ? 'High' : 'Medium', link: '/root/leaves' });
-    if (pendingReg > 0)         actionCenter.push({ type: 'attendance', label: `${pendingReg} attendance correction${pendingReg !== 1 ? 's' : ''}`, priority: 'Medium', link: '/root/regularization?status=pending' });
+    if (pendingLeavesFinal > 0) actionCenter.push({ type: 'leaves', label: `${pendingLeavesFinal} leave/WFH approval${pendingLeavesFinal !== 1 ? 's' : ''} pending`, priority: pendingLeavesFinal > 5 ? 'High' : 'Medium', link: '/root/leaves' });
+    if (pendingRegFinal > 0)         actionCenter.push({ type: 'attendance', label: `${pendingRegFinal} attendance correction${pendingRegFinal !== 1 ? 's' : ''}`, priority: 'Medium', link: '/root/regularization?status=pending' });
     if (pendingExp > 0)         actionCenter.push({ type: 'expenses', label: `${pendingExp} expense${pendingExp !== 1 ? 's' : ''} awaiting approval`, priority: 'Medium', link: '/root/expenses' });
     if (actionCenter.length === 0) actionCenter.push({ type: 'all_clear', label: 'All tasks up to date', priority: 'Low' });
 
@@ -448,8 +456,8 @@ router.get('/dashboard', auth, rootAdminOnly, withBranchContext, async (req, res
       totalActiveEmployees: totalEmployees,
       totalHR, pendingLeaves, presentToday,
       // BUG_116: expose pendingRegCount and pendingExpCount so frontend KPI adds all pending types
-      pendingRegCount: pendingReg || 0,
-      pendingExpCount: pendingExp || 0,
+      pendingRegCount: pendingRegFinal,
+      pendingExpCount: pendingExp,
       totalDepartments: totalDepartments || 0,
       recentLeaves:      flat(recentLeavesRaw),
       pendingLeavesData: flat(pendingLeavesRaw),
@@ -630,6 +638,7 @@ router.put('/hr/:id', auth, rootAdminOnly, async (req, res) => {
       .eq('id', req.params.id).eq('organization_id', orgId(req))
       .select('id, name, email, role, department, position, avatar_color').single();
     if (error) throw new Error(error.message);
+    if (password) await revokeSessionsQuiet(req.params.id);
     res.json(data);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });

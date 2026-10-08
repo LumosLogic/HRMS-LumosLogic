@@ -1,5 +1,6 @@
 const express    = require('express');
 const router     = express.Router();
+const { V, firstError } = require('../../utils/fieldValidators');
 const { db, pool } = require('../../config/db');
 const { auth }   = require('../../middleware/auth');
 const cloudinary = require('cloudinary').v2;
@@ -108,6 +109,20 @@ async function syncOnboardingFromDocuments(userId, oId) {
       .eq('organization_id', oId).eq('user_id', userId).eq('title', 'Verify Documents').eq('completed', false).select('id');
     return (done || []).length > 0;
   } catch (e) { console.error('[doc_requirements] syncOnboardingFromDocuments:', e.message); return false; }
+}
+
+/** An active requirement with the same (case-insensitive) name whose branch scope overlaps `branchIds` (null = org-wide). */
+async function findDuplicateRequirement(oId, name, branchIds, excludeId) {
+  const { data } = await db.from('document_requirements').select('id, name, assigned_branch_ids')
+    .eq('organization_id', oId).eq('is_active', true);
+  const wanted = String(name).trim().toLowerCase();
+  const mine = Array.isArray(branchIds) && branchIds.length ? branchIds.map(Number) : null;
+  return (data || []).find(r => {
+    if (excludeId != null && String(r.id) === String(excludeId)) return false;
+    if (String(r.name || '').trim().toLowerCase() !== wanted) return false;
+    const theirs = Array.isArray(r.assigned_branch_ids) && r.assigned_branch_ids.length ? r.assigned_branch_ids.map(Number) : null;
+    return mine === null || theirs === null || mine.some(b => theirs.includes(b));
+  }) || null;
 }
 
 const ALLOWED_MIMES = [
@@ -230,16 +245,22 @@ router.get('/analytics', auth, withBranchContext, async (req, res) => {
     }
 
     const [{ data: requirements }, { data: subs }, { data: employees }] = await Promise.all([
-      db.from('document_requirements').select('id, name, is_required, is_active').eq('organization_id', oId),
+      db.from('document_requirements').select('id, name, is_required, is_active, assigned_branch_ids').eq('organization_id', oId),
       subsQuery,
       empQuery,
     ]);
 
-    const reqList  = requirements || [];
+    // DOC-017: a removed (deactivated) requirement, or one that does not apply to the selected branch(es), must not
+    // appear in Requirement Compliance nor feed any total — same visibility rule as the Requirements list.
+    const branchState = getFilterState(req.branchContext);
+    const branchIdsForScope = branchState.type === 'specific' ? [branchState.branchId] : branchState.type === 'multi' ? branchState.branchIds : null;
+    const reqList  = (requirements || []).filter(r => r.is_active &&
+      (branchIdsForScope === null || requirementRelevantForBranches(r, branchIdsForScope)));
+    const liveReqIds = new Set(reqList.map(r => String(r.id)));
     const empList  = employees   || [];
     // Submissions of exited employees must not inflate the numerators while the denominators exclude them.
     const activeIds = new Set(empList.map(e => String(e.id)));
-    const subsList = (subs || []).filter(s => activeIds.has(String(s.user_id)));
+    const subsList = (subs || []).filter(s => activeIds.has(String(s.user_id)) && liveReqIds.has(String(s.requirement_id)));
 
     const totalRequirements = reqList.length;
     const activeRequired    = reqList.filter(r => r.is_required && r.is_active).length;
@@ -372,6 +393,8 @@ router.post('/', auth, async (req, res) => {
     } = req.body;
 
     if (!name?.trim()) return res.status(400).json({ error: 'Document name is required' });
+    const nameBad = firstError({ name }, { name: V.text('Document name', { max: 150 }) });
+    if (nameBad) return res.status(400).json(nameBad);
 
     // Validate assigned_branch_ids if provided
     let validatedBranchIds = null;
@@ -380,6 +403,11 @@ router.post('/', auth, async (req, res) => {
       if (!check.valid) return res.status(400).json({ error: check.error });
       validatedBranchIds = assigned_branch_ids.map(Number);
     }
+
+    // DOC-009: the same document cannot be required twice where the scopes overlap (an org-wide requirement overlaps
+    // every branch; two branch-limited ones overlap only when they share a branch).
+    const dup = await findDuplicateRequirement(oId, name, validatedBranchIds, null);
+    if (dup) return res.status(409).json({ error: `The document requirement "${dup.name}" already exists${dup.assigned_branch_ids?.length ? ' for this branch' : ''}.` });
 
     const { data, error } = await db.from('document_requirements').insert({
       organization_id:       oId,
@@ -565,7 +593,19 @@ router.patch('/:id', auth, async (req, res) => {
     } = req.body;
 
     const updates = { updated_at: new Date().toISOString() };
-    if (name !== undefined)                 updates.name = name;
+    if (name !== undefined) {
+      if (!String(name).trim()) return res.status(400).json({ error: 'Document name is required' });
+      const nameBad = firstError({ name }, { name: V.text('Document name', { max: 150 }) });
+      if (nameBad) return res.status(400).json(nameBad);
+      const { data: cur } = await db.from('document_requirements').select('assigned_branch_ids').eq('id', req.params.id).eq('organization_id', oId).maybeSingle();
+      if (!cur) return res.status(404).json({ error: 'Requirement not found' });
+      const scope = assigned_branch_ids !== undefined
+        ? (Array.isArray(assigned_branch_ids) && assigned_branch_ids.length ? assigned_branch_ids.map(Number) : null)
+        : cur.assigned_branch_ids;
+      const dup = await findDuplicateRequirement(oId, name, scope, req.params.id);
+      if (dup) return res.status(409).json({ error: `The document requirement "${dup.name}" already exists.` });
+      updates.name = String(name).trim();
+    }
     if (description !== undefined)          updates.description = description || null;
     if (category !== undefined)             updates.category = category;
     if (is_required !== undefined)          updates.is_required = is_required;
@@ -621,7 +661,7 @@ router.post('/:id/submit', auth, upload.single('file'), async (req, res) => {
 
     if (!req.file) return res.status(400).json({ error: 'No file provided' });
     if (!ALLOWED_MIMES.includes(req.file.mimetype))
-      return res.status(400).json({ error: 'Invalid file type. Only PDF, Images, and Word documents are allowed.' });
+      return res.status(400).json({ error: `${(req.file.originalname.match(/\.[A-Za-z0-9]+$/) || ['This file type'])[0].toLowerCase()} files are not supported. Allowed formats: PDF, JPG, PNG, WEBP, DOC, DOCX.` });
 
     const { data: requirement } = await db.from('document_requirements')
       .select('*').eq('id', reqId).eq('organization_id', oId).single();
@@ -795,7 +835,7 @@ router.post('/:id/submit-for/:userId', auth, withBranchContext, upload.single('f
 
     if (!req.file) return res.status(400).json({ error: 'No file provided' });
     if (!ALLOWED_MIMES.includes(req.file.mimetype))
-      return res.status(400).json({ error: 'Invalid file type. Only PDF, images, and Word documents are allowed.' });
+      return res.status(400).json({ error: `${(req.file.originalname.match(/\.[A-Za-z0-9]+$/) || ['This file type'])[0].toLowerCase()} files are not supported. Allowed formats: PDF, JPG, PNG, WEBP, DOC, DOCX.` });
 
     const { data: requirement } = await db.from('document_requirements')
       .select('*').eq('id', reqId).eq('organization_id', oId).single();

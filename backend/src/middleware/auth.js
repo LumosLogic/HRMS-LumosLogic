@@ -26,6 +26,34 @@ const _roleChangedUsers = new Set();
 function markRoleChanged(userId) { _roleChangedUsers.add(String(userId)); }
 function clearRoleChanged(userId) { _roleChangedUsers.delete(String(userId)); }
 
+// Session revocation ("sign out other devices", admin password reset). users.sessions_valid_after (epoch seconds)
+// rejects any JWT issued before it. Cached briefly per process; revokeSessions() updates the cache immediately.
+// Fails open on DB errors/missing column so a missing migration can never lock everyone out.
+const _sessionCutoff = new Map(); // userId -> { at: epoch seconds | null, exp: ms }
+const SESSION_CACHE_MS = 15000;
+async function getSessionCutoff(userId) {
+  const key = String(userId);
+  const hit = _sessionCutoff.get(key);
+  if (hit && hit.exp > Date.now()) return hit.at;
+  let at = null;
+  try {
+    const { rows } = await pool.query('SELECT EXTRACT(EPOCH FROM sessions_valid_after) AS at FROM users WHERE id = $1 LIMIT 1', [userId]);
+    at = rows[0]?.at != null ? Math.floor(Number(rows[0].at)) : null;
+  } catch { return null; }
+  if (_sessionCutoff.size > 5000) _sessionCutoff.clear();
+  _sessionCutoff.set(key, { at, exp: Date.now() + SESSION_CACHE_MS });
+  return at;
+}
+// Invalidates every token issued before now (second resolution). Returns the cutoff in epoch seconds.
+async function revokeSessions(userId) {
+  const at = Math.floor(Date.now() / 1000);
+  await pool.query('UPDATE users SET sessions_valid_after = to_timestamp($2) WHERE id = $1', [userId, at]);
+  _sessionCutoff.set(String(userId), { at, exp: Date.now() + SESSION_CACHE_MS });
+  return at;
+}
+// Best-effort variant for flows where revocation must not block the main action.
+function revokeSessionsQuiet(userId) { return revokeSessions(userId).catch(e => console.error('[auth] revokeSessions:', e.message)); }
+
 const ALLOWED_ORIGINS = [
   'https://hrms.lumoslogic.com',
   'http://hrms.recruitx-ai.com',
@@ -60,6 +88,14 @@ async function auth(req, res, next) {
         error: 'Your role has been updated by an administrator. Please log in again to apply the new permissions.',
         code: 'ROLE_CHANGED',
       });
+    }
+
+    // Tokens issued before the user's session cutoff (sign-out-all / password reset) are dead.
+    if (decoded.role !== 'platform_admin' && decoded.iat) {
+      const cutoff = await getSessionCutoff(decoded.id);
+      if (cutoff && decoded.iat < cutoff) {
+        return res.status(401).json({ error: 'Your session has ended. Please log in again.', code: 'SESSION_REVOKED' });
+      }
     }
 
     // BUG_181/219: For employee-role tokens, do a lightweight DB check on status.
@@ -149,4 +185,4 @@ function platformAdminAuth(req, res, next) {
   } catch { return res.status(401).json({ error: 'Invalid token' }); }
 }
 
-module.exports = { JWT_SECRET, ALLOWED_ORIGINS, auth, adminOnly, rootAdminOnly, isAdminRole, platformAdminAuth, selfOrAdmin, blockUser, unblockUser, markRoleChanged, clearRoleChanged };
+module.exports = { JWT_SECRET, ALLOWED_ORIGINS, auth, adminOnly, rootAdminOnly, isAdminRole, platformAdminAuth, selfOrAdmin, blockUser, unblockUser, markRoleChanged, clearRoleChanged, revokeSessions, revokeSessionsQuiet };

@@ -239,22 +239,41 @@ export default function PendingApprovals() {
   });
 
   // While the previous branch's rows are still on screen (pendingStale) nothing is actionable.
+  const [bulkBusy, setBulkBusy] = useState(false);
   const isBusy = approveLeaveMut.isPending || rejectLeaveMut.isPending ||
-    approveRegMut.isPending || rejectRegMut.isPending || pendingStale;
+    approveRegMut.isPending || rejectRegMut.isPending || pendingStale || bulkBusy;
 
-  // EHN_PA_001: Bulk approve/reject
-  async function handleBulkApprove() {
-    const items = paginated.filter(i => selectedIds.has(`${i._flow}-${i.id}`) && i._kind !== 'expense');
-    for (const item of items) { await handleApprove(item); }
+  // EHN_PA_001 / BUG_265: Bulk approve / reject. Each selected request is processed one after the other and its real
+  // outcome is counted — the old version fired un-awaited mutations, reported "N approved" before anything finished
+  // (or "0" when only expense claims were ticked) and never said which requests failed.
+  async function runBulk(action) {
+    const picked   = paginated.filter(i => selectedIds.has(`${i._flow}-${i.id}`));
+    const expenses = picked.filter(i => i._kind === 'expense').length;
+    const items    = picked.filter(i => i._kind !== 'expense');
+    if (!items.length) {
+      toast(expenses ? 'Expense claims are reviewed one by one — open each claim to approve or reject it.' : 'Select at least one request first.', 'warning');
+      return;
+    }
+    setBulkBusy(true);
+    let done = 0; const failed = [];
+    for (const item of items) {
+      try {
+        if (item._kind === 'reg') await apiPut(`/regularization/${item.id}/review`, { status: action === 'approve' ? 'approved' : 'rejected' });
+        else await apiPut(`/leaves/${item.id}/${action}`);
+        done++;
+      } catch (e) { failed.push(`${item._name || 'Request'}: ${e.message}`); }
+    }
+    setBulkBusy(false);
     setSelectedIds(new Set());
-    toast(`${items.length} items approved`, 'success');
+    invalidate();
+    const verb = action === 'approve' ? 'approved' : 'rejected';
+    const parts = [`${done} ${verb}`];
+    if (failed.length) parts.push(`${failed.length} failed (${failed[0]}${failed.length > 1 ? ' …' : ''})`);
+    if (expenses) parts.push(`${expenses} expense claim${expenses !== 1 ? 's' : ''} skipped — review them individually`);
+    toast(parts.join(' · '), failed.length || !done ? 'warning' : 'success');
   }
-  async function handleBulkReject() {
-    const items = paginated.filter(i => selectedIds.has(`${i._flow}-${i.id}`) && i._kind !== 'expense');
-    for (const item of items) { await handleReject(item); }
-    setSelectedIds(new Set());
-    toast(`${items.length} items rejected`, 'warning');
-  }
+  const handleBulkApprove = () => runBulk('approve');
+  const handleBulkReject  = () => runBulk('reject');
 
   const isWfh = l => l.leave_type === 'wfh' || l.leave_time === 'wfh';
 
@@ -498,13 +517,16 @@ export default function PendingApprovals() {
             <div className="space-y-2">
               {approvalHistory.slice(0, 20).map((h, idx) => (
                 <div key={idx} className="flex items-center gap-3 py-2 px-3 rounded-xl bg-[#f9f9ff] border border-[#f0f3ff]">
-                  <span className={`w-2 h-2 rounded-full ${h.action === 'approved' ? 'bg-emerald-500' : 'bg-rose-500'}`} />
+                  <span className={`w-2 h-2 rounded-full ${(h.outcome || h.action) === 'rejected' ? 'bg-rose-500' : 'bg-emerald-500'}`} />
                   <div className="flex-1 min-w-0">
                     <p className="text-xs font-bold text-[#151c27] truncate">{h.employee_name || h.user_name || 'Employee'}</p>
-                    <p className="text-[0.65rem] text-[#777587]">{h.leave_type?.replace('_',' ')} · {h.start_date || ''}</p>
+                    <p className="text-[0.65rem] text-[#777587]">
+                      <span className="font-semibold capitalize">{h.kind === 'wfh' ? 'WFH' : (h.kind || 'leave')}</span>
+                      {' · '}{h.detail || `${h.leave_type?.replace('_', ' ') || ''} · ${h.start_date || ''}`}
+                    </p>
                   </div>
-                  <span className={`text-[0.65rem] font-bold px-2 py-0.5 rounded-full border ${h.action === 'approved' ? 'bg-emerald-50 text-emerald-700 border-emerald-200' : 'bg-rose-50 text-rose-700 border-rose-200'}`}>
-                    {h.action}
+                  <span className={`text-[0.65rem] font-bold px-2 py-0.5 rounded-full border ${(h.outcome || h.action) === 'rejected' ? 'bg-rose-50 text-rose-700 border-rose-200' : 'bg-emerald-50 text-emerald-700 border-emerald-200'}`}>
+                    {h.outcome || h.action}
                   </span>
                   <span className="text-[0.6rem] text-[#9ca3af]">{h.created_at ? new Date(h.created_at).toLocaleDateString('en-IN', { day:'numeric', month:'short' }) : ''}</span>
                 </div>
@@ -520,8 +542,8 @@ export default function PendingApprovals() {
         {selectedIds.size > 0 && (
           <div className="flex items-center gap-3 px-5 py-3 bg-[#f0f3ff] border-b border-[#c7c4d8]">
             <span className="text-sm font-bold text-[#3525cd]">{selectedIds.size} selected</span>
-            <button onClick={handleBulkApprove} className="btn btn-primary btn-sm">Approve Selected</button>
-            <button onClick={handleBulkReject} className="btn btn-outline btn-sm text-rose-600 border-rose-200 hover:bg-rose-50">Reject Selected</button>
+            <button onClick={handleBulkApprove} disabled={bulkBusy} className="btn btn-primary btn-sm">{bulkBusy ? 'Working…' : 'Approve Selected'}</button>
+            <button onClick={handleBulkReject} disabled={bulkBusy} className="btn btn-outline btn-sm text-rose-600 border-rose-200 hover:bg-rose-50">Reject Selected</button>
             <button onClick={() => setSelectedIds(new Set())} className="ml-auto text-xs text-[#777587] hover:text-[#3525cd]">Clear</button>
           </div>
         )}

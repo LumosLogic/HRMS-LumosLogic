@@ -1,5 +1,6 @@
 const express = require('express');
 const router  = express.Router();
+const { V, validateBody } = require('../../utils/fieldValidators');
 const { db, pool }        = require('../../config/db');
 const { auth, isAdminRole } = require('../../middleware/auth');
 const { hasPermission }   = require('../../middleware/permissions');
@@ -67,7 +68,10 @@ router.get('/:id/professional', auth, async (req, res) => {
 //
 // Employee status / probation / department / branch go through the SAME shared helpers as the Employees form
 // (services/employeeLifecycle.js), so the two screens can no longer leave the data in different states.
-router.put('/:id/professional', auth, hasPermission('employees', 'edit'), async (req, res) => {
+router.put('/:id/professional', auth, hasPermission('employees', 'edit'), validateBody({
+  position: V.text('Position / title'), location: V.text('Work location'), department: V.text('Department'),
+  probation_months: V.nonNegativeInt('Probation months'),
+}), async (req, res) => {
   try {
     // hasPermission() is the RBAC gate; the role check keeps the historical rule that employees never edit this section.
     if (!isAdminRole(req.user.role)) return res.status(403).json({ error: 'Admin access required' });

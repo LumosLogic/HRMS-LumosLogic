@@ -695,7 +695,9 @@ export default function MyProfile() {
               {/* EHN_PROF_005: Sign out of all other sessions */}
               <button onClick={async () => {
                 try {
-                  await apiPost('/auth/logout-all-devices', {});
+                  const r = await apiPost('/auth/logout-all-devices', {});
+                  // Every other token is now dead; keep this device signed in with the fresh one.
+                  if (r?.token) { try { localStorage.setItem('lt_token', r.token); } catch { /* storage blocked */ } }
                   toast('Signed out from all other devices', 'success');
                 } catch { toast('Could not sign out other devices. Try again.', 'error'); }
               }} className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-[#c7c4d8] text-xs font-bold text-[#464555] hover:text-rose-600 hover:border-rose-200 hover:bg-rose-50 transition-colors">

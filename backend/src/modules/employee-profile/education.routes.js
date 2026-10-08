@@ -1,5 +1,6 @@
 const express = require('express');
 const router  = express.Router();
+const { V, validateBody } = require('../../utils/fieldValidators');
 const { db }              = require('../../config/db');
 const { auth, isAdminRole } = require('../../middleware/auth');
 const { orgId }                 = require('../../utils/helpers');
@@ -22,7 +23,9 @@ router.get('/:id/education', auth, async (req, res) => {
 });
 
 // POST /api/profile/:id/education
-router.post('/:id/education', auth, async (req, res) => {
+const EDU_RULES = { from_year: V.pastYear('From year') };
+
+router.post('/:id/education', auth, validateBody(EDU_RULES), async (req, res) => {
   try {
     const empId = parseInt(req.params.id);
     if (!isAdminRole(req.user.role) && parseInt(req.user.id) !== empId)
@@ -85,7 +88,7 @@ router.post('/:id/education', auth, async (req, res) => {
 });
 
 // PUT /api/profile/:id/education/:recordId
-router.put('/:id/education/:recordId', auth, async (req, res) => {
+router.put('/:id/education/:recordId', auth, validateBody(EDU_RULES), async (req, res) => {
   try {
     const empId    = parseInt(req.params.id);
     const recordId = parseInt(req.params.recordId);

@@ -51,10 +51,21 @@ router.post('/send', auth, hasPermissionOrLegacyAdmin('notifications', 'broadcas
     const resolved = await resolveBroadcastRecipients(req, req.body);
     if (!resolved.ok) return res.status(resolved.status).json({ error: resolved.error });
     const userIds = resolved.users.map(u => u.id);
-    if (!process.env.VAPID_PUBLIC_KEY || !process.env.VAPID_PRIVATE_KEY) {
-      return res.status(503).json({ error: 'Push notifications are not configured. Please set VAPID keys in server settings.' });
+
+    // Every recipient always gets the message in their in-app Notifications, whether or not their browser has push enabled
+    // (push is only an extra delivery channel). Same recipients as the push, so scope/branch rules are unchanged.
+    if (userIds.length) {
+      await db.from('notifications').insert(userIds.map(id => ({
+        user_id: id, organization_id: oId, title: title.trim(), message: body.trim(), type: 'general', link: url || null,
+      })));
     }
-    const sent = await sendPushToUsers(userIds, { title: title.trim(), body: body.trim(), url: url || '/' });
+
+    // Browser push is best-effort on top: skipped (not an error) when VAPID is not configured or nobody subscribed.
+    let sent = 0;
+    if (process.env.VAPID_PUBLIC_KEY && process.env.VAPID_PRIVATE_KEY) {
+      try { sent = await sendPushToUsers(userIds, { title: title.trim(), body: body.trim(), url: url || '/' }); }
+      catch (e) { console.error('[push/send] web push failed (in-app notifications were saved):', e.message); }
+    }
     try {
       await db.from('notifications_log').insert({
         title: title.trim(), body: body.trim(), url: url || null,
@@ -63,7 +74,7 @@ router.post('/send', auth, hasPermissionOrLegacyAdmin('notifications', 'broadcas
       });
     } catch { /* log insert failure is non-fatal */ }
     const targetCount = userIds.length;
-    res.json({ success: true, sent: sent || 0, targeted: targetCount });
+    res.json({ success: true, sent: sent || 0, targeted: targetCount, in_app: targetCount });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

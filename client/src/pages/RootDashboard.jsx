@@ -723,8 +723,21 @@ export default function RootDashboard() {
               if (combined.length === 0) return (
                 <div className="py-10 text-center">
                   <CheckCircle2 size={22} className="text-emerald-400 mx-auto mb-2" />
-                  <p className="text-sm font-semibold text-[#464555]">All clear!</p>
-                  <p className="text-xs text-[#9ca3af] mt-0.5">No pending requests.</p>
+                  {totalPendingApprovals > 0 ? (
+                    // The card also counts expense claims, which this leave/regularization list does not show.
+                    <>
+                      <p className="text-sm font-semibold text-[#464555]">Nothing in this list</p>
+                      <p className="text-xs text-[#9ca3af] mt-0.5">
+                        {pendingExpCount > 0 ? `${pendingExpCount} expense claim${pendingExpCount !== 1 ? 's' : ''} awaiting approval.` : 'Other requests are awaiting approval.'}
+                      </p>
+                      <button onClick={() => navigate('/root/pending-approvals')} className="mt-2 text-xs font-bold text-[#3525cd] hover:underline">Open Pending Approvals</button>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-sm font-semibold text-[#464555]">All clear!</p>
+                      <p className="text-xs text-[#9ca3af] mt-0.5">No pending requests.</p>
+                    </>
+                  )}
                 </div>
               );
               return combined.slice(0, 8).map((item, i) => (

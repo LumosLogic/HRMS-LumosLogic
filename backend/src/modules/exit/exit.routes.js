@@ -101,6 +101,10 @@ router.post('/', auth, withBranchContext, async (req, res) => {
       .in('status', ['pending', 'approved']).maybeSingle();
     if (existing) return res.status(400).json({ error: 'An active resignation request already exists for this employee.' });
 
+    // EXIT-001: a supplied notice period must be a whole number of days, 0 or more (it used to accept -5)
+    if (notice_period_days !== undefined && notice_period_days !== null && notice_period_days !== '' &&
+        (!Number.isInteger(Number(notice_period_days)) || Number(notice_period_days) < 0))
+      return res.status(400).json({ error: 'Notice period must be a whole number of days (0 or more).' });
     const noticeDays = exitType === 'termination' ? (Number(notice_period_days) || 0) : (Number(notice_period_days) || 30);
     const rDate = new Date(resignation_date);
     const lwd   = new Date(rDate);
@@ -196,7 +200,12 @@ router.put('/:id', auth, hasPermission('exit', 'manage'), withBranchContext, asy
     const updates = {};
     if (resignation_date   !== undefined) updates.resignation_date   = resignation_date;
     if (reason             !== undefined) updates.reason             = reason || '';
-    if (notice_period_days !== undefined) updates.notice_period_days = Number(notice_period_days) || 30;
+    if (notice_period_days !== undefined) {
+      if (notice_period_days !== null && notice_period_days !== '' &&
+          (!Number.isInteger(Number(notice_period_days)) || Number(notice_period_days) < 0))
+        return res.status(400).json({ error: 'Notice period must be a whole number of days (0 or more).' });
+      updates.notice_period_days = Number(notice_period_days) || 30;   // unchanged: empty / 0 keeps the default
+    }
     if (last_working_day   !== undefined) updates.last_working_day   = last_working_day;
     if (notes              !== undefined) updates.notes              = notes || '';
     // BUG_155: clearance fields must be included in the whitelist

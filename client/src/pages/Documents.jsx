@@ -70,6 +70,13 @@ const STATUS_CFG = {
 };
 
 // BUG_210: default to 'all' so freshly uploaded shared docs are visible to employees.
+// A failed raw fetch() surfaces the browser's "Failed to fetch" / "Load failed" — say what actually happened (DOC-020).
+function uploadErrorText(err) {
+  const m = String(err?.message || '');
+  return err instanceof TypeError || /failed to fetch|load failed|networkerror/i.test(m)
+    ? 'Could not reach the server. Check your internet connection and try again.'
+    : (m || 'Upload failed. Please try again.');
+}
 const INIT_FORM = { name: '', category: '', expiry_date: '', visibility: 'all', targetUserId: '', shareWith: [] };
 const PAGE_SIZES = [5, 10, 20, 50];
 
@@ -221,7 +228,7 @@ function SearchableEmployeePicker({ employees = [], value, onChange, placeholder
 }
 
 // ── Delete With Reason Modal (Root Admin only) ────────────────────────────────
-function DeleteWithReasonModal({ open, docName, onConfirm, onCancel }) {
+function DeleteWithReasonModal({ open, docName, onConfirm, onCancel, busy = false }) {
   const [reason, setReason] = useState('');
 
   useEffect(() => { if (!open) setReason(''); }, [open]);
@@ -260,11 +267,11 @@ function DeleteWithReasonModal({ open, docName, onConfirm, onCancel }) {
         <div className="flex gap-3">
           <button onClick={onCancel} className="flex-1 btn btn-outline">Cancel</button>
           <button
-            onClick={() => { if (reason.trim()) onConfirm(reason.trim()); }}
-            disabled={!reason.trim()}
+            onClick={() => { if (reason.trim() && !busy) onConfirm(reason.trim()); }}
+            disabled={!reason.trim() || busy}
             className="flex-1 btn btn-danger disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Delete
+            {busy ? 'Deleting…' : 'Delete'}
           </button>
         </div>
       </div>
@@ -427,7 +434,7 @@ function UploadSharedDocPanel({ allEmployees, colleagues, isEmployee, onCancel, 
       if (!res.ok) throw new Error(data.error || 'Upload failed');
       toast('Document uploaded!', 'success');
       onUploaded();
-    } catch (err) { toast(err.message, 'error'); }
+    } catch (err) { toast(uploadErrorText(err), 'error'); }
     finally { setUploading(false); }
   }
 
@@ -549,7 +556,7 @@ function UploadSharedDocPanel({ allEmployees, colleagues, isEmployee, onCancel, 
           </div>
 
           <div className="flex gap-3">
-            <button className="btn btn-outline" onClick={onCancel}>Cancel</button>
+            <button className="btn btn-outline" onClick={onCancel} disabled={uploading}>Cancel</button>
             <button className="btn btn-primary" onClick={handleUpload} disabled={uploading}>
               {uploading ? <><span className="spinner w-4 h-4" /> Uploading…</> : <><Upload size={14} /> Upload Document</>}
             </button>
@@ -625,9 +632,10 @@ function SharedDocumentsTab({ onUploadClick }) {
   // Filtering
   const filtered = useMemo(() => {
     let docs = _docs;
-    if (search)      docs = docs.filter(d => d.name?.toLowerCase().includes(search.toLowerCase()));
+    if (search.trim()) docs = docs.filter(d => d.name?.toLowerCase().includes(search.trim().toLowerCase()));   // DOC-006: stray spaces never hide results
     if (catFilter)   docs = docs.filter(d => d.category === catFilter);
-    if (visFilter)   docs = docs.filter(d => d.visibility === visFilter);
+    if (visFilter === 'shared_with_me') docs = docs.filter(d => (d.document_shares || []).some(s => String(s.shared_with_user_id) === String(user?.id)));   // DOC-003
+    else if (visFilter) docs = docs.filter(d => d.visibility === visFilter);
     if (empFilter)   docs = docs.filter(d => String(d.user_id) === empFilter || (d.document_shares || []).some(s => String(s.shared_with_user_id) === empFilter));
     if (statusFilter === 'expired')  docs = docs.filter(d => d.expiry_date && d.expiry_date < today);
     if (statusFilter === 'expiring') docs = docs.filter(d => d.expiry_date && d.expiry_date >= today && d.expiry_date <= soon);
@@ -644,7 +652,7 @@ function SharedDocumentsTab({ onUploadClick }) {
       return 0;
     });
     return docs;
-  }, [_docs, search, catFilter, visFilter, empFilter, statusFilter, today, soon, sortCol, sortDir]);
+  }, [_docs, search, catFilter, visFilter, empFilter, statusFilter, today, soon, sortCol, sortDir, user?.id]);
 
   function toggleSort(col) {
     if (sortCol === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -713,7 +721,7 @@ function SharedDocumentsTab({ onUploadClick }) {
           <FilterSelect label="Category" value={catFilter} onChange={v => { setCatFilter(v); setPage(1); }}
             options={[{ value: '', label: 'All Categories' }, ...EMPLOYEE_CATEGORIES.map(c => ({ value: c.value, label: c.label }))]} />
           <FilterSelect label="Visibility" value={visFilter} onChange={v => { setVisFilter(v); setPage(1); }}
-            options={[{ value: '', label: 'All Visibility' }, { value: 'all', label: 'All Employees' }, { value: 'specific', label: 'Shared with Employees' }, { value: 'admin_only', label: 'Shared with HR' }, { value: 'self', label: 'Particular Employee' }]} />
+            options={[{ value: '', label: 'All Visibility' }, { value: 'all', label: 'All Employees' }, { value: 'specific', label: 'Shared with Employees' }, { value: 'admin_only', label: 'Shared with HR' }, { value: 'self', label: 'Particular Employee' }, { value: 'shared_with_me', label: 'Shared with Me' }]} />
           <FilterSelect label="Employee" value={empFilter} onChange={v => { setEmpFilter(v); setPage(1); }}
             options={[{ value: '', label: 'All' }, ...uniqueEmployees.map(e => ({ value: String(e.id), label: e.name }))]} />
           <FilterSelect label="Status" value={statusFilter} onChange={v => { setStatusFilter(v); setPage(1); }}
@@ -853,6 +861,7 @@ function SharedDocumentsTab({ onUploadClick }) {
         docName={confirmDel?.name}
         onConfirm={reason => delMut.mutate({ id: confirmDel.id, reason })}
         onCancel={() => setConfirmDel(null)}
+        busy={delMut.isPending}
       />
       <RequestDeleteModal
         open={!!requestDelDoc}
@@ -1017,15 +1026,21 @@ function RequirementModal({ req, onClose, onSaved, existingRequirements = [] }) 
       return;
     }
 
+    const maxMb = Number(form.max_file_size_mb);
+    if (!Number.isInteger(maxMb) || maxMb < 1 || maxMb > 50) { toast('Max file size must be a whole number between 1 and 50 MB', 'error'); return; }
+    const order = form.display_order === '' ? 0 : Number(form.display_order);
+    if (!Number.isInteger(order) || order < 0) { toast('Display order must be 0 or more', 'error'); return; }
+    const body = { ...form, max_file_size_mb: maxMb, display_order: order };
+
     setSaving(true);
     try {
       if (req?.id) {
-        await apiPatch(`/doc-requirements/${req.id}`, form);
+        await apiPatch(`/doc-requirements/${req.id}`, body);
         toast('Requirement updated!', 'success');
       } else {
         // Bug-118: when a specific branch is selected during creation,
         // auto-assign the requirement to that branch via assigned_branch_ids.
-        const payload = { ...form };
+        const payload = { ...body };
         if (selectedBranchId) {
           payload.assigned_branch_ids = [selectedBranchId];
         }
@@ -1097,10 +1112,9 @@ function RequirementModal({ req, onClose, onSaved, existingRequirements = [] }) 
             <div>
               <label className="form-label">Max File Size (MB)</label>
               <input type="number" min={1} max={50} className="form-control" value={form.max_file_size_mb}
-                onChange={e => {
-                  const v = parseInt(e.target.value);
-                  if (!isNaN(v) && v >= 1 && v <= 50) set('max_file_size_mb', v);
-                }} />
+                // DOC-010: keep what the user types (including an empty box) and validate on save, so the
+                // existing digit can be fully cleared and replaced.
+                onChange={e => set('max_file_size_mb', e.target.value.replace(/[^\d]/g, ''))} />
             </div>
           </div>
 
@@ -1165,7 +1179,7 @@ function RequirementModal({ req, onClose, onSaved, existingRequirements = [] }) 
           <div>
             <label className="form-label">Display Order</label>
             <input type="number" min={0} className="form-control" value={form.display_order}
-              onChange={e => { const v = parseInt(e.target.value); if (!isNaN(v) && v >= 0) set('display_order', v); }} />
+              onChange={e => set('display_order', e.target.value.replace(/[^\d]/g, ''))} />
             <p className="text-[0.65rem] text-[#9ca3af] mt-1">Lower number appears first (0 = first)</p>
           </div>
         </div>
@@ -2588,7 +2602,7 @@ function EmployeeUploadModal({ requirement, onClose, onUploaded }) {
       if (!res.ok) throw new Error(data.error || 'Upload failed');
       toast('Document uploaded successfully!', 'success');
       onUploaded();
-    } catch (err) { toast(err.message, 'error'); }
+    } catch (err) { toast(uploadErrorText(err), 'error'); }
     finally { setUploading(false); }
   }
 
@@ -3134,7 +3148,7 @@ function EditDocModal({ doc, isAdmin, colleagues, allEmployees, onClose, onSaved
       if (!res.ok) throw new Error(data.error || 'Update failed');
       toast('Document updated!', 'success');
       onSaved();
-    } catch (err) { toast(err.message, 'error'); }
+    } catch (err) { toast(uploadErrorText(err), 'error'); }
     finally { setSaving(false); }
   }
 

@@ -594,8 +594,17 @@ export default function MyLeaves() {
 
   const isWFHRecord = (l) => l.leave_time === 'wfh' || l.leave_type === 'wfh';
 
+  // Bug_042: the status counts must describe exactly the rows the list can show. They used to skip WFH records while the
+  // "Approved" list (type = All) included them (count 1, list 2). Same type + date filters as the list, status ignored.
+  const passesTypeDate = l => {
+    if (typeFilter === 'wfh' && !isWFHRecord(l)) return false;
+    if (typeFilter !== 'all' && typeFilter !== 'wfh' && (isWFHRecord(l) || l.leave_type !== typeFilter)) return false;
+    if (dateFrom && l.start_date < dateFrom) return false;
+    if (dateTo && l.start_date > dateTo) return false;
+    return true;
+  };
   const counts = { pending: 0, approved: 0, rejected: 0 };
-  leaves.filter(l => !isWFHRecord(l)).forEach(l => {
+  leaves.filter(passesTypeDate).forEach(l => {
     if (['pending', 'pending_dept', 'pending_root', 'pending_approval'].includes(l.status)) counts.pending++;
     else if (l.status === 'approved') counts.approved++;
     else if (l.status === 'rejected') counts.rejected++;
@@ -629,11 +638,7 @@ export default function MyLeaves() {
     .filter(l => {
       if (statusFilter === 'pending' && !PENDING_STATUSES.includes(l.status)) return false;
       if (statusFilter !== 'all' && statusFilter !== 'pending' && l.status !== statusFilter) return false;
-      if (typeFilter === 'wfh' && !isWFHRecord(l)) return false;
-      if (typeFilter !== 'all' && typeFilter !== 'wfh' && (isWFHRecord(l) || l.leave_type !== typeFilter)) return false;
-      if (dateFrom && l.start_date < dateFrom) return false;
-      if (dateTo && l.start_date > dateTo) return false;
-      return true;
+      return passesTypeDate(l);
     })
     .sort(sortComparator);
 

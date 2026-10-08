@@ -155,7 +155,13 @@ router.put('/org/settings', auth, async (req, res) => {
 
     const update = {};
     if (name)               update.name = name.trim();
-    if (domain !== undefined) update.domain = domain;
+    if (domain !== undefined) {
+      const d = domain === null ? '' : String(domain).trim().toLowerCase();
+      // Empty clears the field; otherwise it must be a real hostname (labels of a-z0-9-, at least one dot, no "..").
+      if (d && !/^(?=.{3,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(d))
+        return res.status(400).json({ error: 'Enter a valid domain, e.g. company.com' });
+      update.domain = d;
+    }
     if (logo_url !== undefined) update.logo_url = logo_url;
     if (google_client_id !== undefined) update.google_client_id = google_client_id;
     if (google_client_secret && google_client_secret.trim() !== '') update.google_client_secret = google_client_secret.trim();

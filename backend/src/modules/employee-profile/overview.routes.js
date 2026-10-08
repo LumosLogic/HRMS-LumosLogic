@@ -93,8 +93,16 @@ router.get('/:id/overview', auth, async (req, res) => {
     ].filter(Boolean).length;
     const profileCompletion = Math.round((sectionsCompleted / 8) * 100);
 
+    // EMP-061: every department the employee belongs to (users.department only holds the primary one)
+    let departments = [];
+    try {
+      const { data: ud } = await db.from('user_departments').select('departments(id, name)').eq('user_id', empId);
+      departments = (ud || []).map(r => r.departments).filter(Boolean);
+    } catch { /* junction unavailable: fall back to the primary department text */ }
+
     res.json({
       ...emp,
+      departments,
       manager,
       hod,
       branch,
