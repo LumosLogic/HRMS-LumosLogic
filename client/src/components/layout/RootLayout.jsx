@@ -1,5 +1,7 @@
 import React, { useState, useContext, useEffect, useRef } from 'react';
 import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
+import { useBranch } from '@/context/BranchContext';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import {
   LayoutDashboard, Calendar, FileText, Users, Settings, LogOut, ShieldCheck,
   UserCircle, Bell, Building2, ClipboardList, CalendarDays, Shield, Clock,
@@ -198,6 +200,7 @@ function RootFinanceSection({ onClose, unread }) {
 // ── Root sidebar ──────────────────────────────────────────────────────────────
 function RootSidebar({ onClose, onMenuClick, onSearchOpen }) {
   const { user, logout, organization } = useAuth();
+  const { selectedBranchId } = useBranch();
   const featureFlags = useContext(FeatureFlagContext);
   const flagsLoaded  = useContext(FeatureFlagsLoadedContext);
   const navigate = useNavigate();
@@ -220,7 +223,8 @@ function RootSidebar({ onClose, onMenuClick, onSearchOpen }) {
   }, [location.pathname]);
 
   const { data: countData } = useQuery({
-    queryKey: ['notif-count-root'],
+    queryKey: ['notif-count-root', selectedBranchId],
+    meta: BRANCH_KEYED,
     staleTime: STALE.realtime,   // realtime
     queryFn: () => apiGet('/notifications/unread-count'),
     refetchInterval: 30000,

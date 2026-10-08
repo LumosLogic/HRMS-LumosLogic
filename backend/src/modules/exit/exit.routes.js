@@ -130,7 +130,7 @@ router.post('/', auth, withBranchContext, async (req, res) => {
         await db.from('notifications').insert(adminIds.map(id => ({
           user_id: id, title: 'Employee Terminated — Action Required',
           message: `${targetName} was terminated (effective ${lwd.toISOString().split('T')[0]}). Please complete: IT access revocation, asset return, and final settlement.`,
-          type: 'exit', organization_id: oId,
+          type: 'exit', organization_id: oId, subject_user_id: targetUserId,
         })));
       }
       return res.json(data);
@@ -142,7 +142,7 @@ router.post('/', auth, withBranchContext, async (req, res) => {
       await db.from('notifications').insert(adminIds.map(id => ({
         user_id: id, title: 'Resignation Submitted',
         message: `${targetName} submitted a resignation. Last working day: ${lwd.toISOString().split('T')[0]}`,
-        type: 'exit', organization_id: oId,
+        type: 'exit', organization_id: oId, subject_user_id: targetUserId,
       })));
     }
 
@@ -307,6 +307,7 @@ router.put('/:id', auth, hasPermission('exit', 'manage'), withBranchContext, asy
                 message: `${empName}'s resignation is approved (LWD: ${data.last_working_day || 'TBD'}). Please complete: IT access revocation, asset return, and final settlement.`,
                 type:    'exit',
                 organization_id: oId,
+                subject_user_id: current.user_id,
               }))
             );
           } catch { /* fire-and-forget */ }

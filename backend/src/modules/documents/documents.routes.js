@@ -294,7 +294,7 @@ router.post('/upload', auth, hasPermission('documents', 'upload'), withBranchCon
           user_id: id,
           title:   'Employee Document Uploaded',
           message: `${req.user.name} uploaded "${doc.name}" (${doc.category}). Please review in the Documents section.`,
-          type:    'document', organization_id: oId,
+          type:    'document', organization_id: oId, subject_user_id: req.user.id,
         })));
       }).catch(() => {});
     }

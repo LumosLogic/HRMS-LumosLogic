@@ -38,7 +38,7 @@ async function runDocumentExpiryReminders(oId, today) {
     const when = Number(r.days_left) === 0 ? 'expires today' : `expires in ${r.days_left} day(s) (${String(r.expiry_date).slice(0, 10)})`;
     const rowsToInsert = [{ user_id: r.user_id, title: 'Document Expiring', message: `Your "${r.doc_name}" ${when}. Please upload a renewed copy.` }];
     for (const adminId of await getAdminsForEmployee(r.user_id, oId))
-      rowsToInsert.push({ user_id: adminId, title: 'Employee Document Expiring', message: `${r.emp_name}'s "${r.doc_name}" ${when}.` });
+      rowsToInsert.push({ user_id: adminId, title: 'Employee Document Expiring', message: `${r.emp_name}'s "${r.doc_name}" ${when}.`, subject_user_id: r.user_id });
     await db.from('notifications').insert(rowsToInsert.map(n => ({ ...n, type: 'document', organization_id: oId })));
     sent += rowsToInsert.length;
   }

@@ -44,7 +44,7 @@ export const ORG_LEVEL_QUERY_KEYS = new Set([
   'config-groups', 'leave-policies-group', 'lp-history',
   'doc-delete-requests', 'hr-contact', 'all-permissions',
   'org-has-biometric',
-  'notif-count', 'notif-count-root', 'notifications', 'is-dept-head',
+  'notif-count', 'is-dept-head',
 ]);
 
 /** Roots of single-record / own-data queries (one employee, one payslip, one run, self-service). */

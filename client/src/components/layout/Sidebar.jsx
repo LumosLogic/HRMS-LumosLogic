@@ -1,5 +1,7 @@
 import React, { useContext, useState, useEffect, useRef } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
+import { useBranch } from '@/context/BranchContext';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import {
   LayoutDashboard, Calendar, FileText, Users, Settings, LogOut, UserCircle,
   Building2, CalendarDays, Shield, ClipboardList, BarChart3, FolderOpen,
@@ -281,6 +283,7 @@ function FinanceSection({ onClose, isAdmin, isRootAdmin, prefix = '', hasPermiss
 // ── Sidebar ──────────────────────────────────────────────────────────────────
 export function Sidebar({ onClose, prefix = '', onMenuClick, onSearchOpen }) {
   const { user, logout, isAdmin, isHR, isRootAdmin, hasPermission, permissions, hasCustomAccess, customPermissions } = useAuth();
+  const { selectedBranchId } = useBranch();
   const customAccess = hasCustomAccess && !isHR && !isRootAdmin ? customPermissions : null;
   const navigate  = useNavigate();
   const location  = useLocation();
@@ -300,7 +303,8 @@ export function Sidebar({ onClose, prefix = '', onMenuClick, onSearchOpen }) {
   }, [location.pathname]);
 
   const { data: countData } = useQuery({
-    queryKey: ['notif-count'],
+    queryKey: ['notif-count', selectedBranchId],
+    meta: BRANCH_KEYED,
     staleTime: STALE.realtime,   // realtime
     queryFn: () => apiGet('/notifications/unread-count'),
     refetchInterval: 30000,

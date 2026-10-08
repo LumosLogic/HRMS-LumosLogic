@@ -244,7 +244,7 @@ router.put('/:id/complete', auth, withBranchContext, async (req, res) => {
                 adminIds.map(id => ({
                   user_id: id, title: 'Onboarding Task Ready',
                   message: `Onboarding: "${nextTask.title}" requires ${nextTask.assigned_to} action.`,
-                  type: 'onboarding', organization_id: oId,
+                  type: 'onboarding', organization_id: oId, subject_user_id: task.user_id,
                 }))
               );
             }).catch(() => {});

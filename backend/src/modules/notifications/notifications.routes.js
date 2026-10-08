@@ -4,6 +4,8 @@ const { db } = require('../../config/db');
 const { pool } = require('../../config/db-pg-adapter');
 const { auth } = require('../../middleware/auth');
 const { orgId } = require('../../utils/helpers');
+const { pool: sqlPool } = require('../../config/db');
+const { withBranchContext } = require('../../middleware/branchContext');
 
 // ── One-time table bootstrap for mobile push tokens ───────────────────────────
 pool.query(`
@@ -60,30 +62,41 @@ router.post('/register-token', auth, async (req, res) => {
   }
 });
 
+// Notifications about a specific employee carry subject_user_id. When a branch is selected, only those whose
+// employee belongs to that branch (plus employee-independent ones, subject NULL) are shown.
+// Column missing (migration not applied yet) → unfiltered, exactly the previous behaviour.
+const BRANCH_SUBJECT_SQL = `AND (n.subject_user_id IS NULL OR EXISTS (
+  SELECT 1 FROM users su WHERE su.id = n.subject_user_id AND su.organization_id = n.organization_id AND su.branch_id = $3))`;
+
 // GET /api/notifications — user's own notifications (EHN_NOT_005: archived param)
-router.get('/', auth, async (req, res) => {
+router.get('/', auth, withBranchContext, async (req, res) => {
   try {
     const archived = req.query.archived === 'true';
-    let q = db.from('notifications').select('*').eq('user_id', req.user.id).order('created_at', { ascending: false }).limit(100);
-    if (archived) {
-      q = q.eq('is_archived', true);
-    } else {
-      q = q.or('is_archived.is.null,is_archived.eq.false');
+    const archClause = archived ? 'n.is_archived = TRUE' : '(n.is_archived IS NULL OR n.is_archived = FALSE)';
+    const sql = `SELECT n.* FROM notifications n WHERE n.user_id = $1 AND ${archClause} /*BRANCH*/ ORDER BY n.created_at DESC LIMIT 100`;
+    const branchId = req.branchContext?.selectedBranchId || null;
+    let result;
+    if (branchId) {
+      try { result = await sqlPool.query(sql.replace('/*BRANCH*/', BRANCH_SUBJECT_SQL.replace('$3', '$2')), [req.user.id, branchId]); }
+      catch (e) { if (!/subject_user_id/.test(e.message)) throw e; }
     }
-    const { data, error } = await q;
-    if (error) throw error;
-    res.json(data || []);
+    if (!result) result = await sqlPool.query(sql.replace('/*BRANCH*/', ''), [req.user.id]);
+    res.json(result.rows || []);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // GET /api/notifications/unread-count
-router.get('/unread-count', auth, async (req, res) => {
+router.get('/unread-count', auth, withBranchContext, async (req, res) => {
   try {
-    const { count, error } = await db.from('notifications')
-      .select('id', { count: 'exact', head: true })
-      .eq('user_id', req.user.id).eq('is_read', false);
-    if (error) throw error;
-    res.json({ count: count || 0 });
+    const sql = `SELECT COUNT(*)::int AS count FROM notifications n WHERE n.user_id = $1 AND n.is_read = FALSE /*BRANCH*/`;
+    const branchId = req.branchContext?.selectedBranchId || null;
+    let result;
+    if (branchId) {
+      try { result = await sqlPool.query(sql.replace('/*BRANCH*/', BRANCH_SUBJECT_SQL.replace('$3', '$2')), [req.user.id, branchId]); }
+      catch (e) { if (!/subject_user_id/.test(e.message)) throw e; }
+    }
+    if (!result) result = await sqlPool.query(sql.replace('/*BRANCH*/', ''), [req.user.id]);
+    res.json({ count: result.rows[0]?.count || 0 });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 

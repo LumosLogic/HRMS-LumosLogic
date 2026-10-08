@@ -89,10 +89,10 @@ async function getEmploymentEnd(userId, orgId, db = pool) {
   return rows[0] || null;
 }
 
-async function notify(userIds, orgId, title, message) {
+async function notify(userIds, orgId, title, message, subjectUserId = null) {
   if (!userIds.length) return;
-  const vals = []; const ph = userIds.map((id, i) => { vals.push(id, title, message, 'exit', orgId); const b = i * 5; return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5})`; });
-  await pool.query(`INSERT INTO notifications (user_id, title, message, type, organization_id) VALUES ${ph.join(',')}`, vals).catch(() => {});
+  const vals = []; const ph = userIds.map((id, i) => { vals.push(id, title, message, 'exit', orgId, subjectUserId); const b = i * 6; return `($${b + 1},$${b + 2},$${b + 3},$${b + 4},$${b + 5},$${b + 6})`; });
+  await pool.query(`INSERT INTO notifications (user_id, title, message, type, organization_id, subject_user_id) VALUES ${ph.join(',')}`, vals).catch(() => {});
 }
 
 /**
@@ -133,7 +133,7 @@ async function ensureExitRecord({ orgId, userId, status, actorId, reason }) {
     const admins = (await getAdminsForEmployee(userId, orgId)).filter(id => String(id) !== String(actorId));
     const { rows: u } = await pool.query('SELECT name FROM users WHERE id = $1', [userId]);
     await notify(admins, orgId, type === 'termination' ? 'Employee Terminated — Action Required' : 'Exit Initiated — Action Required',
-      `${u[0]?.name || 'An employee'} is now ${status}. Please complete the offboarding checklist (IT access, asset return, final settlement).`);
+      `${u[0]?.name || 'An employee'} is now ${status}. Please complete the offboarding checklist (IT access, asset return, final settlement).`, userId);
   } catch { /* notification only */ }
   return { created, id: open[0]?.id };
 }

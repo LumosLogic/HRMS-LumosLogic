@@ -100,12 +100,12 @@ function logApprovalAction({ leaveId, oId, actorId, actorName, action, fromStatu
   ).catch(e => console.error('[leave_approval_log] insert failed:', e.message));
 }
 
-function notify(userId, title, message, oId) {
+function notify(userId, title, message, oId, subjectUserId = null) {
   // pool.query returns a real Promise — .catch() works correctly here.
   // db adapter builder has no .catch(), so we avoid chaining on it.
   pool.query(
-    `INSERT INTO notifications (user_id, title, message, type, organization_id) VALUES ($1, $2, $3, $4, $5)`,
-    [userId, title, message, 'leave', oId]
+    `INSERT INTO notifications (user_id, title, message, type, organization_id, subject_user_id) VALUES ($1, $2, $3, $4, $5, $6)`,
+    [userId, title, message, 'leave', oId, subjectUserId]
   ).catch(() => {}); // fire-and-forget
 }
 
@@ -123,7 +123,7 @@ async function notifyAdmins(oId, title, message, excludeUserId, employeeId) {
     }
     for (const id of adminIds) {
       if (excludeUserId && Number(id) === Number(excludeUserId)) continue;
-      notify(id, title, message, oId);
+      notify(id, title, message, oId, employeeId || null);
     }
   } catch (_) {}
 }
@@ -1354,7 +1354,7 @@ router.post('/', auth, withBranchContext, async (req, res) => {
       const { data: approverUser } = await db.from('users')
         .select('name, email').eq('id', wfInit.current_approver_id).maybeSingle();
 
-      notify(wfInit.current_approver_id, leaveNotifyTitle, leaveNotifyMsg, orgId(req));
+      notify(wfInit.current_approver_id, leaveNotifyTitle, leaveNotifyMsg, orgId(req), targetUserId);
 
       // BUG_096: notify branch-scoped HR/root admins (excluding the specific approver)
       notifyAdmins(orgId(req), leaveNotifyTitle, leaveNotifyMsg, wfInit.current_approver_id, targetUserId);
@@ -1362,7 +1362,7 @@ router.post('/', auth, withBranchContext, async (req, res) => {
       // BUG_096: notify dept head if not already the current approver
       getDeptHeadId(targetUserId, orgId(req)).then(headId => {
         if (headId && headId !== wfInit.current_approver_id) {
-          notify(headId, leaveNotifyTitle, leaveNotifyMsg, orgId(req));
+          notify(headId, leaveNotifyTitle, leaveNotifyMsg, orgId(req), targetUserId);
         }
       });
 
@@ -1392,7 +1392,7 @@ router.post('/', auth, withBranchContext, async (req, res) => {
 
       // BUG_096: in-app notify dept head
       getDeptHeadId(targetUserId, orgId(req)).then(headId => {
-        if (headId) notify(headId, leaveNotifyTitle, leaveNotifyMsg, orgId(req));
+        if (headId) notify(headId, leaveNotifyTitle, leaveNotifyMsg, orgId(req), targetUserId);
       });
     }
 
@@ -1560,7 +1560,7 @@ router.put('/:id/approve', auth, withBranchContext, async (req, res) => {
             notify(nextInfo.approverId,
               `Leave Request Awaiting Your Approval`,
               `A leave request from ${_lu?.name || 'an employee'} (${leave.start_date} → ${leave.end_date}) requires your action.`,
-              oId);
+              oId, leave.user_id);
             const { data: nextApprover } = await db.from('users')
               .select('name, email').eq('id', nextInfo.approverId).maybeSingle();
             if (nextApprover?.email && typeof leaveForwardedToRootHtml === 'function') {
@@ -1589,9 +1589,9 @@ router.put('/:id/approve', auth, withBranchContext, async (req, res) => {
               const notifRows = roleUsers.map(u => ({
                 user_id: u.id, title: `Leave Request Awaiting Your Approval`,
                 message: `${empName}'s leave request (${leave.start_date} → ${leave.end_date}) requires your approval at the ${nextLabel} stage.`,
-                type: 'leave', organization_id: oId,
+                type: 'leave', organization_id: oId, subject_user_id: leave.user_id,
               }));
-              const nCols = ['user_id','title','message','type','organization_id'];
+              const nCols = ['user_id','title','message','type','organization_id','subject_user_id'];
               const nVals = []; const nSets = [];
               notifRows.forEach((r, ri) => {
                 nCols.forEach((c, ci) => { nVals.push(r[c]); nSets.push(`$${ri * nCols.length + ci + 1}`); });
@@ -2149,7 +2149,7 @@ router.post('/:id/department-approve', auth, async (req, res) => {
       `SELECT id, name FROM users WHERE role = 'root_admin' AND organization_id = $1`, [oId]
     );
     for (const ra of rootAdmins.rows) {
-      notify(ra.id, `Leave Request Awaiting Final Approval — ${empName}`, `${empName}'s leave has been approved by the Department Head and requires your final decision.`, oId);
+      notify(ra.id, `Leave Request Awaiting Final Approval — ${empName}`, `${empName}'s leave has been approved by the Department Head and requires your final decision.`, oId, leave.user_id);
     }
 
     const recipients = await getRecipients(oId);

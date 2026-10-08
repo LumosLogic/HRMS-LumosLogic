@@ -327,7 +327,7 @@ router.post('/', auth, async (req, res) => {
         user_id: id, title, message,
         type: 'regularization',
         reference_id: data.id, reference_type: 'regularization',
-        organization_id: oId,
+        organization_id: oId, subject_user_id: req.user.id,
       })));
     }
     res.json(data);

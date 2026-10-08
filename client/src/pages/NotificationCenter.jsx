@@ -2,6 +2,8 @@ import React, { useState, useRef, useCallback } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/context/AuthContext';
+import { useBranch } from '@/context/BranchContext';
+import { BRANCH_KEYED } from '@/lib/queryScopes';
 import { Bell, BellOff, CheckCheck, Trash2, Megaphone, DollarSign, Receipt, Monitor, Target, UserCheck, LogOut as ExitIcon, ClipboardList, Info, FileText, Archive, X, Square, CheckSquare } from 'lucide-react';
 import { useToast } from '@/context/ToastContext';
 import { apiGet, apiPut, apiDelete } from '@/lib/api';
@@ -79,8 +81,10 @@ export default function NotificationCenter() {
   // BUG_092: confirmation state for delete (kept for bulk)
   const [deleteConfirm, setDeleteConfirm] = useState({ open: false, id: null });
 
+  const { selectedBranchId } = useBranch();
   const { data: _notifData, isLoading } = useQuery({
-    queryKey: ['notifications', activeTab],
+    queryKey: ['notifications', activeTab, selectedBranchId],
+    meta: BRANCH_KEYED,
     queryFn: () => apiGet('/notifications', activeTab === 'archived' ? { archived: true } : {}),
   });
   const notifications = Array.isArray(_notifData) ? _notifData : [];

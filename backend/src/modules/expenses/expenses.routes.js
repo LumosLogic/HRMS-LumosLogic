@@ -152,7 +152,7 @@ router.post('/', auth, withBranchContext, async (req, res) => {
         message: managerId
           ? `${req.user.name} submitted ₹${amount} for "${title}" — awaiting manager approval.`
           : `${req.user.name} submitted ₹${amount} for "${title}" — no manager assigned, direct review needed.`,
-        type: 'expense', reference_id: data.id, reference_type: 'expense', organization_id: oId,
+        type: 'expense', reference_id: data.id, reference_type: 'expense', organization_id: oId, subject_user_id: targetUserId,
       })));
     }
     res.json(data);
@@ -270,7 +270,7 @@ router.put('/:id/manager-approve', auth, async (req, res) => {
           user_id: id,
           title:   'Expense Ready for HR Review',
           message: `Manager approved ${exp.title} (₹${exp.amount}) — ready for your processing.`,
-          type:    'expense', organization_id: oId,
+          type:    'expense', organization_id: oId, subject_user_id: exp.user_id,
         })));
       }).catch(() => {});
     }

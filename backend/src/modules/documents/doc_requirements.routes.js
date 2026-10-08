@@ -720,7 +720,7 @@ router.post('/:id/submit', auth, upload.single('file'), async (req, res) => {
         user_id: id,
         title:   'Document Uploaded for Review',
         message: `${req.user.name} uploaded "${requirement.name}". Review in Verification Queue.`,
-        type:    'document', organization_id: oId,
+        type:    'document', organization_id: oId, subject_user_id: req.user.id,
       })));
     }).catch(() => {});
 
