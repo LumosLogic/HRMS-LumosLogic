@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
-import { Outlet } from 'react-router-dom';
+import React, { useState, useRef, useEffect } from 'react';
 import { Menu } from 'lucide-react';
+import { PageOutlet } from './PageOutlet';
+import { prefetchProps, warmRoutes } from '@/lib/routePrefetch';
 import { Sidebar } from './Sidebar';
 import { Header } from './Header';
 import { BranchSwitchGuard } from './BranchSwitchGuard';
@@ -13,6 +14,8 @@ export function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen,  setSearchOpen]  = useState(false);
   const { user } = useAuth();
+  const mainRef = useRef(null);
+  useEffect(() => warmRoutes(['/dashboard', '/employees', '/leaves', '/calendar', '/pending-approvals', '/payroll/generate']), []);
   useTour(hrAdminTourSteps, (user?.id && !user?.force_password_change) ? `lt_tour_hr_${user.id}` : null);
 
   return (
@@ -58,8 +61,8 @@ export function AppLayout() {
 
         {/* Headless Header — registers Ctrl+K shortcut only */}
         <Header />
-        <main id="tour-main-content" className="flex-1 overflow-y-auto p-4 md:p-7">
-          <BranchSwitchGuard><Outlet /></BranchSwitchGuard>
+        <main id="tour-main-content" ref={mainRef} className="flex-1 overflow-y-auto [scrollbar-gutter:stable] p-4 md:p-7">
+          <BranchSwitchGuard><PageOutlet scrollRef={mainRef} /></BranchSwitchGuard>
         </main>
       </div>
 

@@ -16,6 +16,9 @@ const queryClient = new QueryClient({
       // after alt-tab caused staggered layout updates. Per-query real-time polling
       // (refetchInterval) is unaffected and continues to work as configured.
       refetchOnWindowFocus: false,
+      // Keep unused query results for 15 min (default 5) so a module you visited a few minutes ago opens instantly from cache;
+      // freshness is still governed by staleTime / the per-query tiers, so nothing is shown stale longer than before.
+      gcTime: 15 * 60 * 1000,
     },
   },
 });

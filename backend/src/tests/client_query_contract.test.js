@@ -97,7 +97,7 @@ t('every raw useQuery in the app is classified (only role / role-members remain 
   assert.deepStrictEqual(open, ['role', 'role-members']);
 });
 t('BranchSwitchGuard is mounted around the page outlet of the admin layouts, and blocks interaction while the old branch data is shown', () => {
-  for (const l of ['components/layout/AppLayout.jsx', 'components/layout/RootLayout.jsx']) assert.match(read(l), /<BranchSwitchGuard><Outlet \/><\/BranchSwitchGuard>/, l);
+  for (const l of ['components/layout/AppLayout.jsx', 'components/layout/RootLayout.jsx']) assert.match(read(l), /<BranchSwitchGuard><PageOutlet scrollRef=\{mainRef\} \/><\/BranchSwitchGuard>/, l);
   const g = read('components/layout/BranchSwitchGuard.jsx');
   assert.match(g, /pointer-events-none/); assert.match(g, /inert/); assert.match(g, /Updating branch data/);
   assert.match(g, /meta\?\.branchKeyed === true && q\.state\.data === undefined/);

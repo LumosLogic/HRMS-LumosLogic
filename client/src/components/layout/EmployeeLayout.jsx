@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Outlet } from 'react-router-dom';
+import { PageOutlet } from '@/components/layout/PageOutlet';
+import { prefetchProps, warmRoutes } from '@/lib/routePrefetch';
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useTour } from '@/hooks/useTour';
 import { employeeTourSteps } from '@/lib/tours';
@@ -126,7 +127,7 @@ function EmployeeSidebar({ onClose, onMenuClick, onSearchOpen }) {
             <p className="text-[0.6rem] font-black uppercase tracking-[0.14em] text-[#777587] px-2.5 py-2">{sec.title}</p>
             <div className="flex flex-col gap-0.5">
               {sec.items.map(({ to, label, Icon, badge }) => (
-                <NavLink key={to} to={to} onClick={onClose}
+                <NavLink key={to} to={to} onClick={onClose} {...prefetchProps(to)}
                   className={({ isActive }) => cn(
                     'flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold border transition-all duration-150',
                     isActive
@@ -212,6 +213,8 @@ export function EmployeeLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen,  setSearchOpen]  = useState(false);
   const { user } = useAuth();
+  const mainRef = useRef(null);
+  useEffect(() => warmRoutes(['/portal/home', '/portal/leaves', '/portal/attendance', '/portal/payslips', '/portal/team-calendar']), []);
   useTour(employeeTourSteps, (user?.id && !user?.force_password_change) ? `lt_tour_emp_${user.id}` : null);
 
   return (
@@ -253,8 +256,8 @@ export function EmployeeLayout() {
 
         {/* Headless Header — registers Ctrl+K shortcut only */}
         <Header />
-        <main className="flex-1 overflow-y-auto p-4 md:p-6">
-          <Outlet />
+        <main ref={mainRef} className="flex-1 overflow-y-auto [scrollbar-gutter:stable] p-4 md:p-6">
+          <PageOutlet scrollRef={mainRef} />
         </main>
       </div>
 

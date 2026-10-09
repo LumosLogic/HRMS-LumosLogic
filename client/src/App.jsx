@@ -1,9 +1,10 @@
-import React, { useState, useEffect, lazy, Suspense } from 'react';
+import React, { useState, useEffect, useContext, lazy, Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from '@/context/AuthContext';
 import { canAccessAdminPath } from '@/lib/adminAccess';
 import { ToastProvider } from '@/context/ToastContext';
-import { FeatureFlagProvider, useFeature } from '@/context/FeatureFlagContext';
+import { FeatureFlagProvider, useFeature, FeatureFlagsLoadedContext } from '@/context/FeatureFlagContext';
+import { PageFallback } from '@/components/layout/PageOutlet';
 import { BranchProvider } from '@/context/BranchContext';
 import { AppLayout }      from '@/components/layout/AppLayout';
 import { RootLayout }     from '@/components/layout/RootLayout';
@@ -106,6 +107,16 @@ function PageLoader() {
 // Shows a locked screen when a feature is disabled for the org
 function FeatureRoute({ featureKey, children }) {
   const enabled = useFeature(featureKey);
+  const flagsLoaded = useContext(FeatureFlagsLoadedContext);
+  // The flags arrive a moment after sign-in / a hard refresh. useFeature() is false until then, which used to flash the
+  // lock screen. Show the page skeleton instead; if the flags never load (8 s) fall back to the old behaviour.
+  const [flagsLate, setFlagsLate] = useState(false);
+  useEffect(() => {
+    if (flagsLoaded) return undefined;
+    const t = setTimeout(() => setFlagsLate(true), 8000);
+    return () => clearTimeout(t);
+  }, [flagsLoaded]);
+  if (!flagsLoaded && !flagsLate) return <PageFallback />;
   if (!enabled) {
     return (
       <div className="flex flex-col items-center justify-center py-24 text-center px-6">
@@ -380,9 +391,11 @@ function AppRoutes() {
   );
 }
 
+// v7_startTransition: route changes run as a React transition, so the page you are on stays visible until the next page
+// (and its lazy chunk) is ready, instead of being swapped for a fallback.
 export default function App() {
   return (
-    <BrowserRouter>
+    <BrowserRouter future={{ v7_startTransition: true }}>
       <AuthProvider>
         <ToastProvider>
           <MaintenanceGate>

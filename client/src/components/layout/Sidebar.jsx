@@ -18,6 +18,7 @@ import { STALE } from '@/lib/queryTiers';
 import { initials, cn } from '@/lib/utils';
 import { GlobalSearchModal } from '@/components/ui/GlobalSearchModal';
 import { canAccessAdminPath } from '@/lib/adminAccess';
+import { prefetchProps } from '@/lib/routePrefetch';
 
 // ── Section definitions ──────────────────────────────────────────────────────
 
@@ -104,7 +105,7 @@ const ADMIN_ITEMS = [
 // ── Standard nav item ────────────────────────────────────────────────────────
 function NavItem({ to, label, Icon, badge, onClose }) {
   return (
-    <NavLink to={to} onClick={onClose}
+    <NavLink to={to} onClick={onClose} {...prefetchProps(to)}
       className={({ isActive }) => cn(
         'flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold border transition-all duration-150',
         isActive
@@ -183,6 +184,7 @@ function PayrollGroup({ onClose, isAdmin, isRootAdmin, prefix = '', featureKey =
               key={item.to}
               to={prefix + item.to}
               onClick={onClose}
+              {...prefetchProps(prefix + item.to)}
               className={({ isActive }) => cn(
                 'flex items-center gap-2.5 px-3 py-2 rounded-lg text-[0.82rem] font-semibold border transition-all duration-150',
                 isActive

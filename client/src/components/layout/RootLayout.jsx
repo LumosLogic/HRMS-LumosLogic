@@ -1,5 +1,5 @@
 import React, { useState, useContext, useEffect, useRef } from 'react';
-import { Outlet, NavLink, useNavigate, useLocation } from 'react-router-dom';
+import { NavLink, useNavigate, useLocation } from 'react-router-dom';
 import { useBranch } from '@/context/BranchContext';
 import { BRANCH_KEYED } from '@/lib/queryScopes';
 import {
@@ -14,6 +14,8 @@ import { useAuth } from '@/context/AuthContext';
 import { FeatureFlagContext, FeatureFlagsLoadedContext } from '@/context/FeatureFlagContext';
 import { Header } from './Header';
 import { BranchSwitchGuard } from './BranchSwitchGuard';
+import { PageOutlet } from './PageOutlet';
+import { prefetchProps, warmRoutes } from '@/lib/routePrefetch';
 import { initials, cn } from '@/lib/utils';
 import { useTour } from '@/hooks/useTour';
 import { rootAdminTourSteps } from '@/lib/tours';
@@ -183,7 +185,7 @@ function RootFinanceSection({ onClose, unread }) {
       <div className="flex flex-col gap-0.5">
         {payrollEnabled && <RootPayrollGroup onClose={onClose} />}
         {otherItems.map(({ to, label, Icon }) => (
-          <NavLink key={to} to={to} onClick={onClose} className={navLinkClass}>
+          <NavLink key={to} to={to} onClick={onClose} className={navLinkClass} {...prefetchProps(to)}>
             {({ isActive }) => (
               <>
                 <Icon size={17} className={cn('flex-shrink-0', isActive ? 'opacity-100' : 'opacity-60')} />
@@ -290,7 +292,7 @@ function RootSidebar({ onClose, onMenuClick, onSearchOpen }) {
                 {visibleItems.map(({ to, label, Icon, notifBadge }) => {
                   const badge = notifBadge && unread > 0 ? unread : null;
                   return (
-                    <NavLink key={to} to={to} onClick={onClose} className={navLinkClass}>
+                    <NavLink key={to} to={to} onClick={onClose} className={navLinkClass} {...prefetchProps(to)}>
                       {({ isActive }) => (
                         <>
                           <Icon size={17} className={cn('flex-shrink-0', isActive ? 'opacity-100' : 'opacity-60')} />
@@ -337,6 +339,8 @@ function RootSidebar({ onClose, onMenuClick, onSearchOpen }) {
 export function RootLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [searchOpen,  setSearchOpen]  = useState(false);
+  const mainRef = useRef(null);
+  useEffect(() => warmRoutes(['/root/dashboard', '/root/employees', '/root/leaves', '/root/calendar', '/root/pending-approvals', '/root/payroll/generate']), []);
   const { user } = useAuth();
   useTour(rootAdminTourSteps, (user?.id && !user?.force_password_change) ? `lt_tour_root_${user.id}` : null);
 
@@ -379,8 +383,8 @@ export function RootLayout() {
         </div>
 
         <Header />
-        <main id="tour-main-content" className="flex-1 overflow-y-auto p-4 md:p-7">
-          <BranchSwitchGuard><Outlet /></BranchSwitchGuard>
+        <main id="tour-main-content" ref={mainRef} className="flex-1 overflow-y-auto [scrollbar-gutter:stable] p-4 md:p-7">
+          <BranchSwitchGuard><PageOutlet scrollRef={mainRef} /></BranchSwitchGuard>
         </main>
       </div>
 
