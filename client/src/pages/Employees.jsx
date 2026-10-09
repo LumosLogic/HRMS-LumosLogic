@@ -2434,7 +2434,7 @@ export default function Employees() {
   // automatically get only active+probation employees from the backend.
   // Shared employee list hook (waits for the branch context, branch-keyed, previous branch kept while loading).
   // useEmployees keeps the previous branch's list while the new one loads (isPlaceholderData) — shown dimmed + read-only below
-  const { data: allEmployees = [], isLoading, isPlaceholderData: empStale } = useEmployees({ includeInactive: true });
+  const { data: allEmployees = [], isLoading, isPlaceholderData: empStale, isError: empFailed, error: empError, refetch: refetchEmployees } = useEmployees({ includeInactive: true });
 
   useEffect(() => {
     if (viewParam && allEmployees.length > 0) {
@@ -2913,6 +2913,18 @@ export default function Employees() {
               </button>
             )}
           </div>
+        </div>
+      )}
+
+      {/* A failed load must say so: an empty list used to be shown for 403 (no permission / branch not allowed) and 500 as well,
+          which looked like "no employees" while every other page worked. */}
+      {empFailed && !isLoading && (
+        <div role="alert" className="mb-4 rounded-xl border border-rose-200 bg-rose-50 px-4 py-3 flex items-start justify-between gap-3">
+          <div>
+            <p className="text-sm font-bold text-rose-800">Couldn't load employees</p>
+            <p className="text-xs text-rose-700 mt-0.5">{empError?.message || 'The request failed.'} The list below is empty because of this, not because there are no employees.</p>
+          </div>
+          <button className="btn btn-outline btn-sm flex-shrink-0" onClick={() => refetchEmployees()}>Retry</button>
         </div>
       )}
 

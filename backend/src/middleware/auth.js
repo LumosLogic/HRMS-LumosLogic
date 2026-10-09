@@ -104,17 +104,27 @@ async function auth(req, res, next) {
       try {
         const { rows } = await pool.query(
           `SELECT u.employee_status,
-                  (SELECT last_working_day FROM exit_requests
-                    WHERE user_id = u.id AND status IN ('approved','completed')
-                    ORDER BY created_at DESC LIMIT 1) AS last_working_day
-           FROM users u WHERE u.id = $1 LIMIT 1`,
+                  x.last_working_day, x.status AS exit_status, x.exit_type
+           FROM users u
+           LEFT JOIN LATERAL (SELECT last_working_day, status, exit_type FROM exit_requests
+                               WHERE user_id = u.id AND status IN ('approved','completed')
+                               ORDER BY created_at DESC LIMIT 1) x ON TRUE
+           WHERE u.id = $1 LIMIT 1`,
           [decoded.id]
         );
         const status = rows[0]?.employee_status;
         const lwd    = rows[0]?.last_working_day;
         const today  = new Date().toISOString().split('T')[0];
-        // BUG_219: block resigned employees whose notice period has ended
-        const isExpiredResignation = status === 'resigned' && lwd && lwd < today;
+        // BUG_219: block resigned employees whose notice period has ended.
+        // A resignation with a future last working day leaves the employee 'active' (they keep working through the
+        // notice), so the same end-of-notice rule applies to an active/probation employee whose latest exit is a
+        // resignation that has run out: always when it is still 'approved' (a reactivation closes approved exits),
+        // and when HR already marked it 'completed' only within 7 days of the last working day (so a long-ago
+        // completed exit of someone who was later re-hired cannot lock them out).
+        const sevenAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
+        const servedNotice = ['active', 'probation'].includes(status) && rows[0]?.exit_type !== 'termination' && lwd && lwd < today
+          && (rows[0]?.exit_status === 'approved' || lwd >= sevenAgo);
+        const isExpiredResignation = (status === 'resigned' && lwd && lwd < today) || servedNotice;
         if (status && (INACTIVE_STATUSES.includes(status) || isExpiredResignation)) {
           _blockedUsers.add(String(decoded.id)); // cache for subsequent requests
           // Lazily transition to inactive if cron hasn't run yet

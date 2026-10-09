@@ -149,6 +149,38 @@ async function closeApprovedExits({ orgId, userId }) {
 }
 
 /**
+ * Termination: take the future part of the employee's leave out (see leaveCorrection.cancelFutureLeavesForTermination).
+ * Own transaction; a failure is logged and rolled back but must not undo or hide the termination itself — and because
+ * the cancellation is idempotent it can simply be run again (this function is exported for that).
+ */
+async function cancelFutureLeaves({ orgId, userId, actorId = null }) {
+  const { cancelFutureLeavesForTermination } = require('./leaveCorrection');
+  const { localDateStr } = require('../utils/helpers');
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    // The effective date is the termination record's date. If the person was terminated while a RESIGNATION was open
+    // (no termination record), the termination applies today — the resignation's later last working day must not
+    // keep their leave alive.
+    const { rows: ex } = await client.query(
+      `SELECT last_working_day FROM exit_requests
+        WHERE user_id = $1 AND organization_id = $2 AND status IN ('approved','completed') AND exit_type = 'termination'
+        ORDER BY created_at DESC, id DESC LIMIT 1`, [userId, orgId]);
+    let actorName = null;
+    if (actorId) actorName = (await client.query('SELECT name FROM users WHERE id = $1', [actorId])).rows[0]?.name || null;
+    const res = await cancelFutureLeavesForTermination(client, {
+      oId: orgId, userId, effectiveDate: ex[0]?.last_working_day || null, today: localDateStr(), actorId, actorName,
+    });
+    await client.query('COMMIT');
+    return res;
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    console.error('[employeeLifecycle] cancelFutureLeaves failed (termination kept, re-run to retry):', e.message);
+    return null;
+  } finally { client.release(); }
+}
+
+/**
  * Run AFTER users.employee_status has been written. `prev` is the status before the write.
  * No-op when nothing changed (a form re-save that still says "active" must not close a pending resignation).
  */
@@ -156,6 +188,7 @@ async function afterStatusChange({ orgId, userId, prev, next, actorId = null, re
   if (!next || prev === next) return { changed: false };
   if (isAccessBlocked(next)) blockUser(userId); else unblockUser(userId);
   if (next === 'resigned' || next === 'terminated') await ensureExitRecord({ orgId, userId, status: next, actorId, reason });
+  if (next === 'terminated') await cancelFutureLeaves({ orgId, userId, actorId });
   else if (ACTIVE_LIKE_STATUSES.includes(next) && (prev === 'resigned' || prev === 'terminated' || prev === 'inactive')) await closeApprovedExits({ orgId, userId });
   return { changed: true };
 }
@@ -180,6 +213,6 @@ module.exports = {
   EXCLUDED_STATUSES, ACCESS_BLOCKED_STATUSES, ACTIVE_LIKE_STATUSES, DEFAULT_NOTICE_DAYS,
   isExcluded, isAccessBlocked, legacyStatusFor, notExcludedSql,
   computeProbationDates, syncUserDepartments, syncBiometricPin, hasActiveSalaryStructure,
-  getEmploymentEnd, ensureExitRecord, closeApprovedExits, afterStatusChange, setEmployeeStatus,
+  getEmploymentEnd, ensureExitRecord, closeApprovedExits, cancelFutureLeaves, afterStatusChange, setEmployeeStatus,
   payrollEligibilitySql,
 };

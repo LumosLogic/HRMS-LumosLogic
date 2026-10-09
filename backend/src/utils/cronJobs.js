@@ -363,8 +363,12 @@ async function runResignationExpiry() {
   // 'resigned' = legacy approvals that flipped the status immediately. Active/probation staff with an APPROVED
   // resignation are the ones who kept working through their notice period. (A reactivation closes approved exits,
   // so a rehired employee is never matched by an old exit.)
+  // An exit HR already marked 'completed' counts only within 7 days of its last working day (a re-hired person's
+  // old completed exit must never deactivate them).
+  const sevenAgo = new Date(Date.now() - 7 * 86400000).toISOString().split('T')[0];
   const approvedResignationIds = new Set(expiredExits
-    .filter(e => e.status === 'approved' && e.exit_type !== 'termination').map(e => String(e.user_id)));
+    .filter(e => e.exit_type !== 'termination' && (e.status === 'approved' || String(e.last_working_day).slice(0, 10) >= sevenAgo))
+    .map(e => String(e.user_id)));
   const { data: candidates } = await db.from('users')
     .select('id, organization_id, name, employee_status')
     .in('id', userIds)

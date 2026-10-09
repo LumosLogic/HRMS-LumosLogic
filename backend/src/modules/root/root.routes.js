@@ -187,7 +187,9 @@ router.get('/dashboard', auth, rootAdminOnly, withBranchContext, async (req, res
     // BUG_117: fetch employee_status so resigned/terminated can be excluded from active count
     let empQuery = db.from('users')
       .select('id, name, department, position, avatar_color, created_at, role, date_of_birth, joining_date, employee_status')
-      .eq('organization_id', oid).in('role', ['employee', 'admin']).order('name');
+      .eq('organization_id', oid).in('role', ['employee', 'admin'])
+      .not('employee_status', 'in', ['inactive', 'resigned', 'terminated'])   // exited staff drop out of every count below (empIds scopes them all)
+      .order('name');
     if (branchState.type === 'specific') empQuery = empQuery.eq('branch_id', branchState.branchId);
     else if (branchState.type === 'multi') empQuery = empQuery.in('branch_id', branchState.branchIds);
     const { data: allEmployeesRaw } = await empQuery;

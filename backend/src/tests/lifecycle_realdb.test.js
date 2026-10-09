@@ -212,7 +212,9 @@ const reset = async (id) => {
     const ap = await call('PUT', `/api/exit/${sub.body.id}`, { as: ID.hr, body: { status: 'approved' } });
     assert.strictEqual(ap.status, 200, JSON.stringify(ap.body));
     const u = await U(ID.e1);
-    assert.strictEqual(u.employee_status, 'resigned'); assert.strictEqual(u.status, 'active');
+    // Default notice is 30 days: the employee keeps working (stays counted everywhere) until the last working day;
+    // the nightly job / session guard end their access afterwards. Only a last working day that is today or past flips immediately.
+    assert.strictEqual(u.employee_status, 'active', 'serving notice: still active'); assert.strictEqual(u.status, 'active');
     assert.strictEqual((await exits(ID.e1)).length, 1, 'approval must not add a second exit row');
     for (let i = 0; i < 40 && (await checklist(ID.e1)) < 14; i++) await new Promise(r => setTimeout(r, 100));   // created fire-and-forget by the route
     assert.strictEqual(await checklist(ID.e1), 14);

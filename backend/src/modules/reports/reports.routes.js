@@ -72,7 +72,7 @@ router.get('/attendance', auth, adminOnly, reportsView, withBranchContext, async
     const { year, month, userId, format } = req.query;
     const today = todayIST();
     let q = db.from('attendance')
-      .select('*, users(name, department, position, device_enrollment_id, branch_id)')
+      .select('*, users(name, department, position, device_enrollment_id, branch_id, employee_status)')
       .eq('organization_id', oId)
       .lte('date', today)          // never surface future attendance records
       .order('date', { ascending: false });
@@ -96,8 +96,10 @@ router.get('/attendance', auth, adminOnly, reportsView, withBranchContext, async
       }
       if (empIds !== null) q = q.in('user_id', empIds);
     }
-    const { data, error } = await q;
+    let { data, error } = await q;
     if (error) throw error;
+    // Org-wide reports show working employees only; picking one specific employee still shows that person.
+    if (!userId && data) data = data.filter(r => !['inactive', 'resigned', 'terminated'].includes(r.users?.employee_status));
 
     // Build a holiday map for the queried range so we can override absent→holiday
     // for dates that were incorrectly marked absent before the holiday was configured.
@@ -331,7 +333,7 @@ router.get('/leaves', auth, adminOnly, reportsView, withBranchContext, async (re
     }
 
     let q = db.from('leaves')
-      .select('*, users!leaves_user_id_fkey(id, name, department), approver:users!leaves_approved_by_fkey(name)')
+      .select('*, users!leaves_user_id_fkey(id, name, department, employee_status), approver:users!leaves_approved_by_fkey(name)')
       .eq('organization_id', oId)
       .order('start_date', { ascending: false });
     if (year && month) {
@@ -345,7 +347,9 @@ router.get('/leaves', auth, adminOnly, reportsView, withBranchContext, async (re
     const { data, error } = await q;
     if (error) throw error;
 
-    const rows = (data || []).map(r => ({
+    const rows = (data || [])
+      .filter(r => !['inactive', 'resigned', 'terminated'].includes(r.users?.employee_status))
+      .map(r => ({
       name:        r.users?.name || '',
       department:  r.users?.department || '',
       leave_type:  r.leave_type,
@@ -443,6 +447,7 @@ router.get('/employees', auth, adminOnly, reportsView, withBranchContext, async 
       FROM users u
       WHERE u.role = 'employee'
         AND u.organization_id = $1
+        AND (u.employee_status IS NULL OR u.employee_status NOT IN ('inactive','resigned','terminated'))
         ${bf.clause}
       ORDER BY u.name ASC
     `, [oId, ...bf.params]);

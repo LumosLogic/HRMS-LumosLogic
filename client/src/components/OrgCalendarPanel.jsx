@@ -97,9 +97,14 @@ export function OrgCalendarPanel({ initialDate, initialDayModal = null, initialD
     return new Set(raw.split(',').map(Number));
   }, [orgSettings]);
 
-  const { data: leaves = [] } = useLeavesList({ year, month });
+  const { data: allLeaves = [] } = useLeavesList({ year, month });
 
-  const { data: employees = [] } = useEmployees({ lite: true, onlyEmployees: true });
+  const { data: employees = [], isLoading: employeesLoading } = useEmployees({ lite: true, onlyEmployees: true });
+
+  // The employee list is active-only, so leaves (and attendance) of exited employees must not feed the day counts —
+  // otherwise a day shows "1 on leave" and the click lists nobody.
+  const activeIds = new Set(employees.map(e => String(e.id)));
+  const leaves = employeesLoading ? allLeaves : allLeaves.filter(l => activeIds.has(String(l.user_id)));
 
   const { data: holidays = [] } = useHolidays(year);
 
@@ -108,7 +113,7 @@ export function OrgCalendarPanel({ initialDate, initialDayModal = null, initialD
   // ── Build attendance map + overlay approved leaves ────────────────────────────
 
   const grouped = {};
-  attendance.forEach(r => {
+  attendance.filter(r => employeesLoading || activeIds.has(String(r.user_id))).forEach(r => {
     if (!grouped[r.date]) grouped[r.date] = [];
     grouped[r.date].push(r);
   });
