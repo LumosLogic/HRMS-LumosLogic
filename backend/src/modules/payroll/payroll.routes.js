@@ -10,6 +10,7 @@ const { getFilterState, getBranchUserSQLFilter, resolveEmployeeIds, canAdminAcce
 const { validateBranchAccess, getUserBranchAccess } = require('../../services/branchService');
 const { calculatePayroll, PayrollError } = require('../../services/payrollEngine');
 const { computeProbationDates, legacyStatusFor } = require('../../utils/employeeStatus');
+const { issueTicket, ticketAuth, TTL_SECONDS } = require('../../utils/downloadTicket');
 
 // users.ctc / users.salary_effective_date are only a display cache of the ACTIVE employee_salary_structures row
 // (payroll never reads them). Keep the cache in step so the Employees/Profile screens cannot show a different salary.
@@ -1732,7 +1733,25 @@ router.get('/payslips/:id/details', auth, hasPermission('payroll', 'view'), asyn
 // Authorization:
 //   Employee  — self-access only; no RBAC permission required (own payslip).
 //   Admin/HR  — requires payroll.view permission + existing branch isolation.
-router.get('/payslips/:id/pdf', auth, async (req, res) => {
+// POST /api/payroll/payslips/:id/download-ticket — mobile/system-viewer downloads: returns a 60-second, single-use ticket for
+// THIS payslip only, so the PDF can be opened by a browser without ever putting the session token in a URL.
+// The ticket carries no extra rights: GET .../pdf?ticket=… still runs `auth` and every access check below.
+router.post('/payslips/:id/download-ticket', auth, async (req, res) => {
+  try {
+    const payslipId = parseInt(req.params.id, 10);
+    if (!payslipId) return res.status(400).json({ error: 'Invalid payslip ID' });
+    const { id, email, role, name, organization_id, organization_slug } = req.user;
+    const ticket = issueTicket({
+      purpose: 'payslip-pdf', resourceId: payslipId,
+      claims: { id, email, role, name, organization_id, organization_slug: organization_slug || '' },
+    });
+    res.set('Cache-Control', 'no-store');
+    res.json({ ticket, expires_in: TTL_SECONDS });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+router.get('/payslips/:id/pdf', ticketAuth('payslip-pdf'), auth, async (req, res) => {
+  res.set('Cache-Control', 'no-store');   // a payslip must never be cached by a proxy / shared device
   try {
     const oId       = orgId(req);
     const payslipId = parseInt(req.params.id, 10);

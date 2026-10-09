@@ -1858,6 +1858,17 @@ function BgvReviewModal({ employeeId, onClose }) {
                   </div>}
             </div>
 
+            {(() => {
+              const have = new Set(data.documents.filter(d => d.sends).map(d => d.section));
+              const gaps = ['identity', 'address', 'employment', 'education'].filter(x => !have.has(x));
+              return gaps.length > 0 && data.documents.some(d => d.sends) && (
+                <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 font-semibold">
+                  This package verifies Identity, Address, Employment and Education. No approved document yet for: {gaps.join(', ')}.
+                  SpringVerify may reject the submission until those are added.
+                </div>
+              );
+            })()}
+
             {blockers.length > 0 && (
               <div className="p-3 rounded-xl bg-rose-50 border border-rose-200">
                 <p className="text-xs font-black text-rose-700 mb-1">Missing information</p>
@@ -1888,7 +1899,7 @@ function BgvReviewModal({ employeeId, onClose }) {
 
 // BGV verifies a fixed set (identity / address / employment / education). `eligible` = the employee has at least one
 // APPROVED document of those types; the server enforces the same rule on submit.
-function BgvCell({ employeeId, latest, eligible = false }) {
+function BgvCell({ employeeId, latest, eligible = false, rowApproved = true }) {
   const toast = useToast();
   const [reviewOpen, setReviewOpen] = useState(false);
   const active = latest && (latest.status === 'pending' || latest.status === 'in_progress');
@@ -1916,6 +1927,8 @@ function BgvCell({ employeeId, latest, eligible = false }) {
     } catch (e) { toast(e?.message || 'Report not available', 'error'); }
   };
 
+  // A verified-type row that is not approved yet (e.g. re-upload requested) gets no BGV action of its own.
+  if (!rowApproved && eligible && !latest) return null;
   return (
     <div className="flex flex-col gap-1.5 items-start">
       {badge && (
@@ -1937,7 +1950,7 @@ function BgvCell({ employeeId, latest, eligible = false }) {
       {!active && !eligible && latest?.status !== 'completed' && (
         <span className="text-[0.65rem] font-semibold text-[#9ca3af]">BGV after a required document is approved</span>
       )}
-      {!active && eligible && (
+      {!active && eligible && rowApproved && (
         <button onClick={() => setReviewOpen(true)}
           className="px-2.5 py-1 rounded-lg text-[0.65rem] font-bold border border-[#3525cd] text-[#3525cd] hover:bg-[#f0f3ff]">
           {latest?.status === 'failed' || latest?.status === 'cancelled' ? 'Retry BGV' : 'Run BGV'}
@@ -2146,7 +2159,7 @@ function VerificationQueueTab() {
                       {bgvOn && bgvElig?.docs?.[sub.id] && (
                         <div className="mt-2">
                           <BgvCell employeeId={sub.user_id} latest={bgvLatestByEmp.get(String(sub.user_id))}
-                            eligible={!!bgvElig.employees?.[sub.user_id]?.eligible} />
+                            eligible={!!bgvElig.employees?.[sub.user_id]?.eligible} rowApproved={sub.status === 'approved'} />
                         </div>
                       )}
                     </td>
