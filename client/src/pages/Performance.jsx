@@ -288,6 +288,11 @@ function GoalDetailsPanel({ goalId, isAdmin, newComment, setNewComment, onCommen
   async function handleAttach(e) {
     const file = e.target.files?.[0];
     if (!file) return;
+    if (!/\.(pdf|docx?|jpe?g|png|webp|xlsx|csv)$/i.test(file.name)) {
+      toast('Unsupported file type. Allowed: PDF, Word, Excel, CSV, JPG, PNG, WEBP (max 10 MB).', 'error');
+      if (fileRef.current) fileRef.current.value = '';
+      return;
+    }
     if (file.size > 10 * 1024 * 1024) { toast('Attachment must be under 10 MB', 'error'); return; }
     setUploading(true);
     try {
@@ -319,6 +324,7 @@ function GoalDetailsPanel({ goalId, isAdmin, newComment, setNewComment, onCommen
           <input type="file" ref={fileRef} className="hidden" onChange={handleAttach}
             accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.webp,.xlsx,.csv" />
           <button type="button" disabled={uploading} onClick={() => fileRef.current?.click()}
+            title="PDF, Word, Excel, CSV, JPG, PNG, WEBP · max 10 MB"
             className="flex items-center gap-1 text-[0.65rem] font-bold text-[#3525cd] hover:underline disabled:opacity-50">
             {uploading ? <><Loader2 size={10} className="animate-spin" />Uploading…</> : <><Paperclip size={10} />Attach File</>}
           </button>

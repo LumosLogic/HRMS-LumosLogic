@@ -88,6 +88,7 @@ router.get('/colleagues', auth, withBranchContext, async (req, res) => {
       .select('id, name, avatar_color, department')
       .eq('organization_id', oId)
       .eq('role', 'employee')
+      .not('employee_status', 'in', ['inactive', 'resigned', 'terminated'])
       .neq('id', req.user.id)
       .order('name');
 

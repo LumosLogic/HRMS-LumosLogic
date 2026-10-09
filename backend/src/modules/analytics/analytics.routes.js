@@ -39,7 +39,7 @@ router.get('/', auth, adminOnly, hasPermissionOrLegacyAdmin('dashboard', 'view')
     let monthAttQ = db.from('attendance').select('status').eq('organization_id', orgId(req)).like('date', `${ym}-%`);
     let last7AttQ = db.from('attendance').select('date, status').eq('organization_id', orgId(req)).gte('date', from7).lte('date', today7);
     let empsCountQ = db.from('users').select('*', { count: 'exact', head: true }).eq('role', 'employee').eq('organization_id', orgId(req));
-    let allEmpsQ  = db.from('users').select('department, role, employment_type, position').eq('organization_id', orgId(req)).eq('role', 'employee').not('employee_status', 'in', '("inactive","resigned","terminated")');
+    let allEmpsQ  = db.from('users').select('department, role, employment_type, position').eq('organization_id', orgId(req)).eq('role', 'employee').not('employee_status', 'in', ['inactive', 'resigned', 'terminated']);   // NULL status = active
     let last30AttQ = db.from('attendance').select('date, status').eq('organization_id', orgId(req)).gte('date', from30).lte('date', today7);
     const leavePoliciesQ = db.from('leave_policies').select('leave_type, annual_quota, label, branch_id').eq('organization_id', orgId(req)).eq('active', true);
 

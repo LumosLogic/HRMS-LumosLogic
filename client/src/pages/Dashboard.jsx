@@ -29,6 +29,8 @@ import { invalidateMyAttendance } from '@/hooks/useAttendanceDay';
 import { StatusBadge, LeaveTypeBadge } from '@/components/ui/Badge';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { fmtDate, fmtDateRange, fmtTime, fmtHours, todayStr, getGreeting } from '@/lib/utils';
+import { useEmployees } from '@/hooks/useEmployees';
+import { fetchBalanceMap } from '@/hooks/useLeaveBalances';
 import { AttendanceDayModal } from '@/components/AttendanceDayModal';
 
 ChartJS.register(
@@ -424,6 +426,7 @@ function ManageHolidaysBtn({ onRefresh }) {
 
 // ── Attendance Trend Chart ─────────────────────────────────────────────────────
 const TREND_COLORS = ['#10b981', '#6366f1', '#f59e0b', '#3525cd', '#ef4444'];
+const LEAVE_BALANCE_COLORS = { casual: '#10b981', sick: '#ef4444', annual: '#3525cd', emergency: '#f59e0b', wfh: '#6366f1', maternity: '#ec4899', paternity: '#8b5cf6', comp_off: '#94a3b8' };
 const DEPT_CHART_COLORS = ['#4f46e5','#10b981','#f59e0b','#ef4444','#8b5cf6','#06b6d4','#ec4899','#94a3b8'];
 
 function AttendanceTrendChart({ analytics, navigate }) {
@@ -503,36 +506,30 @@ function OrgOverviewSection({ analytics, navigate }) {
   const totalRoleTypes = roleDistribution.length;
   const [tab, setTab] = useState('depts');
 
-  const deptChartData = {
-    labels: deptDistribution.map(d => d.name),
-    datasets: [{
-      data: deptDistribution.map(d => d.count),
-      backgroundColor: DEPT_CHART_COLORS.slice(0, deptDistribution.length),
-      borderWidth: 2, borderColor: '#fff', hoverOffset: 4,
-    }],
-  };
-
   const doughnutOpts = {
     cutout: '72%', responsive: true, maintainAspectRatio: false,
     plugins: { legend: { display: false }, tooltip: tooltipStyle },
     onHover: hoverCursor,
   };
 
-  const roleColors = ['#3525cd', '#10b981', '#f59e0b', '#64748b'];
-  const roleChartData = {
-    labels: roleDistribution.map(r => r.name),
-    datasets: [{
-      data: roleDistribution.map(r => r.count),
-      backgroundColor: roleColors.slice(0, roleDistribution.length),
-      borderWidth: 2, borderColor: '#fff', hoverOffset: 4,
-    }],
-  };
+  const roleColors = ['#3525cd', '#10b981', '#f59e0b', '#64748b', '#8b5cf6', '#94a3b8'];
 
   const isDepts = tab === 'depts';
-  const list = isDepts ? deptDistribution : roleDistribution;
-  const total = isDepts ? totalDepts : totalEmpCount;
-  const chartData = isDepts ? deptChartData : roleChartData;
+  // Percentages are shares of ALL active employees, but only the top 5 rows are drawn: add an "Others" row for the rest so
+  // the rows add up to the total shown in the centre (otherwise 6 of 25 reads as 24% next to a visible total of 21).
+  const withOthers = (rows) => {
+    const shown = rows.slice(0, 5);
+    const rest = totalEmpCount - shown.reduce((s, r) => s + r.count, 0);
+    return rest > 0 && rows.length > 0 ? [...shown, { name: 'Others', count: rest, pct: totalEmpCount > 0 ? Math.round((rest / totalEmpCount) * 100) : 0 }] : shown;
+  };
+  const list = withOthers(isDepts ? deptDistribution : roleDistribution);
+  const total = totalEmpCount;
   const colors = isDepts ? DEPT_CHART_COLORS : roleColors;
+  // The ring is drawn from the same rows (and colours) as the legend beside it.
+  const chartData = {
+    labels: list.map(r => r.name),
+    datasets: [{ data: list.map(r => r.count), backgroundColor: list.map((_, i) => colors[i % colors.length]), borderWidth: 2, borderColor: '#fff', hoverOffset: 4 }],
+  };
 
   return (
     <div className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm overflow-hidden flex flex-col justify-between h-full">
@@ -557,12 +554,12 @@ function OrgOverviewSection({ analytics, navigate }) {
             : <div className="w-full h-full rounded-full border-4 border-[#f0f3ff]" />}
           <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
             <span className="text-xl font-black text-[#151c27]">{total}</span>
-            <span className="text-[0.58rem] font-bold text-[#777587] uppercase">{isDepts ? 'Depts' : 'Members'}</span>
+            <span className="text-[0.58rem] font-bold text-[#777587] uppercase">Employees</span>
           </div>
         </div>
 
         <div className="flex-1 space-y-2.5 min-w-0">
-          {list.slice(0, 5).map((item, i) => (
+          {list.map((item, i) => (
             <div key={item.name} className="space-y-1">
               <div className="flex items-center justify-between text-xs">
                 <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -590,8 +587,44 @@ function OrgOverviewSection({ analytics, navigate }) {
 }
 
 // ── Leave Balance Overview ─────────────────────────────────────────────────────
+// Org-wide REMAINING / TOTAL days per leave type, summed from every active employee's own balance (the same
+// GET /leaves/balance/batch calculation the Leaves and Employees pages use: policy quota + carry-forward + adjustments,
+// working days only, half days = 0.5). It used to show approved REQUESTS vs ONE employee's quota (e.g. 6/14), which matched
+// nobody's balance. While the balances load (or if they fail) the old analytics figures are shown instead.
+function useOrgLeaveBalances() {
+  const { data } = useEmployees();
+  const ids = (Array.isArray(data) ? data : [])
+    .filter(e => e.role === 'employee' && !['resigned', 'terminated', 'inactive'].includes(e.employee_status))
+    .map(e => e.id);
+  const year = new Date().getFullYear();
+  const { data: rows } = useQuery({
+    queryKey: ['dashboard', 'org-leave-balances', ids.join(','), year],
+    meta: BRANCH_KEYED,   // the employee set (and so the balances) depend on the selected branch
+    enabled: ids.length > 0,
+    staleTime: 5 * 60 * 1000,
+    queryFn: async () => {
+      const map = await fetchBalanceMap(ids, year);
+      const byType = new Map();
+      for (const per of Object.values(map)) {
+        for (const b of Object.values(per)) {
+          const r = byType.get(b.leave_type) || { type: b.leave_type, label: b.label, total: 0, used: 0, remaining: 0 };
+          r.total += (Number(b.allocated) || 0) + (Number(b.carried_forward) || 0) + (Number(b.adjustment) || 0);
+          r.used += Number(b.used) || 0;
+          r.remaining += Number(b.remaining) || 0;
+          byType.set(b.leave_type, r);
+        }
+      }
+      return [...byType.values()];
+    },
+  });
+  return { rows: rows && rows.length ? rows : null, employeeCount: ids.length };
+}
+
 function LeaveBalanceSection({ analytics, navigate }) {
-  const { leaveBalanceByType = [] } = analytics || {};
+  const { rows: orgRows, employeeCount } = useOrgLeaveBalances();
+  const leaveBalanceByType = orgRows
+    ? orgRows.map(r => ({ type: r.type, label: r.label, total: Math.round(r.total * 2) / 2, used: Math.round(r.used * 2) / 2, remaining: Math.round(r.remaining * 2) / 2, color: LEAVE_BALANCE_COLORS[r.type] || '#94a3b8' }))
+    : (analytics?.leaveBalanceByType || []).map(r => ({ ...r, remaining: Math.max(0, r.total - r.used) }));
 
   const LEAVE_ICONS = {
     casual: '📅', sick: '🤒', annual: '🏖️', emergency: '🚨', wfh: '🏠', maternity: '👶', paternity: '👨‍👧', comp_off: '🔄',
@@ -600,7 +633,10 @@ function LeaveBalanceSection({ analytics, navigate }) {
   return (
     <div className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm overflow-hidden">
       <div className="flex items-center justify-between px-5 py-4 border-b border-[#e7eefe]">
-        <h2 className="text-sm font-black text-[#151c27]">Leave Balance Overview</h2>
+        <div>
+          <h2 className="text-sm font-black text-[#151c27]">Leave Balance Overview</h2>
+          <p className="text-[0.65rem] text-[#777587] mt-0.5">Remaining / total days{orgRows ? ` · all ${employeeCount} active employees` : ''}</p>
+        </div>
         <button onClick={() => navigate('/reports?section=leaves')}
           className="text-xs font-bold text-[#3525cd] hover:text-[#4f46e5] px-2 py-1 rounded-lg hover:bg-[#f0f3ff] transition-colors">
           View report
@@ -618,7 +654,7 @@ function LeaveBalanceSection({ analytics, navigate }) {
                   <span className="text-sm">{LEAVE_ICONS[lb.type] || '📋'}</span>
                   <span className="text-xs font-bold text-[#151c27]">{lb.label}</span>
                 </div>
-                <span className="text-xs font-bold text-[#464555]">{lb.used} / {lb.total}</span>
+                <span className="text-xs font-bold text-[#464555]" title={`${lb.remaining} days remaining of ${lb.total} (${lb.used} used)`}>{lb.remaining} / {lb.total}</span>
               </div>
               <div className="h-1.5 bg-[#f0f3ff] rounded-full overflow-hidden">
                 <div className="h-full rounded-full transition-all duration-500"

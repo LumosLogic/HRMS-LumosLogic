@@ -30,14 +30,27 @@ function cfg() {
   return { base, token, subtypeId };
 }
 
+// Field-level validation problems. /add uses errors[{path,msg}], /v2/submit-bgv uses errors[{field,error}].
+function fieldErrorsOf(json) {
+  const arr = json && Array.isArray(json.errors) ? json.errors : [];
+  return arr.slice(0, 20).map(e => ({
+    field: String(e.field || e.path || '').slice(0, 120),
+    error: String(e.error || e.msg || '').slice(0, 200),
+  })).filter(e => e.field || e.error);
+}
+
 function httpError(status, json) {
   const msg = String((json && (json.message || json.msg || json.error)) || `HTTP ${status}`).slice(0, 200);
-  if (status === 401) return new BgvProviderError('AUTH_FAILED', msg);
-  if (status === 409) return new BgvProviderError('DUPLICATE_CANDIDATE', msg);
-  if (status === 429) return new BgvProviderError('RATE_LIMITED', msg);
-  if (status === 404) return new BgvProviderError('NOT_FOUND', msg);
-  if (status >= 500) return new BgvProviderError('PROVIDER_5XX', msg, { outcomeUnknown: true });
-  return new BgvProviderError('INVALID_REQUEST', msg); // 400 / 413 / 422
+  let err;
+  if (status === 401) err = new BgvProviderError('AUTH_FAILED', msg);
+  else if (status === 409) err = new BgvProviderError('DUPLICATE_CANDIDATE', msg);
+  else if (status === 429) err = new BgvProviderError('RATE_LIMITED', msg);
+  else if (status === 404) err = new BgvProviderError('NOT_FOUND', msg);
+  else if (status >= 500) err = new BgvProviderError('PROVIDER_5XX', msg, { outcomeUnknown: true });
+  else err = new BgvProviderError('INVALID_REQUEST', msg); // 400 / 413 / 422
+  err.httpStatus = status;
+  err.fieldErrors = fieldErrorsOf(json);
+  return err;
 }
 
 async function request(method, path, { query, body } = {}) {
@@ -81,6 +94,16 @@ function cleanPhone(p) {
   if (d.length === 12 && d.startsWith('91')) d = d.slice(2);
   else if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
   return /^[6-9]\d{9}$/.test(d) ? d : null;
+}
+
+// Accepts YYYY-MM-DD, DD-MM-YYYY, DD/MM/YYYY or a Date; anything else is omitted rather than guessed.
+function toIsoDate(v) {
+  if (!v) return null;
+  if (v instanceof Date) return isNaN(v) ? null : v.toISOString().slice(0, 10);
+  const s = String(v).trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/); if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = s.match(/^(\d{2})[-/](\d{2})[-/](\d{4})$/); if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  return null;
 }
 
 // overall_status_code -> internal status. Codes per guide: 0 In progress, 1 Completed, 3 Awaiting Input, 4 Processing,
@@ -131,22 +154,99 @@ module.exports = {
   },
 
   /**
-   * HRMS-submitted BGV (employee data + approved HRMS documents, no SpringVerify email/form for the employee).
-   * FAILS CLOSED: the official submit contract (endpoint, payload, document format, consent, package fields,
-   * no-invite candidate creation) has not been confirmed, so this makes NO network call and never reaches a paid API.
-   * Do not implement from guesswork — replace the body only once the contract is supplied. Until then
-   * createCandidate() above remains the (invite-based) legacy path and is not used by the review flow.
+   * HRMS-submitted flow, step 1: POST /external/v1/candidate/add with invite:false — SpringVerify sends the
+   * employee NO email/form; HRMS submits everything by API in step 2 (submitBgv). Creates the candidate only.
    */
-  async submitBgv(/* { employee, documents, reference } */) {
-    throw new BgvProviderError('SUBMIT_CONTRACT_NOT_CONFIRMED', 'SpringVerify submit contract not confirmed');
+  async addCandidate({ employee, reference }) {
+    const c = cfg();
+    const name = cleanName(employee && employee.name);
+    const email = String((employee && employee.email) || '').trim();
+    if (name.length < 2) throw new BgvProviderError('INVALID_INPUT', 'employee name is not valid for SpringVerify');
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new BgvProviderError('INVALID_INPUT', 'employee email is required');
+    const phone = cleanPhone(employee.phone);
+    if (!phone) throw new BgvProviderError('INVALID_INPUT', 'employee needs a valid 10-digit Indian mobile number');
+
+    const json = await request('POST', '/external/v1/candidate/add', {
+      body: {
+        candidate: {
+          name, email, phone, invite: false,
+          employee_id: String(reference),
+          meta_data: { hrms_reference: String(reference), hrms_employee_id: String(employee.id) },
+        },
+        package: { subtype_id: c.subtypeId },
+      },
+    });
+    const candidateId = json && json.data && json.data.candidate_id;
+    if (candidateId == null) throw new BgvProviderError('PROVIDER_BAD_RESPONSE', 'candidate_id missing in response', { outcomeUnknown: true });
+    // bgv_url / token are deliberately dropped.
+    return { candidateId: String(candidateId), providerStatus: '3', raw: { message: json.message || null } };
   },
 
   /**
-   * Fallback status pull (the webhook is the primary channel). FAILS CLOSED: the official status endpoint/response
-   * contract has not been confirmed, so this makes NO network call. Replace the body only once it is supplied.
+   * Step 2: POST /external/v2/candidate/submit-bgv — basic details + the employee's approved HRMS documents
+   * (sent as hosted https URLs; SpringVerify downloads and stores its own copy). One call covers ALL documents.
+   * A 400 leaves the candidate unchanged, so the same candidate can be resubmitted after fixing the payload.
    */
-  async refreshStatus(/* { candidateId, requestId } */) {
-    throw new BgvProviderError('STATUS_CONTRACT_NOT_CONFIRMED', 'SpringVerify status contract not confirmed');
+  async submitBgv({ candidateId, employee, documents }) {
+    const docUrl = (d) => {
+      let u; try { u = new URL(d.file_url); } catch { u = null; }
+      if (!u || u.protocol !== 'https:') throw new BgvProviderError('INVALID_INPUT', `document "${d.requirement_name}" has no https file link`);
+      return { url: u.toString(), tag: d.sv.tag };
+    };
+    const body = { candidate_id: Number(candidateId), basic_details: { full_name: cleanName(employee.name), email: employee.email } };
+    const mobile = cleanPhone(employee.phone); if (mobile) body.basic_details.mobile_number = mobile;
+    const dob = toIsoDate(employee.date_of_birth); if (dob) body.basic_details.dob = dob;
+    const gender = { male: '1', female: '2', 'non-binary': '3', other: '3' }[String(employee.gender || '').trim().toLowerCase()];
+    if (gender) body.basic_details.gender = gender;
+
+    const sent = documents.filter(d => d.sv);
+    const merged = (list) => Object.assign({}, ...list.map(d => d.detail || {})); // HR-entered details, per section
+    const bySection = (s) => sent.filter(d => d.sv.section === s);
+
+    // Identity: exactly ONE document is verified (selectDocuments() already picked the best-ranked one).
+    const [idDoc] = bySection('identity');
+    if (idDoc) {
+      const e = { id_type: idDoc.sv.id_type, name_on_document: cleanName(employee.name), combined_document: true, documents: [docUrl(idDoc)] };
+      if (idDoc.detail && idDoc.detail.id_number) e.id_number = idDoc.detail.id_number;
+      body.identity = { identity_1: e };
+    }
+    // Employment (last 1), education (highest 1): one entry each carrying all of its documents.
+    const emp = bySection('employment');
+    if (emp.length) {
+      const m = merged(emp); const e = { documents: emp.map(docUrl) };
+      if (m.company_name) e.company_name = m.company_name;
+      if (m.designation) e.designation = m.designation;
+      if (m.start_date) e.start_date = m.start_date;
+      if (m.end_date) e.end_date = m.end_date;
+      body.employment = { employment_1: e };
+    }
+    const edu = bySection('education');
+    if (edu.length) body.education = { education_1: { course_type: merged(edu).course_type || 'UNDERGRAD', documents: edu.map(docUrl) } };
+    // Address (physical, any 1): current address with the proof documents.
+    const addr = bySection('address');
+    if (addr.length) {
+      const m = merged(addr);
+      const cur = { documents: addr.map(docUrl), country: 'India' };
+      const line = employee.address && String(employee.address).trim();
+      if (line) cur.address_line_1 = line.slice(0, 300);
+      if (m.city) cur.city = m.city;
+      if (m.state) cur.state = m.state;
+      if (m.pin_code) cur.pin_code = m.pin_code;
+      body.address = { current: cur };
+    }
+
+    const json = await request('POST', '/external/v2/candidate/submit-bgv', { body });
+    if (!json || json.success !== true) throw new BgvProviderError('PROVIDER_BAD_RESPONSE', 'submit not confirmed', { outcomeUnknown: true });
+    return { candidateId: String(candidateId), providerStatus: null, raw: { message: json.message || null, documents: sent.length } };
+  },
+
+  /** Status pull (the webhook is the primary channel): GET /external/v1/candidate/details?candidate_id= */
+  async refreshStatus({ candidateId }) {
+    const json = await request('GET', '/external/v1/candidate/details', { query: { candidate_id: candidateId } });
+    const d = json && json.data;
+    const code = d && Number(d.overall_status_code);
+    if (!d || !Number.isInteger(code)) throw new BgvProviderError('PROVIDER_BAD_RESPONSE', 'overall_status_code missing in response');
+    return { providerStatus: String(code), raw: { overall_status: d.overall_status || null, overall_status_code: code, completion_date: d.completion_date || null } };
   },
 
   /** Report PDF is fetched on demand (webhook report_url expires). Returns base64 for the authenticated HRMS user. */

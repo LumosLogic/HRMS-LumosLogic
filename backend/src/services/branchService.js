@@ -174,8 +174,23 @@ async function _resolveUserBranchAccess(userId, orgId, role) {
  *
  * @returns {{ branches: object[], hasAllBranches: boolean, isRootAdmin: boolean }}
  */
+// A soft-deleted branch (branches.deleted_at, see add_branch_soft_delete_2026_10_09.sql) disappears from every branch list.
+// Returns the SQL condition for `alias`, or TRUE while the column does not exist yet (migration not applied).
+let _liveCol;
+async function liveBranchSql(alias = 'branches') {
+  if (_liveCol === undefined) {
+    try {
+      const { rows } = await pool.query(
+        `SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'branches' AND column_name = 'deleted_at'`);
+      if (rows.length) _liveCol = true; else return 'TRUE';   // not cached: the migration may be applied while the server runs
+    } catch { return 'TRUE'; }
+  }
+  return `${alias}.deleted_at IS NULL`;
+}
+
 async function getAccessibleBranches(userId, orgId, role) {
   const access = await getUserBranchAccess(userId, orgId, role);
+  const live = await liveBranchSql('branches');
 
   try {
     let branchResult;
@@ -183,7 +198,7 @@ async function getAccessibleBranches(userId, orgId, role) {
       branchResult = await pool.query(
         `SELECT id, org_id, name, code, location, address, is_active, created_at
          FROM branches
-         WHERE org_id = $1
+         WHERE org_id = $1 AND ${live}
          ORDER BY name`,
         [orgId]
       );
@@ -191,7 +206,7 @@ async function getAccessibleBranches(userId, orgId, role) {
       branchResult = await pool.query(
         `SELECT id, org_id, name, code, location, address, is_active, created_at
          FROM branches
-         WHERE org_id = $1 AND id = ANY($2::bigint[])
+         WHERE org_id = $1 AND id = ANY($2::bigint[]) AND ${live}
          ORDER BY name`,
         [orgId, access.branchIds]
       );
@@ -272,4 +287,4 @@ async function validateBranchIdList(userId, orgId, role, branchIds) {
   return { ok: true, ids };
 }
 
-module.exports = { isBranchFeatureEnabled, getUserBranchAccess, getAccessibleBranches, validateBranchAccess, validateBranchIdList, clearBranchAccessCache };
+module.exports = { liveBranchSql, isBranchFeatureEnabled, getUserBranchAccess, getAccessibleBranches, validateBranchAccess, validateBranchIdList, clearBranchAccessCache };

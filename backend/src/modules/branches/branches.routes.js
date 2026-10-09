@@ -9,7 +9,8 @@ router.use((req, res, next) => {
 const { pool } = require('../../config/db-pg-adapter');
 const { auth, rootAdminOnly } = require('../../middleware/auth');
 const { hasPermission } = require('../../middleware/permissions');
-const { getAccessibleBranches, getUserBranchAccess } = require('../../services/branchService');
+const { getAccessibleBranches, getUserBranchAccess, liveBranchSql } = require('../../services/branchService');
+const { previewBranchDeletion, deleteBranch, BranchDeleteError } = require('../../services/branchDeletion');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
@@ -415,6 +416,7 @@ router.get('/hr-admins', auth, rootAdminOnly, async (req, res) => {
 // GET /api/branches — list all branches in org with HR admin assignment counts
 router.get('/', auth, async (req, res) => {
   try {
+    const live = await liveBranchSql('b');   // soft-deleted branches are hidden from every list
     const result = await pool.query(
       `SELECT b.*,
               COALESCE(COUNT(DISTINCT hba.user_id), 0)::int AS hr_admin_count,
@@ -427,7 +429,7 @@ router.get('/', auth, async (req, res) => {
               ON (hba.branch_id = b.id OR hba.all_branches = TRUE)
              AND hba.org_id = b.org_id
        LEFT JOIN users u ON u.id = hba.user_id AND u.organization_id = b.org_id
-       WHERE b.org_id = $1
+       WHERE b.org_id = $1 AND ${live}
        GROUP BY b.id
        ORDER BY b.name`,
       [req.user.organization_id]
@@ -448,7 +450,7 @@ router.get('/', auth, async (req, res) => {
     // Pre-migration fallback: hr_branch_access table may not exist yet
     if (err.message && err.message.includes('does not exist')) {
       const fallback = await pool.query(
-        `SELECT * FROM branches WHERE org_id = $1 ORDER BY name`,
+        `SELECT * FROM branches WHERE org_id = $1 AND ${await liveBranchSql('branches')} ORDER BY name`,
         [req.user.organization_id]
       );
       return res.json(fallback.rows);
@@ -478,10 +480,11 @@ router.post('/', auth, hasPermission('branches', 'create'), async (req, res) => 
 
     const orgId = req.user.organization_id;
 
-    // Explicit duplicate check (name is case-insensitive; code checked when provided)
+    // Explicit duplicate check (name is case-insensitive; code checked when provided). A deleted branch does not hold its name.
+    const liveB = await liveBranchSql('branches');
     const dupCheck = await pool.query(
       `SELECT id FROM branches
-        WHERE org_id = $1 AND LOWER(name) = LOWER($2)`,
+        WHERE org_id = $1 AND LOWER(name) = LOWER($2) AND ${liveB}`,
       [orgId, name.trim()]
     );
     if (dupCheck.rows.length) {
@@ -489,7 +492,7 @@ router.post('/', auth, hasPermission('branches', 'create'), async (req, res) => 
     }
     if (code && code.trim()) {
       const codeCheck = await pool.query(
-        `SELECT id FROM branches WHERE org_id = $1 AND LOWER(code) = LOWER($2)`,
+        `SELECT id FROM branches WHERE org_id = $1 AND LOWER(code) = LOWER($2) AND ${liveB}`,
         [orgId, code.trim()]
       );
       if (codeCheck.rows.length) {
@@ -525,7 +528,7 @@ router.put('/:id', auth, hasPermission('branches', 'manage'), async (req, res) =
         return res.status(403).json({ error: 'Only a Root Admin can activate or deactivate a branch.' });
       }
       const result = await pool.query(
-        `UPDATE branches SET is_active=$1 WHERE id=$2 AND org_id=$3 RETURNING *`,
+        `UPDATE branches SET is_active=$1 WHERE id=$2 AND org_id=$3 AND ${await liveBranchSql('branches')} RETURNING *`,
         [is_active !== false, req.params.id, req.user.organization_id]
       );
       if (!result.rows.length) return res.status(404).json({ error: 'Branch not found' });
@@ -540,12 +543,12 @@ router.put('/:id', auth, hasPermission('branches', 'manage'), async (req, res) =
     // Same duplicate rules as create, excluding this branch itself (BUG_253: the edit path let a name/code be duplicated).
     {
       const dupName = await pool.query(
-        `SELECT 1 FROM branches WHERE org_id = $1 AND LOWER(name) = LOWER($2) AND id <> $3`,
+        `SELECT 1 FROM branches WHERE org_id = $1 AND LOWER(name) = LOWER($2) AND id <> $3 AND ${await liveBranchSql('branches')}`,
         [req.user.organization_id, name.trim(), req.params.id]);
       if (dupName.rows.length) return res.status(400).json({ error: `A branch named "${name.trim()}" already exists in your organization.` });
       if (code && String(code).trim()) {
         const dupCode = await pool.query(
-          `SELECT 1 FROM branches WHERE org_id = $1 AND LOWER(code) = LOWER($2) AND id <> $3`,
+          `SELECT 1 FROM branches WHERE org_id = $1 AND LOWER(code) = LOWER($2) AND id <> $3 AND ${await liveBranchSql('branches')}`,
           [req.user.organization_id, String(code).trim(), req.params.id]);
         if (dupCode.rows.length) return res.status(400).json({ error: `Branch code "${String(code).trim()}" is already in use. Please choose a different code.` });
       }
@@ -554,7 +557,7 @@ router.put('/:id', auth, hasPermission('branches', 'manage'), async (req, res) =
     // Scope by org first (cross-org edits are impossible), then check whether
     // this request actually changes the active state.
     const current = await pool.query(
-      `SELECT is_active FROM branches WHERE id=$1 AND org_id=$2`,
+      `SELECT is_active FROM branches WHERE id=$1 AND org_id=$2 AND ${await liveBranchSql('branches')}`,
       [req.params.id, req.user.organization_id]
     );
     if (!current.rows.length) return res.status(404).json({ error: 'Branch not found' });
@@ -566,7 +569,7 @@ router.put('/:id', auth, hasPermission('branches', 'manage'), async (req, res) =
 
     const result = await pool.query(
       `UPDATE branches SET name=$1, code=$2, location=$3, address=$4, is_active=$5
-       WHERE id=$6 AND org_id=$7 RETURNING *`,
+       WHERE id=$6 AND org_id=$7 AND ${await liveBranchSql('branches')} RETURNING *`,
       [name.trim(), code || null, location || null, address || null,
        nextActive, req.params.id, req.user.organization_id]
     );
@@ -575,26 +578,29 @@ router.put('/:id', auth, hasPermission('branches', 'manage'), async (req, res) =
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// DELETE /api/branches/:id
-router.delete('/:id', auth, async (req, res) => {
-  if (!isAdmin(req.user.role)) return res.status(403).json({ error: 'Admin access required.' });
+// GET /api/branches/:id/delete-preview — what deleting this branch would touch (Root Admin only). Read-only; feeds the
+// confirmation dialog. Includes blockers (e.g. an unfinished payroll run) and the branches employees can be moved to.
+router.get('/:id/delete-preview', auth, rootAdminOnly, async (req, res) => {
   try {
-    const empCheck = await pool.query(
-      `SELECT id FROM users WHERE branch_id=$1 AND organization_id=$2 LIMIT 1`,
-      [req.params.id, req.user.organization_id]
-    );
-    if (empCheck.rows.length) {
-      return res.status(400).json({ error: 'Cannot delete: employees are assigned to this branch' });
-    }
-    const result = await pool.query(
-      `DELETE FROM branches WHERE id=$1 AND org_id=$2 RETURNING id`,
-      [req.params.id, req.user.organization_id]
-    );
-    if (!result.rows.length) return res.status(404).json({ error: 'Branch not found' });
-    res.json({ ok: true });
+    res.json(await previewBranchDeletion({ oId: req.user.organization_id, branchId: req.params.id }));
   } catch (err) {
-    // A branch that still owns records (payroll runs, etc.) hits a foreign key; say so instead of a raw 500.
-    if (err.code === '23503') return res.status(409).json({ error: 'This branch still has linked records (for example payroll runs) and cannot be deleted. Deactivate it instead.' });
+    if (err instanceof BranchDeleteError) return res.status(err.status).json({ error: err.message });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/branches/:id — Root Admin only. Body: { mode: 'move', target_branch_id } | { mode: 'soft_delete' }.
+// The branch is never physically deleted (history, payroll and audit records keep it): see services/branchDeletion.js.
+router.delete('/:id', auth, rootAdminOnly, async (req, res) => {
+  try {
+    const { mode, target_branch_id } = req.body || {};
+    const out = await deleteBranch({
+      oId: req.user.organization_id, branchId: req.params.id, mode, targetBranchId: target_branch_id,
+      actor: { id: req.user.id, name: req.user.name },
+    });
+    res.json(out);
+  } catch (err) {
+    if (err instanceof BranchDeleteError) return res.status(err.status).json({ error: err.message, ...(err.blockers ? { blockers: err.blockers } : {}) });
     res.status(500).json({ error: err.message });
   }
 });

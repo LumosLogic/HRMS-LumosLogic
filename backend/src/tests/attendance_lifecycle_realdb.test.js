@@ -176,20 +176,63 @@ const att = (uid, d) => one('select * from attendance where user_id=$1 and date=
     assert.strictEqual(await att(ID.emp, d1), undefined, 'old date unmarked');
   });
 
-  console.log('\nREGULARIZATION: no orphan leave rows');
-  await t('approving a correction inside an approved multi-day leave cancels it AND removes its other days\' on_leave rows', async () => {
-    const mon = '2026-06-01', tue = '2026-06-02', wed = '2026-06-03';
-    await S(`DELETE FROM attendance WHERE user_id=$1`, [ID.emp]);
-    await S(`INSERT INTO leaves (user_id, organization_id, start_date, end_date, leave_type, leave_time, status, reason) VALUES ($1,$2,$3,$4,'casual','full','approved','x')`, [ID.emp, ID.org, mon, wed]);
-    for (const d of [mon, tue, wed]) await S(`INSERT INTO attendance (user_id, date, status, organization_id) VALUES ($1,$2,'on_leave',$3)`, [ID.emp, d, ID.org]);
-    const reg = await call('POST', '/api/regularization', { as: ID.emp, body: { date: tue, reason: 'I actually worked', requested_check_in: '09:00', requested_check_out: '18:00' } });
+  console.log('\nREGULARIZATION: correcting a day inside approved leave');
+  const leaveRows = () => S(`SELECT id, start_date, end_date, status, leave_time FROM leaves WHERE user_id=$1 ORDER BY start_date, id`, [ID.emp]);
+  const correct = async (date, body = { requested_check_in: '09:00', requested_check_out: '18:00' }) => {
+    const reg = await call('POST', '/api/regularization', { as: ID.emp, body: { date, reason: 'I actually worked', ...body } });
     assert.strictEqual(reg.status, 200, JSON.stringify(reg.body));
     const rv = await call('PUT', `/api/regularization/${reg.body.id}/review`, { as: ID.hr, body: { status: 'approved', reviewer_notes: 'ok' } });
     assert.strictEqual(rv.status, 200, JSON.stringify(rv.body));
-    assert.strictEqual((await one(`select status from leaves where user_id=$1`, [ID.emp])).status, 'cancelled');
-    assert.strictEqual((await att(ID.emp, tue)).status, 'present');
-    assert.strictEqual(await att(ID.emp, mon), undefined, 'orphan on_leave row (Mon) removed');
-    assert.strictEqual(await att(ID.emp, wed), undefined, 'orphan on_leave row (Wed) removed');
+    return reg.body.id;
+  };
+  await t('a correction needs at least one of check-in / check-out', async () => {
+    const r = await call('POST', '/api/regularization', { as: ID.emp, body: { date: '2026-06-10', reason: 'x' } });
+    assert.strictEqual(r.status, 400, JSON.stringify(r.body));
+    const one1 = await call('POST', '/api/regularization', { as: ID.emp, body: { date: '2026-06-10', reason: 'forgot to punch out', requested_check_in: '09:00' } });
+    assert.strictEqual(one1.status, 200, 'a single time is enough');
+    await S(`DELETE FROM attendance_regularization WHERE user_id=$1`, [ID.emp]);
+  });
+  await t('multi-day leave: only the corrected day leaves the leave (split), other days keep their cover, 1 day restored', async () => {
+    const mon = '2026-06-01', tue = '2026-06-02', wed = '2026-06-03', thu = '2026-06-04', fri = '2026-06-05';
+    await S(`DELETE FROM attendance WHERE user_id=$1`, [ID.emp]); await S(`DELETE FROM leaves WHERE user_id=$1`, [ID.emp]);
+    await S(`DELETE FROM leave_approval_log`);
+    await S(`INSERT INTO leaves (user_id, organization_id, start_date, end_date, leave_type, leave_time, status, reason) VALUES ($1,$2,$3,$4,'casual','full','approved','x')`, [ID.emp, ID.org, mon, fri]);
+    for (const d of [mon, tue, wed, thu, fri]) await S(`INSERT INTO attendance (user_id, date, status, organization_id) VALUES ($1,$2,'on_leave',$3)`, [ID.emp, d, ID.org]);
+    const regId = await correct(wed);
+    const ls = await leaveRows();
+    assert.deepStrictEqual(ls.map(l => [l.start_date, l.end_date, l.status]), [[mon, tue, 'approved'], [thu, fri, 'approved']], JSON.stringify(ls));
+    assert.strictEqual((await att(ID.emp, wed)).status, 'present');
+    for (const d of [mon, tue, thu, fri]) assert.strictEqual((await att(ID.emp, d)).status, 'on_leave', `${d} keeps its leave cover`);
+    const logs = await S(`SELECT leave_id, action, notes FROM leave_approval_log ORDER BY id`);
+    assert.ok(logs.length >= 2 && logs.every(l => l.action === 'leave_overridden_by_attendance'), JSON.stringify(logs));
+    assert.ok(logs[0].notes.includes(`#${regId}`) && logs[0].notes.includes('1 day restored'), logs[0].notes);
+    // repeat edits must not move the balance again: nothing approved covers Wednesday any more
+    const before = JSON.stringify(await leaveRows());
+    await S(`UPDATE attendance_regularization SET status='pending' WHERE id=$1`, [regId]);
+    const again = await call('PUT', `/api/regularization/${regId}/review`, { as: ID.hr, body: { status: 'approved' } });
+    assert.strictEqual(again.status, 200, JSON.stringify(again.body));
+    assert.strictEqual(JSON.stringify(await leaveRows()), before, 'second approval leaves the leave rows unchanged');
+  });
+  await t('leave starting on the corrected day is trimmed, not split', async () => {
+    await S(`DELETE FROM attendance WHERE user_id=$1`, [ID.emp]); await S(`DELETE FROM leaves WHERE user_id=$1`, [ID.emp]);
+    await S(`INSERT INTO leaves (user_id, organization_id, start_date, end_date, leave_type, leave_time, status, reason) VALUES ($1,$2,'2026-06-08','2026-06-10','casual','full','approved','x')`, [ID.emp, ID.org]);
+    await correct('2026-06-08');
+    const ls = await leaveRows();
+    assert.deepStrictEqual(ls.map(l => [l.start_date, l.end_date, l.status]), [['2026-06-09', '2026-06-10', 'approved']], JSON.stringify(ls));
+  });
+  await t('single-day and half-day leave are cancelled', async () => {
+    await S(`DELETE FROM attendance WHERE user_id=$1`, [ID.emp]); await S(`DELETE FROM leaves WHERE user_id=$1`, [ID.emp]);
+    await S(`INSERT INTO leaves (user_id, organization_id, start_date, end_date, leave_type, leave_time, half_type, status, reason) VALUES ($1,$2,'2026-06-15','2026-06-15','casual','half','first_half','approved','x')`, [ID.emp, ID.org]);
+    await S(`INSERT INTO leaves (user_id, organization_id, start_date, end_date, leave_type, leave_time, status, reason) VALUES ($1,$2,'2026-06-16','2026-06-16','casual','full','approved','x')`, [ID.emp, ID.org]);
+    await correct('2026-06-15'); await correct('2026-06-16');
+    assert.deepStrictEqual((await leaveRows()).map(l => l.status), ['cancelled', 'cancelled']);
+  });
+  await t('a correction on a weekly off leaves an approved leave untouched', async () => {
+    await S(`DELETE FROM attendance WHERE user_id=$1`, [ID.emp]); await S(`DELETE FROM leaves WHERE user_id=$1`, [ID.emp]);
+    await S(`INSERT INTO leaves (user_id, organization_id, start_date, end_date, leave_type, leave_time, status, reason) VALUES ($1,$2,'2026-06-19','2026-06-23','casual','full','approved','x')`, [ID.emp, ID.org]); // Fri..Tue, Sat 20th is off
+    await correct('2026-06-20');
+    const ls = await leaveRows();
+    assert.deepStrictEqual(ls.map(l => [l.start_date, l.end_date, l.status]), [['2026-06-19', '2026-06-23', 'approved']], JSON.stringify(ls));
   });
 
   server.close();

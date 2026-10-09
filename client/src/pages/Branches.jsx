@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Plus, Pencil, Trash2, Building2, MapPin, ToggleLeft, ToggleRight,
@@ -11,7 +11,6 @@ import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { useBranchesList } from '@/hooks/useReferenceData';
 import { STALE } from '@/lib/queryTiers';
 import { Modal } from '@/components/ui/Modal';
-import { ConfirmModal } from '@/components/ui/ConfirmModal';
 
 // ─── Branch Create/Edit Modal ─────────────────────────────────────────────────
 
@@ -245,6 +244,115 @@ function HRAccessModal({ open, onClose, branch }) {
   );
 }
 
+// ─── Delete Branch (Root Admin): move the data to another branch, or soft-delete ───────────────────────────────────
+// Nothing is physically deleted: the branch is hidden and its history (payroll, attendance, leave, audit) is kept.
+function DeleteBranchModal({ branch, onClose, onDone }) {
+  const toast = useToast();
+  const [preview, setPreview] = useState(null);
+  const [loadErr, setLoadErr] = useState('');
+  const [mode, setMode]       = useState('move');
+  const [target, setTarget]   = useState('');
+  const [ack, setAck]         = useState(false);
+  const [busy, setBusy]       = useState(false);
+
+  useEffect(() => {
+    let live = true;
+    apiGet(`/branches/${branch.id}/delete-preview`)
+      .then(p => { if (!live) return; setPreview(p); if (!p.targets.length) setMode('soft_delete'); })
+      .catch(e => { if (live) setLoadErr(e.message || 'Could not load the delete summary.'); });
+    return () => { live = false; };
+  }, [branch.id]);
+
+  const s = preview?.summary;
+  const blockers = preview?.blockers || [];
+  const warnings = preview?.warnings?.[mode] || [];
+  const canSubmit = !!preview && !busy && ack && blockers.length === 0 && (mode === 'soft_delete' || !!target);
+
+  async function submit() {
+    setBusy(true);
+    try {
+      const r = await apiDelete(`/branches/${branch.id}`, { mode, ...(mode === 'move' ? { target_branch_id: target } : {}) });
+      toast(mode === 'move'
+        ? `Branch "${branch.name}" deleted. ${r.moved?.employees ?? 0} employee(s) moved to "${r.target?.name}".`
+        : `Branch "${branch.name}" deleted. ${r.deactivated_employees ?? 0} employee account(s) deactivated.`, 'warning');
+      onDone();
+    } catch (e) { toast(e.message, 'error'); setBusy(false); }
+  }
+
+  const Row = ({ label, value }) => value > 0 ? (
+    <div className="flex items-center justify-between text-xs py-1 border-b border-[#f0f3ff] last:border-0">
+      <span className="text-[#464555]">{label}</span><span className="font-bold text-[#151c27]">{value}</span>
+    </div>
+  ) : null;
+
+  return (
+    <Modal open onClose={busy ? () => {} : onClose} title={`Delete branch "${branch.name}"`} size="lg"
+      footer={
+        <div className="flex justify-end gap-3">
+          <button className="btn btn-outline" onClick={onClose} disabled={busy}>Cancel</button>
+          <button className="btn btn-danger" onClick={submit} disabled={!canSubmit}>
+            {busy ? 'Deleting…' : mode === 'move' ? 'Move data & delete branch' : 'Soft-delete branch'}
+          </button>
+        </div>
+      }>
+      {loadErr && <p className="text-sm text-rose-600">{loadErr}</p>}
+      {!loadErr && !preview && <div className="loading"><div className="spinner" />Checking what this branch contains…</div>}
+      {preview && (
+        <div className="space-y-4">
+          <div className="rounded-xl border border-[#e7eefe] bg-[#f9f9ff] px-4 py-3">
+            <p className="text-[0.65rem] font-black uppercase tracking-wide text-[#777587] mb-1">This branch contains</p>
+            <Row label="Active employees" value={s.employees_active} />
+            <Row label="Inactive / former employees" value={s.employees_total - s.employees_active} />
+            <Row label="HR admins with access" value={s.hr_admins_with_access} />
+            <Row label="Assets" value={s.assets} /><Row label="Shifts" value={s.shifts} /><Row label="Biometric devices" value={s.biometric_devices} />
+            <Row label="Holidays" value={s.holidays} /><Row label="Leave policies" value={s.leave_policies} />
+            <Row label="Payroll runs" value={s.payroll_runs} />
+            {s.employees_total === 0 && s.assets === 0 && s.payroll_runs === 0 && <p className="text-xs text-[#777587]">No employees or linked data.</p>}
+          </div>
+
+          <div className="space-y-2">
+            <label className={`flex gap-3 rounded-xl border p-3 ${mode === 'move' ? 'border-[#3525cd] bg-[#f0f3ff]' : 'border-[#c7c4d8]'} ${!preview.targets.length ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}>
+              <input type="radio" name="del-mode" checked={mode === 'move'} disabled={!preview.targets.length} onChange={() => setMode('move')} className="mt-1" />
+              <div className="flex-1">
+                <p className="text-sm font-bold text-[#151c27]">Move all data to another branch</p>
+                <p className="text-xs text-[#777587] mt-0.5">
+                  Employees (every status), their assets, documents, shifts and biometric devices move to the branch you choose; HR admins of this branch are given access to it.
+                  Attendance, leave, payroll and payslip history stay exactly as recorded. Holidays, leave policies and payroll runs stay with the closed branch, so the destination branch is not affected.
+                </p>
+                {mode === 'move' && (
+                  <select className="form-control mt-2" value={target} onChange={e => setTarget(e.target.value)}>
+                    <option value="">— Select destination branch —</option>
+                    {preview.targets.map(t => <option key={t.id} value={t.id}>{t.name}{t.code ? ` (${t.code})` : ''}</option>)}
+                  </select>
+                )}
+                {!preview.targets.length && <p className="text-xs text-amber-600 mt-1">There is no other active branch to move to.</p>}
+              </div>
+            </label>
+            <label className={`flex gap-3 rounded-xl border p-3 cursor-pointer ${mode === 'soft_delete' ? 'border-rose-400 bg-rose-50/50' : 'border-[#c7c4d8]'}`}>
+              <input type="radio" name="del-mode" checked={mode === 'soft_delete'} onChange={() => setMode('soft_delete')} className="mt-1" />
+              <div className="flex-1">
+                <p className="text-sm font-bold text-[#151c27]">Soft-delete the entire branch</p>
+                <p className="text-xs text-[#777587] mt-0.5">
+                  The branch disappears from every list and nothing new can be done in it. Its {s.employees_active} remaining employee account(s) are deactivated and signed out.
+                  All historical records (attendance, leave, payroll, payslips, assets, audit) are kept for reports.
+                </p>
+              </div>
+            </label>
+          </div>
+
+          {blockers.map((b, i) => <p key={i} className="text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">{b}</p>)}
+          {warnings.map((w, i) => <p key={i} className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">{w}</p>)}
+
+          <label className="flex items-start gap-2 text-xs text-[#464555] cursor-pointer">
+            <input type="checkbox" checked={ack} onChange={e => setAck(e.target.checked)} className="mt-0.5" />
+            <span>I have reviewed the summary above and want to {mode === 'move' ? 'move this branch’s data and delete the branch' : 'soft-delete this branch and deactivate its employees'}.</span>
+          </label>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 // ─── Main Branches Page ───────────────────────────────────────────────────────
 
 export default function Branches() {
@@ -261,15 +369,13 @@ export default function Branches() {
   const { data: _data, isLoading } = useBranchesList({ staleTime: STALE.frequent });
   const branches = Array.isArray(_data) ? _data : [];
 
-  const delMut = useMutation({
-    mutationFn: id => apiDelete(`/branches/${id}`),
-    onSuccess: () => {
-      toast('Branch deleted', 'warning');
-      qc.invalidateQueries({ queryKey: ['branches'] });
-      reloadBranches();
-    },
-    onError: e => toast(e.message, 'error'),
-  });
+  // Employees / assets / etc. of a deleted branch move or are deactivated: refresh everything branch-dependent.
+  function afterDelete() {
+    setConfirmDel(null);
+    qc.invalidateQueries({ queryKey: ['branches'] });
+    qc.invalidateQueries({ queryKey: ['employees'] });
+    reloadBranches();
+  }
 
   const toggleMut = useMutation({
     mutationFn: ({ id, is_active }) => apiPut(`/branches/${id}`, { is_active }),
@@ -432,10 +538,13 @@ export default function Branches() {
                             className="p-1.5 rounded-lg text-[#464555] hover:bg-[#f0f3ff] hover:text-[#3525cd] transition-colors" title="Edit">
                             <Pencil size={13} />
                           </button>
-                          <button onClick={() => setConfirmDel({ id: b.id, name: b.name })}
-                            className="p-1.5 rounded-lg text-rose-400 hover:bg-rose-50 hover:text-rose-600 transition-colors" title="Delete">
-                            <Trash2 size={13} />
-                          </button>
+                          {/* Delete (move data / soft delete) — Root Admin only, enforced server-side too */}
+                          {isRootAdmin && (
+                            <button onClick={() => setConfirmDel({ id: b.id, name: b.name })}
+                              className="p-1.5 rounded-lg text-rose-400 hover:bg-rose-50 hover:text-rose-600 transition-colors" title="Delete">
+                              <Trash2 size={13} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     )}
@@ -453,14 +562,7 @@ export default function Branches() {
         <HRAccessModal open onClose={() => setAccessBranch(null)} branch={accessBranch} />
       )}
 
-      <ConfirmModal
-        open={!!confirmDel}
-        title="Delete Branch"
-        message={`Permanently delete branch "${confirmDel?.name}"? Employees assigned to this branch will be unlinked.`}
-        confirmLabel="Delete"
-        onConfirm={() => { delMut.mutate(confirmDel.id); setConfirmDel(null); }}
-        onCancel={() => setConfirmDel(null)}
-      />
+      {confirmDel && <DeleteBranchModal branch={confirmDel} onClose={() => setConfirmDel(null)} onDone={afterDelete} />}
     </div>
   );
 }

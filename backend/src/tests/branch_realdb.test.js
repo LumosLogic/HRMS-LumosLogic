@@ -1118,9 +1118,16 @@ async function devicePunch(sn, pin, when) {
     const empty = await call('GET', '/api/leaves?view=list&limit=25&status=rejected&type=sick&userId=' + ID.empB + '&from=2030-01-01', { as: ID.root });
     assert.deepStrictEqual(empty.body, []); assert.strictEqual(tot(empty), 0); assert.strictEqual(empty.headers.get('x-total-pages'), '1'); assert.strictEqual(empty.headers.get('x-has-more'), '0');
     const c = (await call('GET', '/api/leaves/counts?from=2030-01-01', { as: ID.root })).body;
-    assert.deepStrictEqual(c.summary, { total: 0, pending: 0, approved: 0, rejected: 0 }); assert.strictEqual(c.filtered_total, 0);
+    assert.deepStrictEqual(c.summary, { total: 0, pending: 0, approved: 0, rejected: 0, cancelled: 0 }); assert.strictEqual(c.filtered_total, 0);
     const single = await call('GET', `/api/leaves?view=list&limit=100&userId=${ID.empB}`, { as: ID.root });
     assert.ok(single.body.length <= 100 && single.headers.get('x-total-pages') === '1' && single.headers.get('x-has-more') === '0');
+  });
+  await t('summary cards add up: total = pending + approved + rejected + cancelled/withdrawn', async () => {
+    await S(`INSERT INTO leaves (user_id, organization_id, start_date, end_date, leave_type, leave_time, status, reason) VALUES ($1,$2,'2031-03-03','2031-03-03','casual','full','withdrawn','x'),($1,$2,'2031-03-04','2031-03-04','casual','full','cancelled','x')`, [ID.empB, ID.orgA]);
+    const c = (await call('GET', '/api/leaves/counts?from=2031-03-01&to=2031-03-31', { as: ID.root })).body.summary;
+    assert.strictEqual(c.cancelled, 2, JSON.stringify(c));
+    assert.strictEqual(c.total, c.pending + c.approved + c.rejected + c.cancelled, JSON.stringify(c));
+    await S(`DELETE FROM leaves WHERE start_date >= '2031-03-01' AND start_date <= '2031-03-31'`);
   });
   await t('sort=start_asc returns the soonest start first; default stays newest-created first', async () => {
     const rows = (await call('GET', '/api/leaves?view=list&limit=40&sort=start_asc&status=approved', { as: ID.root })).body.map(r => String(r.start_date).slice(0, 10));

@@ -29,11 +29,8 @@ router.get('/', auth, withBranchContext, async (req, res) => {
     // adapter's not_in wraps with (IS NULL OR NOT IN) so NULL-status = active employees included
     const branchState = getFilterState(req.branchContext);
 
-    // Bug-001: allEmpCount includes ALL statuses for the Total Employees KPI.
-    // empQuery (below) keeps the active-only filter for attendance/activity use.
-    let allEmpCountQuery = db.from('users')
-      .select('id', { count: 'exact', head: true }).eq('role', 'employee').eq('organization_id', orgId(req));
-
+    // "Total Employees" = active employees (role employee; inactive / resigned / terminated excluded) — the same definition
+    // as Departments and the Root dashboard, so the three screens agree.
     let empQuery = db.from('users')
       .select('id, name, avatar_color, department, created_at')
       .eq('role', 'employee').eq('organization_id', orgId(req))
@@ -52,16 +49,14 @@ router.get('/', auth, withBranchContext, async (req, res) => {
       }
       if (branchState.type === 'specific') {
         empQuery = empQuery.eq('branch_id', branchState.branchId);
-        allEmpCountQuery = allEmpCountQuery.eq('branch_id', branchState.branchId);
       } else if (branchState.type === 'multi') {
         empQuery = empQuery.in('branch_id', branchState.branchIds);
-        allEmpCountQuery = allEmpCountQuery.in('branch_id', branchState.branchIds);
       }
       // 'all': no additional filter
     }
 
-    const [{ data: allEmployees }, { count: allEmpCount }] = await Promise.all([empQuery, allEmpCountQuery]);
-    const totalEmployees = allEmpCount || 0;   // Bug-001: counts ALL statuses
+    const { data: allEmployees } = await empQuery;
+    const totalEmployees = (allEmployees || []).length;
     const empIds         = (allEmployees || []).map(e => e.id);
 
     // ── 2. Everything below depends only on empIds / the caller, not on each other → one parallel round ────────────

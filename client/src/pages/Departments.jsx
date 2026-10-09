@@ -136,7 +136,7 @@ export default function Departments() {
           { label: 'Total Departments',    value: depts.length,                                          color: 'from-[#f0f3ff] to-[#e7eefe]',   top: '#3525cd', text: 'text-[#3525cd]',  filter: 'all',       onClick: () => setDeptStatFilter('all') },
           { label: 'With Department Head', value: depts.filter(d => !!d.head_user_id).length,              color: 'from-emerald-50 to-emerald-100', top: '#10B981', text: 'text-emerald-700', filter: 'with_head',  onClick: () => setDeptStatFilter(f => f === 'with_head' ? 'all' : 'with_head') },
           { label: 'Total Employees',      value: activeEmployees.length,                                 color: 'from-amber-50 to-amber-100',     top: '#F59E0B', text: 'text-amber-700',  filter: null,         onClick: () => navigate(employeesPath) },
-          { label: 'Assigned Members',     value: totalAssigned,                                          color: 'from-[#f0f3ff] to-[#e7eefe]',   top: '#712ae2', text: 'text-[#712ae2]', filter: 'assigned',   onClick: () => setDeptStatFilter(f => f === 'assigned' ? 'all' : 'assigned') },
+          { label: 'Active Assignments',   value: totalAssigned,                                          color: 'from-[#f0f3ff] to-[#e7eefe]',   top: '#712ae2', text: 'text-[#712ae2]', filter: 'assigned',   onClick: () => setDeptStatFilter(f => f === 'assigned' ? 'all' : 'assigned') },
         ].map(s => (
           /* ENH_DEPT_006: clickable stat cards */
           <div key={s.label} onClick={s.onClick}

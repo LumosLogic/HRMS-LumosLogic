@@ -97,7 +97,7 @@ router.get('/stats', auth, rootAdminOnly, async (req, res) => {
       { count: pendingLeaves },
       { count: presentToday },
     ] = await Promise.all([
-      db.from('users').select('*', { count: 'exact', head: true }).eq('role', 'employee').eq('organization_id', orgId(req)),
+      db.from('users').select('*', { count: 'exact', head: true }).eq('role', 'employee').eq('organization_id', orgId(req)).not('employee_status', 'in', ['inactive', 'resigned', 'terminated']),
       db.from('users').select('*', { count: 'exact', head: true }).eq('role', 'admin').eq('organization_id', orgId(req)),
       db.from('leaves').select('*', { count: 'exact', head: true }).eq('status', 'pending').eq('organization_id', orgId(req)),
       db.from('attendance').select('*', { count: 'exact', head: true }).eq('date', today).eq('organization_id', orgId(req)).in('status', ['present', 'half_day', 'wfh']),
@@ -279,9 +279,8 @@ router.get('/dashboard', auth, rootAdminOnly, withBranchContext, async (req, res
     const activeEmployees = allEmployees.filter(e =>
       e.role !== 'admin' && !['resigned', 'terminated', 'inactive'].includes(e.employee_status)
     );
-    // Bug-001 (18-09-2026): the "Total Employees" KPI should include ALL employees (active + inactive);
-    // activeEmployees is kept for attendance calculations (present %, absent count, dept health).
-    const allEmployeesCount = allEmployees.filter(e => e.role !== 'admin').length;
+    // "Total Employees" = active employees only (inactive / resigned / terminated excluded) — one definition shared with the
+    // HR dashboard, Departments and the Organization Overview.
     const totalEmployees = activeEmployees.length;
 
     // BUG_116: pendingLeaves counts leaves+WFH (they share the leaves table).
@@ -450,9 +449,7 @@ router.get('/dashboard', auth, rootAdminOnly, withBranchContext, async (req, res
       .map(({ id, name, department, position, avatar_color, created_at }) => ({ id, name, department, position, avatar_color, created_at }));
 
     res.json({
-      // Bug-001: totalEmployees shows ALL employees (including inactive) for the KPI card;
-      // totalActiveEmployees is used by the frontend for attendance % calculations.
-      totalEmployees: allEmployeesCount,
+      totalEmployees,
       totalActiveEmployees: totalEmployees,
       totalHR, pendingLeaves, presentToday,
       // BUG_116: expose pendingRegCount and pendingExpCount so frontend KPI adds all pending types
@@ -487,7 +484,7 @@ router.get('/yearly-leaves', auth, rootAdminOnly, withBranchContext, async (req,
     // Scope employees to selected branch
     let empQuery = db.from('users')
       .select('id, name, department, position, avatar_color')
-      .eq('role', 'employee').eq('organization_id', oid).order('name');
+      .eq('role', 'employee').eq('organization_id', oid).not('employee_status', 'in', ['inactive', 'resigned', 'terminated']).order('name');
     if (branchState.type === 'specific') empQuery = empQuery.eq('branch_id', branchState.branchId);
     else if (branchState.type === 'multi') empQuery = empQuery.in('branch_id', branchState.branchIds);
 

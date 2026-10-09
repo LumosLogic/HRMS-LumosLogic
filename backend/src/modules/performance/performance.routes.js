@@ -18,6 +18,22 @@ const perfUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize:
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
 
+// goal_attachments was created by three different migrations: two name the MIME column `mime_type`, one `file_type`
+// (CREATE TABLE IF NOT EXISTS means whichever ran first wins). The upload used to insert `file_type` unconditionally and
+// failed with `column "file_type" of relation "goal_attachments" does not exist` on databases built the other way.
+// Use whichever column this database has (add_goal_attachments_file_type_2026_10_09.sql makes `file_type` exist everywhere).
+let _attTypeCol;
+async function attachmentTypeColumn() {
+  if (_attTypeCol !== undefined) return _attTypeCol;
+  const { pool } = require('../../config/db');
+  const { rows } = await pool.query(
+    `SELECT column_name FROM information_schema.columns
+      WHERE table_schema = current_schema() AND table_name = 'goal_attachments' AND column_name IN ('file_type', 'mime_type')`);
+  const names = rows.map(r => r.column_name);
+  _attTypeCol = names.includes('file_type') ? 'file_type' : names.includes('mime_type') ? 'mime_type' : null;
+  return _attTypeCol;
+}
+
 // Goal-derived records (attachments, comments) follow the goal owner's branch.
 // Returns true when the caller may act on a goal owned by `goalUserId`.
 async function canAccessGoalOwner(req, goalUserId) {
@@ -339,12 +355,13 @@ router.post('/goals/:id/attachments', auth, withBranchContext, perfUpload.single
       ).end(req.file.buffer);
     });
 
+    const typeCol = await attachmentTypeColumn();
     const { data, error } = await db.from('goal_attachments').insert({
+      ...(typeCol ? { [typeCol]: req.file.mimetype } : {}),
       goal_id:         req.params.id,
       organization_id: oId,
       file_url:        result.secure_url,
       file_name:       req.file.originalname,
-      file_type:       req.file.mimetype,
       file_size:       req.file.size,
       uploaded_by:     req.user.id,
     }).select().single();

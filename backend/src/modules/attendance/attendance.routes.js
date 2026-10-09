@@ -472,7 +472,8 @@ router.get('/late-early', auth, withBranchContext, async (req, res) => {
       } else {
         // Org-wide (root admin): get all org employees
         const { data: empRows } = await db.from('users').select('id')
-          .eq('role', 'employee').eq('organization_id', oid);
+          .eq('role', 'employee').eq('organization_id', oid)
+          .not('employee_status', 'in', ['inactive', 'resigned', 'terminated']);
         empIds = (empRows || []).map(e => e.id);
       }
     }

@@ -35,6 +35,17 @@ module.exports = {
              raw: { mock: true, package: packageIdentifier || null } };
   },
 
+  async addCandidate({ employee }) {
+    if (!employee?.email) throw new BgvProviderError('INVALID_INPUT', 'employee email required');
+    return { candidateId: `mock_${crypto.randomUUID()}`, providerStatus: '3', raw: { mock: true } };
+  },
+
+  async submitBgv({ candidateId, documents }) {
+    return { candidateId, providerStatus: null, raw: { mock: true, documents: documents.filter(d => d.sv).length } };
+  },
+
+  async refreshStatus() { return { providerStatus: 'in_progress', raw: { mock: true } }; },
+
   verifyWebhook(req) {
     const secret = process.env.SPRINGVERIFY_WEBHOOK_SECRET;
     if (!secret) throw new BgvProviderError('WEBHOOK_SECRET_MISSING', 'webhook secret not configured');

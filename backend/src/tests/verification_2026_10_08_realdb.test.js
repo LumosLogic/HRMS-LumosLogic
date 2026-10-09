@@ -375,14 +375,17 @@ async function call(method, url, { as, token, body, headers: extra } = {}) {
 
   // ═════ DATABASE-SIDE CASES THAT WERE STILL PENDING ═══════════════════════════════════════════════════════
   console.log('\nBRANCH DELETE / RECREATE (Tisha Branch BUG-06, BUG-07, BUG-08, BUG-10) — foreign-key mapping on a real RESTRICT FK');
-  await t('a branch used by a payroll run cannot be deleted (409, not a raw 500); an unused one can, and its name can be reused', async () => {
+  await t('a branch with payroll history is soft-deleted (hidden, history kept, no raw 500); a branch without history too, and its name can be reused', async () => {
+    // add_branch_soft_delete_2026_10_09.sql: delete = hide + keep history (the old physical delete hit the payroll_runs RESTRICT FK)
+    await pool.query(fs.readFileSync(path.join(__dirname, '../../migrations/add_branch_soft_delete_2026_10_09.sql'), 'utf8'));
     const used = Number((await one(`INSERT INTO branches (org_id, name, code) VALUES ($1,'Used Branch','USD') RETURNING id`, [ID.org])).id);
     const free = Number((await one(`INSERT INTO branches (org_id, name, code) VALUES ($1,'Free Branch','FRE') RETURNING id`, [ID.org])).id);
     await S(`INSERT INTO payroll_runs (organization_id, month, year, status, branch_id) VALUES ($1,9,2026,'completed',$2)`, [ID.org, used]);
-    const d1 = await call('DELETE', `/api/branches/${used}`, { as: ID.root });
-    assert.strictEqual(d1.status, 409, JSON.stringify(d1.body)); assert.match(d1.body.error, /linked records|deactivate/i);
-    assert.strictEqual(Number((await one('select count(*)::int c from branches where id=$1', [used])).c), 1, 'still there');
-    const d2 = await call('DELETE', `/api/branches/${free}`, { as: ID.root });
+    const d1 = await call('DELETE', `/api/branches/${used}`, { as: ID.root, body: { mode: 'soft_delete' } });
+    assert.strictEqual(d1.status, 200, JSON.stringify(d1.body));
+    assert.strictEqual(Number((await one('select count(*)::int c from branches where id=$1 and deleted_at is not null', [used])).c), 1, 'row kept, marked deleted');
+    assert.strictEqual(Number((await one('select count(*)::int c from payroll_runs where branch_id=$1', [used])).c), 1, 'payroll history kept on the hidden branch');
+    const d2 = await call('DELETE', `/api/branches/${free}`, { as: ID.root, body: { mode: 'soft_delete' } });
     assert.strictEqual(d2.status, 200, JSON.stringify(d2.body));
     const re = await call('POST', '/api/branches', { as: ID.root, body: { name: 'Free Branch', code: 'FRE' } });
     assert.ok([200, 201].includes(re.status), 'same name usable again after deletion: ' + JSON.stringify(re.body));

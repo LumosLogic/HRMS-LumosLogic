@@ -10,13 +10,15 @@
  *   getReport({ candidateId, storedUrl })  -> { kind:'pdf', base64, fileName } | { kind:'url', url }
  *   createCandidate({ employee, packageIdentifier, reference })
  *        -> { candidateId, requestId?, providerStatus?, raw? }   (throws BgvProviderError)
- *   submitBgv({ employee, documents, reference })
- *        -> { candidateId, requestId?, providerStatus?, raw? }   (throws BgvProviderError)
- *        HRMS-side submission of employee data + approved HRMS documents. Optional: providers without it are
- *        reported as "not supported". springverify's implementation fails closed (contract unconfirmed).
- *   refreshStatus({ candidateId, requestId })
- *        -> { providerStatus, raw? }   (throws BgvProviderError). Optional fallback to the webhook; springverify's
- *        implementation fails closed (status contract unconfirmed, no network call).
+ *   addCandidate({ employee, reference })
+ *        -> { candidateId, providerStatus?, raw? }   HRMS-submitted flow step 1: creates the candidate WITHOUT inviting
+ *        the employee (no email/form from the provider).
+ *   submitBgv({ candidateId, employee, documents })
+ *        -> { candidateId, providerStatus?, raw? }   step 2: employee data + ALL approved HRMS documents in one call.
+ *        documents[] carry { file_url, requirement_name, sv:{section,id_type,tag}|null, detail }. On a validation
+ *        rejection the thrown BgvProviderError has .fieldErrors [{field,error}] and the candidate stays resubmittable.
+ *   refreshStatus({ candidateId })
+ *        -> { providerStatus, raw? }   fallback to the webhook (GET candidate/details).
  *   verifyWebhook(req)                    -> true | throws BgvProviderError (auth/signature check)
  *   parseWebhook(req)                      -> { eventId, candidateId, providerStatus, reportUrl?, raw }
  *   mapStatus(providerStatus)              -> 'pending'|'in_progress'|'completed'|'failed'|'cancelled'|null

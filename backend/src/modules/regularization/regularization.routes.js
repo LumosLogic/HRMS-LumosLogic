@@ -7,6 +7,7 @@ const { hasPermission } = require('../../middleware/permissions');
 const { generateEmployeePayslip } = require('../../services/payrollGenerationService');
 const { withBranchContext } = require('../../middleware/branchContext');
 const { applyBranchUserScope, resolveEmployeeIds, canAdminAccessUser, getAdminsForEmployee } = require('../../utils/branchFilter');
+const { adjustLeavesForCorrectedDay } = require('../../services/leaveCorrection');
 const { parseListParams, setPagingHeaders, compactRows, ListParamError } = require('../../utils/listParams');
 
 function isAdmin(role) { return role === 'admin' || role === 'root_admin'; }
@@ -252,6 +253,10 @@ router.post('/', auth, async (req, res) => {
       return res.status(400).json({ error: 'Invalid request type' });
     if (type === 'early_leave' && !requested_early_exit_time)
       return res.status(400).json({ error: 'requested_early_exit_time is required for early leave requests' });
+    // An attendance correction must say what the right time is: at least one of check-in / check-out
+    // (a forgot-to-punch-out day only needs one).
+    if (type === 'check_time' && !requested_check_in && !requested_check_out)
+      return res.status(400).json({ error: 'Enter at least one of Correct Check-in or Correct Check-out.' });
 
     // BUG_244: block new early-leave requests once the monthly allowance is used up
     if (type === 'early_leave') {
@@ -480,24 +485,15 @@ router.put('/:id/review', auth, hasPermission('attendance', 'approve_regularizat
           );
         }
 
-        // 4. Cancel any approved leaves overlapping this date, and remove the leave attendance rows that leave had
-        //    written for its OTHER days (they would otherwise stay as orphan on_leave/half_day/wfh rows that no
-        //    approved leave backs any more). The corrected day itself was just set to 'present' above.
-        const { rows: cancelled } = await client.query(
-          `UPDATE leaves SET status = 'cancelled'
-           WHERE user_id = $1 AND organization_id = $2 AND status = 'approved'
-             AND start_date <= $3 AND end_date >= $3
-           RETURNING start_date, end_date`,
-          [reg.user_id, oId, reg.date]
-        );
-        for (const c of cancelled) {
-          await client.query(
-            `DELETE FROM attendance
-              WHERE user_id = $1 AND organization_id = $2 AND date >= $3 AND date <= $4 AND date <> $5
-                AND status IN ('on_leave','half_day','wfh') AND check_in IS NULL AND check_out IS NULL`,
-            [reg.user_id, oId, String(c.start_date).slice(0, 10), String(c.end_date).slice(0, 10), reg.date]
-          );
-        }
+        // 4. The employee actually worked this day: take it out of any approved leave covering it. Only that day is
+        //    given back (a multi-day leave is trimmed/split, single/half-day leave is cancelled) and every change is
+        //    written to leave_approval_log. Leave balance is derived from the approved leave rows, so it follows.
+        await adjustLeavesForCorrectedDay(client, {
+          oId, userId: reg.user_id, date: reg.date, actorId: req.user.id, actorName: req.user.name,
+          note: `Attendance correction #${reg.id} approved by ${req.user.name || 'admin'}` +
+                ` (reason: ${String(reg.reason || '').slice(0, 200)}; original ${reg.actual_check_in || existingAtt?.check_in || '-'}/${reg.actual_check_out || existingAtt?.check_out || '-'}` +
+                ` -> ${final_check_in || '-'}/${final_check_out || '-'}).`,
+        });
       }
     }
 

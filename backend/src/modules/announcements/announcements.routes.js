@@ -190,7 +190,8 @@ router.post('/', auth, hasPermission('announcements', 'create'), withBranchConte
       return res.json(data);
     }
 
-    const { data: allUsers } = await db.from('users').select('id, email, name, role, branch_id').eq('organization_id', oId);
+    const { data: allUsers } = await db.from('users').select('id, email, name, role, branch_id').eq('organization_id', oId)
+      .not('employee_status', 'in', ['inactive', 'resigned', 'terminated']);
     // In-app + email recipients follow the same branch targeting rule as visibility.
     const users = await filterUsersByBranchTargets(oId, allUsers || [], targetBranchIds, req.user.id);
     if (users?.length) {

@@ -1143,7 +1143,7 @@ router.get('/', auth, withBranchContext, async (req, res) => {
 // PENDING_STATUSES is the page's own definition of pending; "rejected" is the single status 'rejected'.
 const COUNT_PENDING_STATUSES = ['pending', 'pending_dept', 'pending_root', 'pending_approval'];
 router.get('/counts', auth, withBranchContext, async (req, res) => {
-  const EMPTY = { pending: 0, wfh_pending: 0, summary: { total: 0, pending: 0, approved: 0, rejected: 0 }, filtered_total: 0 };
+  const EMPTY = { pending: 0, wfh_pending: 0, summary: { total: 0, pending: 0, approved: 0, rejected: 0, cancelled: 0 }, filtered_total: 0 };
   try {
     const oId = orgId(req);
     const lp = parseListParams({ from: req.query.from, to: req.query.to, status: req.query.status, type: req.query.type, kind: req.query.kind });
@@ -1182,13 +1182,14 @@ router.get('/counts', auth, withBranchContext, async (req, res) => {
               COUNT(*) FILTER (WHERE ${card} AND ${PENDING})::int                          AS s_pending,
               COUNT(*) FILTER (WHERE ${card} AND l.status = 'approved')::int               AS s_approved,
               COUNT(*) FILTER (WHERE ${card} AND l.status = 'rejected')::int               AS s_rejected,
+              COUNT(*) FILTER (WHERE ${card} AND l.status IN ('cancelled','withdrawn'))::int AS s_cancelled,
               COUNT(*) FILTER (WHERE ${card} AND ${statusSql})::int                        AS filtered_total
          FROM leaves l
         WHERE l.organization_id = $1 ${scope} ${window.map(w => `AND ${w}`).join(' ')}`, params);
     const r = rows[0];
     res.json({
       pending: r.pending, wfh_pending: r.wfh_pending,
-      summary: { total: r.s_total, pending: r.s_pending, approved: r.s_approved, rejected: r.s_rejected },
+      summary: { total: r.s_total, pending: r.s_pending, approved: r.s_approved, rejected: r.s_rejected, cancelled: r.s_cancelled },
       filtered_total: r.filtered_total,
     });
   } catch (err) {

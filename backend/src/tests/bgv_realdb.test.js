@@ -70,9 +70,9 @@ async function seed() {
     [ID.hrD, ID.orgA, ID.dalal, ID.hrB, ID.bhuj]);
   await S(`INSERT INTO organization_features (organization_id, feature_key, enabled) VALUES ($1,'branches',true)`, [ID.orgA]);
   const rq = await one(`INSERT INTO document_requirements (organization_id, name) VALUES ($1,'BGV PAN') RETURNING id`, [ID.orgA]);
-  ID.sub = Number((await one(`INSERT INTO employee_doc_submissions (requirement_id, user_id, organization_id, file_url) VALUES ($1,$2,$3,'http://x/f.pdf') RETURNING id`,
+  ID.sub = Number((await one(`INSERT INTO employee_doc_submissions (requirement_id, user_id, organization_id, file_url) VALUES ($1,$2,$3,'https://x.test/f.pdf') RETURNING id`,
     [rq.id, ID.empD, ID.orgA])).id);
-  ID.subB = Number((await one(`INSERT INTO employee_doc_submissions (requirement_id, user_id, organization_id, file_url) VALUES ($1,$2,$3,'http://x/g.pdf') RETURNING id`,
+  ID.subB = Number((await one(`INSERT INTO employee_doc_submissions (requirement_id, user_id, organization_id, file_url) VALUES ($1,$2,$3,'https://x.test/g.pdf') RETURNING id`,
     [rq.id, ID.empB, ID.orgA])).id);
 }
 async function cleanup() {
@@ -428,17 +428,25 @@ const bgvRow = (id) => one('SELECT * FROM bgv_requests WHERE id=$1', [id]);
     assert.strictEqual(n, 0);
   });
 
-  console.log('\nScaffold: legacy disabled / review / submit / refresh (fail-closed, no network)');
+  console.log('\nHRMS-submitted BGV: legacy disabled / review / add+submit-bgv / refresh (outbound HTTP stubbed, DB real)');
   {
     const realFetch = global.fetch; const outbound = [];
-    global.fetch = async (url, opts) => {
-      if (/springverify\.com/i.test(String(url))) { outbound.push(String(url)); throw new Error('NO NETWORK ALLOWED IN SCAFFOLD TESTS'); }
-      return realFetch(url, opts);
+    let addReply  = () => ({ status: 200, json: { message: 'Candidate added successfully', data: { candidate_id: 999001, bgv_url: 'https://portal/x?token=SECRETLINK' } } });
+    let submitReply = () => ({ status: 200, json: { message: 'Form Submitted Successfully', errors: [], success: true } });
+    let detailsReply = () => ({ status: 200, json: { data: { overall_status: 'In progress', overall_status_code: 0, candidate_id: 888001 }, success: true } });
+    global.fetch = async (url, opts = {}) => {
+      const u = String(url);
+      if (!/springverify\.com/i.test(u)) return realFetch(url, opts);
+      outbound.push({ url: u, body: opts.body ? JSON.parse(opts.body) : null, auth: opts.headers && opts.headers.Authorization });
+      const pick = u.includes('/candidate/add') ? addReply : u.includes('/submit-bgv') ? submitReply : detailsReply;
+      const x = pick(); if (x.throw) throw x.throw;
+      return new Response(JSON.stringify(x.json), { status: x.status });
     };
     Object.assign(process.env, { BGV_PROVIDER_MODE: 'springverify', SPRINGVERIFY_BASE_URL: 'https://api-acceptance-2-sa.in.springverify.com',
       SPRINGVERIFY_API_TOKEN: 'tok-secret', SPRINGVERIFY_PACKAGE_IDENTIFIER: '525' });
     await setFlag(ID.orgA, true);
     const count = async () => (await S('SELECT 1 FROM bgv_requests WHERE organization_id=$1', [ID.orgA])).length;
+    const wipe = async () => { await S('DELETE FROM bgv_requests WHERE organization_id=$1 AND employee_id=$2', [ID.orgA, ID.empB]); outbound.length = 0; };
 
     await t('legacy POST /requests is disabled by default (410): no provider call, no row, even for a fully configured springverify', async () => {
       delete process.env.BGV_LEGACY_INVITE_ENABLED;
@@ -449,15 +457,17 @@ const bgvRow = (id) => one('SELECT * FROM bgv_requests WHERE id=$1', [id]);
       assert.strictEqual(await count(), n); assert.deepStrictEqual(outbound, []);
     });
 
-    await t('review: only APPROVED docs, no file URLs, employee-level, submit not enabled', async () => {
+    await t('review: only APPROVED docs, no file URLs, employee-level, mapped to a SpringVerify section, submit enabled', async () => {
       const r = await call('GET', `/api/bgv/employees/${ID.empB}/review`, { as: ID.root });
       assert.strictEqual(r.status, 200, JSON.stringify(r.body));
       assert.strictEqual(r.body.documents.length, 1); assert.strictEqual(Number(r.body.documents[0].submission_id), ID.subB);
-      assert.ok(!JSON.stringify(r.body).includes('http://x'), 'file_url must not reach the browser');
-      assert.strictEqual(r.body.ready, true); assert.strictEqual(r.body.submit_enabled, false);
+      assert.ok(!JSON.stringify(r.body).includes('x.test'), 'file_url must not reach the browser');
+      assert.strictEqual(r.body.documents[0].section, 'identity'); assert.strictEqual(r.body.documents[0].sends, true);
+      assert.strictEqual(r.body.ready, true); assert.strictEqual(r.body.submit_enabled, true);
       const d = await call('GET', `/api/bgv/employees/${ID.empD}/review`, { as: ID.root }); // its only doc is rejected
       assert.strictEqual(d.body.documents.length, 0); assert.strictEqual(d.body.ready, false);
       assert.ok(d.body.missing.some(m => m.field === 'documents'));
+      assert.deepStrictEqual(outbound, []);
     });
 
     await t('review/submit RBAC: employee 403, HR of other branch 403, other org 403, BGV off 403', async () => {
@@ -470,56 +480,156 @@ const bgvRow = (id) => one('SELECT * FROM bgv_requests WHERE id=$1', [id]);
       await setFlag(ID.orgA, false);
       assert.strictEqual((await call('GET', `/api/bgv/employees/${ID.empB}/review`, { as: ID.root })).status, 403);
       await setFlag(ID.orgA, true);
+      assert.deepStrictEqual(outbound, []);
     });
 
-    await t('submit is FAIL-CLOSED (501): no network, no bgv_requests row, HR edits NOT saved to the profile, audited', async () => {
+    await t('submit: ONE candidate (invite:false) + ONE submit-bgv with all approved docs; row in_progress; HR edits NOT saved to profile', async () => {
+      await wipe();
       const before = await one('SELECT phone, address, date_of_birth FROM users WHERE id=$1', [ID.empB]);
-      const n = await count();
       const r = await call('POST', `/api/bgv/employees/${ID.empB}/submit`, { as: ID.hrB,
-        body: { fields: { phone: '8888888888', address: 'Temp address', date_of_birth: '1990-01-01', is_admin: true } } });
-      assert.strictEqual(r.status, 501, JSON.stringify(r.body)); assert.strictEqual(r.body.code, 'SUBMIT_CONTRACT_NOT_CONFIRMED');
-      assert.deepStrictEqual(outbound, []); assert.strictEqual(await count(), n);
+        body: { fields: { address: 'Temp address', is_admin: true }, doc_details: { [ID.subB]: { id_number: 'ABCDE 1234F' } } } });
+      assert.strictEqual(r.status, 201, JSON.stringify(r.body)); assert.strictEqual(r.body.status, 'in_progress');
+      assert.strictEqual(outbound.length, 2, JSON.stringify(outbound.map(o => o.url)));
+      const [add, sub] = outbound;
+      assert.ok(add.url.endsWith('/external/v1/candidate/add')); assert.strictEqual(add.body.candidate.invite, false);
+      assert.strictEqual(add.body.package.subtype_id, 525); assert.strictEqual(add.auth, 'Bearer tok-secret');
+      assert.ok(sub.url.endsWith('/external/v2/candidate/submit-bgv')); assert.strictEqual(sub.body.candidate_id, 999001);
+      assert.deepStrictEqual(sub.body.identity.identity_1.documents, [{ url: 'https://x.test/g.pdf', tag: 'pan' }]);
+      assert.strictEqual(sub.body.identity.identity_1.id_type, 'PAN'); assert.strictEqual(sub.body.identity.identity_1.id_number, 'ABCDE1234F');
+      assert.ok(!JSON.stringify(r.body).includes('SECRETLINK'));
+      const row = await one(`SELECT status, provider_candidate_id FROM bgv_requests WHERE id=$1`, [r.body.id]);
+      assert.strictEqual(row.provider_candidate_id, '999001');
       assert.deepStrictEqual(await one('SELECT phone, address, date_of_birth FROM users WHERE id=$1', [ID.empB]), before);
-      assert.ok(await one(`SELECT 1 x FROM bgv_events WHERE event_type='submit_blocked' AND actor_id=$1`, [ID.hrB]));
+      assert.ok(await one(`SELECT 1 x FROM bgv_events WHERE bgv_request_id=$1 AND event_type='submitted'`, [r.body.id]));
+      // while active, a second submit is refused and sends nothing
+      outbound.length = 0;
+      assert.strictEqual((await call('POST', `/api/bgv/employees/${ID.empB}/submit`, { as: ID.root, body: {} })).status, 409);
+      assert.deepStrictEqual(outbound, []);
+    });
+
+    await t('submit rejected by SpringVerify (400 field errors): row failed with the reasons, candidate kept; retry REUSES the candidate (no 2nd add)', async () => {
+      await wipe();
+      submitReply = () => ({ status: 400, json: { message: 'Error during form submission', success: false,
+        errors: [{ field: 'identity.identity_1.id_number', error: 'id_number is invalid' }] } });
+      const r = await call('POST', `/api/bgv/employees/${ID.empB}/submit`, { as: ID.root, body: {} });
+      assert.strictEqual(r.status, 422, JSON.stringify(r.body));
+      assert.deepStrictEqual(r.body.field_errors, [{ field: 'identity.identity_1.id_number', error: 'id_number is invalid' }]);
+      const f = await one(`SELECT status, error_message, provider_candidate_id, provider_status FROM bgv_requests WHERE employee_id=$1 ORDER BY id DESC LIMIT 1`, [ID.empB]);
+      assert.strictEqual(f.status, 'failed'); assert.ok(f.error_message.includes('id_number is invalid'));
+      assert.strictEqual(f.provider_candidate_id, '999001'); assert.strictEqual(f.provider_status, '3');
+      // retry with a corrected payload
+      outbound.length = 0; submitReply = () => ({ status: 200, json: { message: 'ok', errors: [], success: true } });
+      const r2 = await call('POST', `/api/bgv/employees/${ID.empB}/submit`, { as: ID.root, body: {} });
+      assert.strictEqual(r2.status, 201, JSON.stringify(r2.body));
+      assert.deepStrictEqual(outbound.map(o => o.url.split('/').slice(-1)[0]), ['submit-bgv'], 'no second candidate/add');
+      assert.strictEqual(outbound[0].body.candidate_id, 999001);
+      assert.strictEqual((await one(`SELECT provider_candidate_id FROM bgv_requests WHERE id=$1`, [r2.body.id])).provider_candidate_id, '999001');
+    });
+
+    await t('candidate/add failure => failed row, nothing submitted, no candidate id; friendly 422/502 error', async () => {
+      await wipe();
+      addReply = () => ({ status: 409, json: { status: 409, message: 'Candidate already exists' } });
+      const r = await call('POST', `/api/bgv/employees/${ID.empB}/submit`, { as: ID.root, body: {} });
+      addReply = () => ({ status: 200, json: { message: 'ok', data: { candidate_id: 999001 } } });
+      assert.strictEqual(r.status, 502); assert.strictEqual(r.body.code, 'DUPLICATE_CANDIDATE');
+      assert.strictEqual(outbound.length, 1);
+      const f = await one(`SELECT status, provider_candidate_id FROM bgv_requests WHERE employee_id=$1 ORDER BY id DESC LIMIT 1`, [ID.empB]);
+      assert.strictEqual(f.status, 'failed'); assert.strictEqual(f.provider_candidate_id, null);
     });
 
     await t('submit with missing info / no approved docs => 400 listing what is missing (nothing sent)', async () => {
+      await wipe();
       const r = await call('POST', `/api/bgv/employees/${ID.empD}/submit`, { as: ID.root, body: {} });
       assert.strictEqual(r.status, 400); assert.ok(r.body.missing.some(m => m.field === 'documents'));
       assert.deepStrictEqual(outbound, []);
     });
 
-    await t('submit in mock mode (no submitBgv) is also blocked 501', async () => {
+    await t('submit in mock mode runs the same flow end to end', async () => {
+      await wipe();
       process.env.BGV_PROVIDER_MODE = 'mock';
       const r = await call('POST', `/api/bgv/employees/${ID.empB}/submit`, { as: ID.root, body: {} });
       process.env.BGV_PROVIDER_MODE = 'springverify';
-      assert.strictEqual(r.status, 501); assert.strictEqual(r.body.code, 'SUBMIT_CONTRACT_NOT_CONFIRMED');
+      assert.strictEqual(r.status, 201, JSON.stringify(r.body)); assert.strictEqual(r.body.status, 'in_progress');
+      assert.deepStrictEqual(outbound, []);
+      await wipe();
+    });
+
+    await t('fixed check set: Aadhaar/other docs ignored, ONE identity (PAN>DL>Passport>Voter), employment+education+address grouped; payload matches', async () => {
+      await wipe();
+      const prep = require('../modules/bgv/bgv.prepare');
+      const doc = (n, id) => ({ submission_id: id, requirement_name: n, file_url: `https://x.test/${id}.pdf`, detail: {} });
+      const docs = prep.selectDocuments([doc('Aadhar Card', 1), doc('Driving License', 2), doc('PAN Card', 3), doc('Offer Letter', 4),
+        doc('Relieving Letter', 5), doc('Education Certificate', 6), doc('Electricity Bill', 7), doc('Blood Group Report', 8)]);
+      const sent = docs.filter(d => d.sv).map(d => d.submission_id).sort();
+      assert.deepStrictEqual(sent, [3, 4, 5, 6, 7], 'Aadhaar, DL (lower rank than PAN) and unrelated docs are not sent');
+      assert.strictEqual(docs.find(d => d.submission_id === 1).sv, null); assert.strictEqual(docs.find(d => d.submission_id === 2).sv, null);
+      const sv = require('../modules/bgv/springverify.client');
+      docs.find(d => d.submission_id === 4).detail = { company_name: 'Acme', designation: 'Dev' };
+      await sv.submitBgv({ candidateId: '999001', employee: { name: 'Jane Doe', email: 'j@x.com', phone: '9000000101', address: '12A MG Road' }, documents: docs });
+      const b = outbound[outbound.length - 1].body;
+      assert.deepStrictEqual(Object.keys(b.identity), ['identity_1']); assert.strictEqual(b.identity.identity_1.id_type, 'PAN');
+      assert.deepStrictEqual(b.employment.employment_1.documents.map(x => x.tag), ['offer_letter', 'relieving_letter']);
+      assert.strictEqual(b.employment.employment_1.company_name, 'Acme');
+      assert.strictEqual(b.education.education_1.documents[0].tag, 'degree_certificate');
+      assert.strictEqual(b.address.current.documents[0].tag, 'electricity_bill');
+      assert.ok(!JSON.stringify(b).includes('/1.pdf') && !JSON.stringify(b).includes('/8.pdf'));
+    });
+    await t('eligibility: only verified doc types listed; employee eligible only with an APPROVED one; branch scoped; BGV off => empty', async () => {
+      const r = await call('GET', '/api/bgv/eligibility', { as: ID.root });
+      assert.strictEqual(r.status, 200);
+      assert.ok(r.body.docs[ID.subB], 'PAN doc listed'); assert.strictEqual(r.body.employees[ID.empB].eligible, true);
+      assert.strictEqual((await call('GET', '/api/bgv/eligibility', { as: ID.empB })).status, 403);
+      const hr = await call('GET', '/api/bgv/eligibility', { as: ID.hrD });
+      assert.ok(!hr.body.docs[ID.subB], 'Dalal HR must not see Bhuj docs');
+      await setFlag(ID.orgA, false);
+      assert.deepStrictEqual((await call('GET', '/api/bgv/eligibility', { as: ID.root })).body, { docs: {}, employees: {} });
+      await setFlag(ID.orgA, true);
     });
 
     let activeId;
-    await t('refresh is FAIL-CLOSED (501): no network, request state untouched, audited', async () => {
+    await t('refresh pulls candidate/details: maps overall_status_code, audited; unknown code leaves state alone', async () => {
       activeId = Number((await one(`INSERT INTO bgv_requests (organization_id, employee_id, provider, provider_candidate_id, status, provider_status)
         VALUES ($1,$2,'springverify','888001','in_progress','0') RETURNING id`, [ID.orgA, ID.empB])).id);
+      detailsReply = () => ({ status: 200, json: { data: { overall_status_code: 77 }, success: true } });
+      let r = await call('POST', `/api/bgv/requests/${activeId}/refresh`, { as: ID.hrB });
+      assert.strictEqual(r.status, 200, JSON.stringify(r.body)); assert.strictEqual(r.body.status, 'in_progress');
+      assert.ok(outbound[outbound.length - 1].url.includes('candidate_id=888001'));
+      detailsReply = () => ({ status: 200, json: { data: { overall_status_code: 4 }, success: true } });
+      r = await call('POST', `/api/bgv/requests/${activeId}/refresh`, { as: ID.hrB });
+      assert.strictEqual((await bgvRow(activeId)).provider_status, '4');
+      assert.ok(await one(`SELECT 1 x FROM bgv_events WHERE bgv_request_id=$1 AND event_type='refreshed'`, [activeId]));
+    });
+    await t('refresh provider failure => 502, state untouched', async () => {
+      detailsReply = () => ({ status: 500, json: { message: 'boom' } });
       const r = await call('POST', `/api/bgv/requests/${activeId}/refresh`, { as: ID.hrB });
-      assert.strictEqual(r.status, 501, JSON.stringify(r.body)); assert.strictEqual(r.body.code, 'STATUS_CONTRACT_NOT_CONFIRMED');
-      assert.deepStrictEqual(outbound, []);
-      const row = await bgvRow(activeId); assert.strictEqual(row.status, 'in_progress'); assert.strictEqual(row.provider_status, '0');
-      assert.ok(await one(`SELECT 1 x FROM bgv_events WHERE bgv_request_id=$1 AND event_type='refresh_blocked'`, [activeId]));
+      assert.strictEqual(r.status, 502);
+      const row = await bgvRow(activeId); assert.strictEqual(row.status, 'in_progress'); assert.strictEqual(row.provider_status, '4');
+    });
+    await t('refresh completed code => completed (+completed_at); finished BGV => 409', async () => {
+      detailsReply = () => ({ status: 200, json: { data: { overall_status_code: 1 }, success: true } });
+      const r = await call('POST', `/api/bgv/requests/${activeId}/refresh`, { as: ID.hrB });
+      assert.strictEqual(r.status, 200); assert.strictEqual((await bgvRow(activeId)).status, 'completed');
+      assert.ok((await bgvRow(activeId)).completed_at);
+      assert.strictEqual((await call('POST', `/api/bgv/requests/${activeId}/refresh`, { as: ID.root })).status, 409);
     });
     await t('refresh RBAC/scope: employee 403, other-branch HR 404, other org 403, unauth 401, BGV off 403', async () => {
-      assert.strictEqual((await call('POST', `/api/bgv/requests/${activeId}/refresh`, { as: ID.empB })).status, 403);
-      assert.strictEqual((await call('POST', `/api/bgv/requests/${activeId}/refresh`, { as: ID.hrD })).status, 404);
-      assert.strictEqual((await call('POST', `/api/bgv/requests/${activeId}/refresh`, { as: ID.rootB })).status, 403);
-      assert.strictEqual((await call('POST', `/api/bgv/requests/${activeId}/refresh`)).status, 401);
+      const id2 = Number((await one(`INSERT INTO bgv_requests (organization_id, employee_id, provider, provider_candidate_id, status, provider_status)
+        VALUES ($1,$2,'springverify','888002','in_progress','0') RETURNING id`, [ID.orgA, ID.empB])).id);
+      assert.strictEqual((await call('POST', `/api/bgv/requests/${id2}/refresh`, { as: ID.empB })).status, 403);
+      assert.strictEqual((await call('POST', `/api/bgv/requests/${id2}/refresh`, { as: ID.hrD })).status, 404);
+      assert.strictEqual((await call('POST', `/api/bgv/requests/${id2}/refresh`, { as: ID.rootB })).status, 403);
+      assert.strictEqual((await call('POST', `/api/bgv/requests/${id2}/refresh`)).status, 401);
       await setFlag(ID.orgA, false);
-      assert.strictEqual((await call('POST', `/api/bgv/requests/${activeId}/refresh`, { as: ID.root })).status, 403);
+      assert.strictEqual((await call('POST', `/api/bgv/requests/${id2}/refresh`, { as: ID.root })).status, 403);
       await setFlag(ID.orgA, true);
+      await S('DELETE FROM bgv_requests WHERE id=$1', [id2]);
     });
-    await t('refresh of a finished BGV => 409; webhook still applies (unchanged logic)', async () => {
+    await t('webhook still applies to an active request (unchanged logic)', async () => {
       process.env.SPRINGVERIFY_WEBHOOK_SECRET = 'whsec-sv';
-      const w = await call('POST', '/api/bgv/webhook', { body: { candidate_id: 888001, overall_status_code: 1 }, headers: { authorization: 'Bearer whsec-sv' } });
-      assert.strictEqual(w.status, 200); assert.strictEqual((await bgvRow(activeId)).status, 'completed');
-      assert.strictEqual((await call('POST', `/api/bgv/requests/${activeId}/refresh`, { as: ID.root })).status, 409);
+      const id3 = Number((await one(`INSERT INTO bgv_requests (organization_id, employee_id, provider, provider_candidate_id, status, provider_status)
+        VALUES ($1,$2,'springverify','888003','in_progress','0') RETURNING id`, [ID.orgA, ID.empB])).id);
+      const w = await call('POST', '/api/bgv/webhook', { body: { candidate_id: 888003, overall_status_code: 1 }, headers: { authorization: 'Bearer whsec-sv' } });
+      assert.strictEqual(w.status, 200); assert.strictEqual((await bgvRow(id3)).status, 'completed');
     });
 
     await t('employee my-status: own latest status only (no error/report/provider fields); BGV off => enabled:false', async () => {
@@ -530,7 +640,6 @@ const bgvRow = (id) => one('SELECT * FROM bgv_requests WHERE id=$1', [id]);
       await setFlag(ID.orgA, true);
     });
 
-    assert.deepStrictEqual(outbound, [], 'no outbound SpringVerify request happened anywhere in the scaffold tests');
     global.fetch = realFetch;
     process.env.BGV_PROVIDER_MODE = 'mock';
     for (const k of ['SPRINGVERIFY_BASE_URL', 'SPRINGVERIFY_API_TOKEN', 'SPRINGVERIFY_PACKAGE_IDENTIFIER']) process.env[k] = '';

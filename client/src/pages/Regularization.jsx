@@ -224,7 +224,14 @@ function ApplyModal({ open, onClose, initialDate }) {
     onError: e => toast(e.message, 'error'),
   });
 
+  // At least one corrected time is required (a forgot-to-punch-out day only needs one).
+  const noTime = !form.requested_check_in && !form.requested_check_out;
+
   function handleSubmit() {
+    if (noTime) {
+      toast('Enter at least one of Correct Check-in or Correct Check-out.', 'error');
+      return;
+    }
     if (form.requested_check_in && form.requested_check_out && form.requested_check_out <= form.requested_check_in) {
       toast('Check-Out time cannot be earlier than or equal to Check-In time.', 'error');
       return;
@@ -237,7 +244,7 @@ function ApplyModal({ open, onClose, initialDate }) {
       footer={
         <div className="flex justify-end gap-3">
           <button className="btn btn-outline" onClick={onClose}>Cancel</button>
-          <button className="btn btn-primary" onClick={handleSubmit} disabled={mut.isPending || !form.date || !form.reason || !!timeErr}>
+          <button className="btn btn-primary" onClick={handleSubmit} disabled={mut.isPending || !form.date || !form.reason || !!timeErr || noTime}>
             {mut.isPending ? <><span className="spinner w-4 h-4" />Submitting…</> : 'Submit Request'}
           </button>
         </div>
@@ -317,6 +324,7 @@ function ApplyModal({ open, onClose, initialDate }) {
             <input type="time" className={`form-control ${timeErr ? 'border-rose-400' : ''}`} value={form.requested_check_out} onChange={e => set('requested_check_out', e.target.value)} />
           </div>
         </div>
+        <p className="text-xs text-[#777587] -mt-2">Enter at least one of Correct Check-in or Correct Check-out.</p>
         {timeErr && (
           <p className="text-xs text-rose-600 flex items-center gap-1.5">
             <span className="w-4 h-4 rounded-full bg-rose-100 flex items-center justify-center text-[0.6rem] shrink-0">!</span>

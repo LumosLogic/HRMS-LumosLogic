@@ -10,6 +10,7 @@ import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
+import { useEmployees } from '@/hooks/useEmployees';
 import { apiGet, apiPost, apiPut, apiDelete } from '@/lib/api';
 import { Modal } from '@/components/ui/Modal';
 import { Avatar } from '@/components/ui/Avatar';
@@ -76,6 +77,78 @@ function ResignModal({ open, onClose }) {
           <p className="form-hint">Estimated last working day: <strong>{lwd.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}</strong></p>
         </div>
         <div><label className="form-label">Reason <span className="font-normal text-[#777587] normal-case tracking-normal">(optional)</span></label><textarea className="form-control" rows={3} placeholder="Share your reasons…" value={form.reason} onChange={e => set('reason', e.target.value)} /></div>
+      </div>
+    </Modal>
+  );
+}
+
+// ── HR: record an exit that was received outside the portal (e.g. by email) ───
+function RecordExitModal({ open, onClose }) {
+  const toast = useToast();
+  const qc    = useQueryClient();
+  const today = new Date().toISOString().split('T')[0];
+  const [form, setForm] = useState({ user_id: '', exit_type: 'resignation', resignation_date: today, last_working_day: today, reason: '' });
+  const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
+  const { data: employees = [] } = useEmployees({ lite: true, enabled: open });
+  const eligible = employees.filter(e => !['inactive', 'resigned', 'terminated'].includes(e.employee_status));
+  const isTerm = form.exit_type === 'termination';
+
+  const mut = useMutation({
+    mutationFn: async () => {
+      if (!form.user_id) throw new Error('Select an employee');
+      if (!form.last_working_day) throw new Error(isTerm ? 'Effective date is required' : 'Last working day is required');
+      const created = await apiPost('/exit', {
+        user_id: form.user_id,
+        exit_type: form.exit_type,
+        reason: form.reason,
+        resignation_date: isTerm ? form.last_working_day : form.resignation_date,
+      });
+      // A resignation recorded by HR is already agreed: accept it and pin the last working day.
+      if (!isTerm) await apiPut(`/exit/${created.id}`, { status: 'approved', last_working_day: form.last_working_day });
+    },
+    onSuccess: () => {
+      toast(isTerm ? 'Termination recorded' : 'Resignation recorded', 'success');
+      qc.invalidateQueries({ queryKey: ['exit-requests'] });
+      qc.invalidateQueries({ queryKey: ['employees'] });
+      onClose();
+    },
+    onError: e => toast(e.message, 'error'),
+  });
+
+  return (
+    <Modal open={open} onClose={onClose} title="Record Employee Exit" size="md"
+      footer={
+        <div className="flex justify-end gap-3">
+          <button className="btn btn-outline" onClick={onClose}>Cancel</button>
+          <button className="btn btn-danger" onClick={() => mut.mutate()} disabled={mut.isPending}>
+            {mut.isPending ? <><span className="spinner w-4 h-4" />Saving…</> : <><LogOut size={14} />{isTerm ? 'Mark as Terminated' : 'Mark as Resigned'}</>}
+          </button>
+        </div>
+      }>
+      <div className="space-y-4">
+        <div>
+          <label className="form-label">Employee *</label>
+          <select className="form-control" value={form.user_id} onChange={e => set('user_id', e.target.value)}>
+            <option value="">Select employee…</option>
+            {eligible.map(e => <option key={e.id} value={e.id}>{e.name}{e.employee_id ? ` (${e.employee_id})` : ''}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="form-label">Exit Type *</label>
+          <select className="form-control" value={form.exit_type} onChange={e => set('exit_type', e.target.value)}>
+            <option value="resignation">Resigned</option>
+            <option value="termination">Terminated</option>
+          </select>
+        </div>
+        {!isTerm && (
+          <div><label className="form-label">Resignation Received On *</label><input type="date" className="form-control" value={form.resignation_date} onChange={e => set('resignation_date', e.target.value)} /></div>
+        )}
+        <div>
+          <label className="form-label">{isTerm ? 'Termination Effective Date *' : 'Last Working Day *'}</label>
+          <input type="date" className="form-control" value={form.last_working_day} onChange={e => set('last_working_day', e.target.value)} />
+          <p className="form-hint">{isTerm ? 'Access is revoked immediately and the offboarding checklist is created.' : 'The employee moves to Resigned after this date.'}</p>
+        </div>
+        <div><label className="form-label">Reason / Notes <span className="font-normal text-[#777587] normal-case tracking-normal">(optional)</span></label><textarea className="form-control" rows={3} placeholder="e.g. Resigned via email dated…" value={form.reason} onChange={e => set('reason', e.target.value)} /></div>
       </div>
     </Modal>
   );
@@ -549,10 +622,11 @@ function ExitCard({ req, isAdmin }) {
 
 // ── Main page ─────────────────────────────────────────────────────────────────
 export default function ExitManagement() {
-  const { isAdmin, isRootAdmin, user } = useAuth();
+  const { isAdmin, isRootAdmin, user, adminCan } = useAuth();
   const { selectedBranchId } = useBranch();
   const wrap = '';
   const [resignOpen, setResignOpen] = useState(false);
+  const [recordOpen, setRecordOpen] = useState(false);
 
   const { data: _exitData, isLoading } = useQuery({ queryKey: ['exit-requests', selectedBranchId], meta: BRANCH_KEYED, placeholderData: keepPreviousData, queryFn: () => apiGet('/exit') });
   const requests = Array.isArray(_exitData) ? _exitData : [];
@@ -628,6 +702,11 @@ export default function ExitManagement() {
             </p>
           </div>
         </div>
+        {isAdmin && adminCan('exit', 'manage') && (
+          <button className="btn btn-danger btn-sm" onClick={() => setRecordOpen(true)}>
+            <LogOut size={14} />Record Exit
+          </button>
+        )}
         {!isAdmin && !requests.length && (
           <button className="btn btn-danger btn-sm" onClick={() => setResignOpen(true)}>
             <LogOut size={14} />Submit Resignation
@@ -677,6 +756,7 @@ export default function ExitManagement() {
       ) : null}
 
       {resignOpen && <ResignModal open onClose={() => setResignOpen(false)} />}
+      {recordOpen && <RecordExitModal open onClose={() => setRecordOpen(false)} />}
     </div>
   );
 }

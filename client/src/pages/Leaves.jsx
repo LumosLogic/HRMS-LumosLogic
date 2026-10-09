@@ -33,7 +33,7 @@ const ATT_STATUS_CFG = {
 
 const PENDING_STATUSES = ['pending', 'pending_dept', 'pending_root', 'pending_approval'];
 // Status filter → statuses sent to the server (the same list drives the table rows, the pagination total and the cards).
-const STATUS_FILTERS = { all: undefined, pending: PENDING_STATUSES, approved: ['approved'], rejected: ['rejected'] };
+const STATUS_FILTERS = { all: undefined, pending: PENDING_STATUSES, approved: ['approved'], rejected: ['rejected'], cancelled: ['cancelled', 'withdrawn'] };
 const HIGHLIGHT_PAGE_SIZE = 500;   // a notification deep link must find its leave wherever it sits in the list
 
 export default function Leaves() {
@@ -71,7 +71,7 @@ export default function Leaves() {
   const [filterEnd,    setFilterEnd]    = useState('');
   const [filterMonth,  setFilterMonth]  = useState('');
   const [filterType,   setFilterType]   = useState(() => typeParam || '');
-  const [statusFilter, setStatusFilter] = useState(() => (['pending', 'approved', 'rejected'].includes(statusParam) ? statusParam : 'all'));
+  const [statusFilter, setStatusFilter] = useState(() => (['pending', 'approved', 'rejected', 'cancelled'].includes(statusParam) ? statusParam : 'all'));
   const [applyModal, setApplyModal] = useState(false);
   const [editLeave,  setEditLeave]  = useState(null);
   const [confirmDel,    setConfirmDel]    = useState(null);
@@ -477,11 +477,13 @@ const SUMMARY_CARDS = [
   { key: 'pending',  field: 'pending',  label: 'Pending',  accent: 'border-l-amber-400',   num: 'text-amber-700',   ring: 'ring-amber-400' },
   { key: 'approved', field: 'approved', label: 'Approved', accent: 'border-l-emerald-400', num: 'text-emerald-700', ring: 'ring-emerald-400' },
   { key: 'rejected', field: 'rejected', label: 'Rejected', accent: 'border-l-rose-400',    num: 'text-rose-700',    ring: 'ring-rose-400' },
+  // Cancelled + withdrawn: without this card Total != Pending + Approved + Rejected whenever a request was cancelled/withdrawn.
+  { key: 'cancelled', field: 'cancelled', label: 'Cancelled', accent: 'border-l-slate-400', num: 'text-slate-600',   ring: 'ring-slate-400' },
 ];
 
 function LeaveSummaryCards({ counts, stale, active, onPick, noun }) {
   return (
-    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-3" data-testid="leave-summary-cards">
+    <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 mb-3" data-testid="leave-summary-cards">
       {SUMMARY_CARDS.map(c => {
         const on = active === c.key;
         const value = !stale && counts ? Number(counts[c.field] || 0).toLocaleString() : '—';

@@ -1745,6 +1745,7 @@ function BgvReviewModal({ employeeId, onClose }) {
   const toast = useToast();
   const qc = useQueryClient();
   const [fields, setFields] = useState({});
+  const [docDetails, setDocDetails] = useState({}); // { [submissionId]: { id_number, course_type } }
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [blockedMsg, setBlockedMsg] = useState('');
 
@@ -1755,8 +1756,8 @@ function BgvReviewModal({ employeeId, onClose }) {
 
   const submit = useMutation({
     // BGV is per employee (covers all their documents), not per document.
-    mutationFn: () => apiPost(`/bgv/employees/${employeeId}/submit`, { fields }),
-    onSuccess: () => { toast('BGV submitted', 'success'); qc.invalidateQueries({ queryKey: ['bgv-requests'] }); onClose(); },
+    mutationFn: () => apiPost(`/bgv/employees/${employeeId}/submit`, { fields, doc_details: docDetails }),
+    onSuccess: () => { toast('BGV submitted', 'success'); qc.invalidateQueries({ queryKey: ['bgv-requests'] }); qc.invalidateQueries({ queryKey: ['bgv-eligibility'] }); onClose(); },
     onError: (e) => { setBlockedMsg(e?.message || 'Could not submit BGV'); qc.invalidateQueries({ queryKey: ['bgv-review', employeeId] }); },
   });
 
@@ -1784,8 +1785,10 @@ function BgvReviewModal({ employeeId, onClose }) {
           {isLoading && <div className="loading"><div className="spinner" /> Loading…</div>}
           {error && <p className="text-xs text-rose-600 font-semibold">{error.message || 'Could not load the review.'}</p>}
           {data && (<>
-            <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-800 font-semibold">
-              {data.submit_blocked_reason} The employee will not receive any SpringVerify email or form.
+            <div className={`p-3 rounded-xl border text-xs font-semibold ${data.submit_enabled ? 'bg-blue-50 border-blue-200 text-blue-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+              {data.submit_enabled
+                ? 'One SpringVerify candidate is created for this employee and all documents below are sent together. The employee will not receive any SpringVerify email or form.'
+                : data.submit_blocked_reason}
             </div>
 
             <div>
@@ -1804,19 +1807,54 @@ function BgvReviewModal({ employeeId, onClose }) {
             </div>
 
             <div>
-              <p className="text-xs font-black text-[#151c27] mb-2">Approved documents ({data.documents.length})</p>
+              <p className="text-xs font-black text-[#151c27] mb-1">Documents sent to SpringVerify ({data.documents.filter(d => d.sends).length})</p>
+              <p className="text-[0.65rem] text-[#777587] mb-2">Verified: Identity (any 1 — PAN, Driving License, Passport or Voter ID), Address, Employment and Education. Other documents are ignored.</p>
               {data.documents.length === 0
                 ? <p className="text-xs text-[#777587]">No approved documents yet.</p>
                 : <div className="divide-y divide-[#f0f3ff] border border-[#f0f3ff] rounded-xl">
-                    {data.documents.map(d => (
-                      <div key={d.submission_id} className="flex items-center justify-between gap-3 px-3 py-2">
-                        <div className="min-w-0">
-                          <p className="text-xs font-bold text-[#151c27] truncate">{d.requirement_name}</p>
-                          <p className="text-[0.65rem] text-[#9ca3af] truncate">{d.file_name || d.file_type || 'file'}</p>
-                        </div>
-                        <CheckCircle size={14} className="text-emerald-600 flex-shrink-0" />
-                      </div>
-                    ))}
+                    {(() => {
+                      const seen = new Set(); // section inputs appear once, on the first document of that section
+                      const FIELD_SETS = {
+                        identity:   [{ k: 'id_number', ph: 'Document number (recommended — used to verify identity)' }],
+                        employment: [{ k: 'company_name', ph: 'Company name' }, { k: 'designation', ph: 'Designation' }, { k: 'start_date', type: 'date', ph: 'Start date' }, { k: 'end_date', type: 'date', ph: 'End date' }],
+                        address:    [{ k: 'city', ph: 'City' }, { k: 'state', ph: 'State' }, { k: 'pin_code', ph: '6-digit PIN code' }],
+                      };
+                      return [...data.documents].sort((a, b) => Number(b.sends) - Number(a.sends)).map(d => {
+                        const dd = docDetails[d.submission_id] || {};
+                        const setDd = (k, v) => setDocDetails(p => ({ ...p, [d.submission_id]: { ...p[d.submission_id], [k]: v } }));
+                        const first = d.sends && !seen.has(d.section); if (first) seen.add(d.section);
+                        return (
+                          <div key={d.submission_id} className={`px-3 py-2 space-y-1.5 ${d.sends ? '' : 'opacity-60'}`}>
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="text-xs font-bold text-[#151c27] truncate">{d.requirement_name}</p>
+                                <p className="text-[0.65rem] text-[#9ca3af] truncate">
+                                  {d.sends ? `Sent as ${d.section}` : `Not sent — ${d.skip_reason || 'not verified by BGV'}`} · {d.file_name || d.file_type || 'file'}
+                                </p>
+                              </div>
+                              {d.sends
+                                ? <CheckCircle size={14} className="text-emerald-600 flex-shrink-0" />
+                                : <AlertTriangle size={14} className="text-amber-500 flex-shrink-0" />}
+                            </div>
+                            {first && (FIELD_SETS[d.section] || []).length > 0 && (
+                              <div className="grid grid-cols-2 gap-2">
+                                {FIELD_SETS[d.section].map(f => (
+                                  <input key={f.k} type={f.type || 'text'} title={f.ph} placeholder={f.ph}
+                                    className={`form-control text-xs ${d.section === 'identity' ? 'col-span-2' : ''}`}
+                                    value={dd[f.k] ?? d[f.k] ?? ''} onChange={e => setDd(f.k, e.target.value)} />
+                                ))}
+                              </div>
+                            )}
+                            {first && d.section === 'education' && (
+                              <select className="form-control text-xs" value={dd.course_type ?? d.course_type ?? 'UNDERGRAD'}
+                                onChange={e => setDd('course_type', e.target.value)}>
+                                {(data.course_types || []).map(c => <option key={c} value={c}>{c}</option>)}
+                              </select>
+                            )}
+                          </div>
+                        );
+                      });
+                    })()}
                   </div>}
             </div>
 
@@ -1848,7 +1886,9 @@ function BgvReviewModal({ employeeId, onClose }) {
   );
 }
 
-function BgvCell({ employeeId, latest }) {
+// BGV verifies a fixed set (identity / address / employment / education). `eligible` = the employee has at least one
+// APPROVED document of those types; the server enforces the same rule on submit.
+function BgvCell({ employeeId, latest, eligible = false }) {
   const toast = useToast();
   const [reviewOpen, setReviewOpen] = useState(false);
   const active = latest && (latest.status === 'pending' || latest.status === 'in_progress');
@@ -1882,6 +1922,9 @@ function BgvCell({ employeeId, latest }) {
         <span className={`inline-flex px-2 py-0.5 rounded-full text-[0.65rem] font-bold border ${badge.cls}`}
               title={latest.status === 'failed' ? (latest.error_message || '') : undefined}>{badge.label}</span>
       )}
+      {latest?.status === 'failed' && latest.error_message && (
+        <p className="text-[0.62rem] text-rose-600 max-w-[260px] break-words">{latest.error_message}</p>
+      )}
       {active && (
         <button onClick={() => refresh.mutate()} disabled={refresh.isPending}
           className="text-[0.65rem] font-bold text-[#3525cd] hover:underline disabled:opacity-50">
@@ -1891,59 +1934,16 @@ function BgvCell({ employeeId, latest }) {
       {latest?.status === 'completed' && latest.has_report && (
         <button onClick={openReport} className="text-[0.65rem] font-bold text-[#3525cd] hover:underline">View report</button>
       )}
-      {!active && (
+      {!active && !eligible && latest?.status !== 'completed' && (
+        <span className="text-[0.65rem] font-semibold text-[#9ca3af]">BGV after a required document is approved</span>
+      )}
+      {!active && eligible && (
         <button onClick={() => setReviewOpen(true)}
           className="px-2.5 py-1 rounded-lg text-[0.65rem] font-bold border border-[#3525cd] text-[#3525cd] hover:bg-[#f0f3ff]">
           {latest?.status === 'failed' || latest?.status === 'cancelled' ? 'Retry BGV' : 'Run BGV'}
         </button>
       )}
       {reviewOpen && <BgvReviewModal employeeId={employeeId} onClose={() => setReviewOpen(false)} />}
-    </div>
-  );
-}
-
-// One row per EMPLOYEE (not per document): BGV verifies the whole person, so there is a single action/status each.
-function BgvPanel({ subs, latestByEmp, search }) {
-  const [open, setOpen] = useState(true);
-  const employees = useMemo(() => {
-    const m = new Map();
-    for (const s of subs) {
-      const k = String(s.user_id);
-      if (!m.has(k)) m.set(k, { id: s.user_id, employee: s.employee, docs: 0, approved: 0 });
-      const e = m.get(k); e.docs += 1; if (s.status === 'approved') e.approved += 1;
-    }
-    const q = search.trim().toLowerCase();
-    return [...m.values()]
-      .filter(e => !q || e.employee?.name?.toLowerCase().includes(q))
-      .sort((a, b) => (a.employee?.name || '').localeCompare(b.employee?.name || ''));
-  }, [subs, search]);
-
-  if (employees.length === 0) return null;
-  return (
-    <div className="bg-white rounded-xl border border-[#c7c4d8] mb-5 overflow-hidden">
-      <button onClick={() => setOpen(o => !o)} className="w-full flex items-center justify-between px-5 py-3 text-left">
-        <div>
-          <p className="text-sm font-black text-[#151c27]">Background Verification (BGV)</p>
-          <p className="text-[0.7rem] text-[#777587]">One check per employee — covers all of their documents. May incur a charge.</p>
-        </div>
-        <ChevronDown size={16} className={`text-[#777587] transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && (
-        <div className="divide-y divide-[#f0f3ff] border-t border-[#f0f3ff] max-h-80 overflow-y-auto">
-          {employees.map(e => (
-            <div key={e.id} className="flex items-center justify-between gap-4 px-5 py-3">
-              <div className="flex items-center gap-2.5 min-w-0">
-                <Avatar name={e.employee?.name} color={e.employee?.avatar_color} size={28} />
-                <div className="min-w-0">
-                  <p className="text-xs font-bold text-[#151c27] truncate">{e.employee?.name}</p>
-                  <p className="text-[0.65rem] text-[#9ca3af]">{e.docs} document{e.docs === 1 ? '' : 's'} · {e.approved} approved</p>
-                </div>
-              </div>
-              <BgvCell employeeId={e.id} latest={latestByEmp.get(String(e.id))} />
-            </div>
-          ))}
-        </div>
-      )}
     </div>
   );
 }
@@ -1977,6 +1977,14 @@ function VerificationQueueTab() {
     for (const r of bgvList) if (!m.has(String(r.employee_id))) m.set(String(r.employee_id), r);
     return m;
   }, [bgvList]);
+
+  // Which rows are BGV-verified document types, and which employees have an approved one (server-classified).
+  const { data: bgvElig } = useQuery({
+    queryKey: ['bgv-eligibility', _bk2],
+    meta: BRANCH_KEYED,
+    enabled: bgvOn,
+    queryFn: () => apiGet('/bgv/eligibility'),
+  });
 
   const STATUS_TABS = [
     { key: 'all',                 label: 'All',               count: allSubs.length },
@@ -2042,8 +2050,6 @@ function VerificationQueueTab() {
             value={search} onChange={e => setSearch(e.target.value)} />
         </div>
       </div>
-
-      {bgvOn && !isLoading && <BgvPanel subs={allSubs} latestByEmp={bgvLatestByEmp} search={search} />}
 
       {/* Status filter tabs — overflow-x-auto for tablet/mobile */}
       <div className="overflow-x-auto scrollbar-hide mb-4 border-b border-[#c7c4d8]">
@@ -2136,6 +2142,12 @@ function VerificationQueueTab() {
                           className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold transition-colors ${canReview(sub) ? 'text-white bg-[#3525cd] hover:bg-[#2a1fb0]' : 'text-[#3525cd] bg-[#f0f3ff] hover:bg-[#e7eefe]'}`}>
                           <Eye size={12} /> {canReview(sub) ? 'Review' : 'View'}
                         </button>
+                      )}
+                      {bgvOn && bgvElig?.docs?.[sub.id] && (
+                        <div className="mt-2">
+                          <BgvCell employeeId={sub.user_id} latest={bgvLatestByEmp.get(String(sub.user_id))}
+                            eligible={!!bgvElig.employees?.[sub.user_id]?.eligible} />
+                        </div>
                       )}
                     </td>
                   </tr>
