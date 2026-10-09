@@ -61,9 +61,9 @@ export function BranchSelector() {
         disabled={isLoading}
         className={cn(
           'w-full flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-semibold',
-          'border border-[#3525cd]/30 bg-[#3525cd]/5 text-[#3525cd]',
-          'hover:bg-[#3525cd]/10 hover:border-[#3525cd]/50 transition-colors',
-          'focus:outline-none focus-visible:ring-2 focus-visible:ring-[#3525cd]/30',
+          'border border-white/20 bg-white/10 text-white',
+          'hover:bg-white/15 hover:border-white/30 transition-colors',
+          'focus:outline-none focus-visible:ring-2 focus-visible:ring-white/40',
           isLoading && 'opacity-50 cursor-not-allowed'
         )}
         title="Switch branch context"

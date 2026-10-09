@@ -94,8 +94,8 @@ const NAV_SECTIONS = [
 const navLinkClass = ({ isActive }) => cn(
   'flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold border transition-all duration-150',
   isActive
-    ? 'bg-[#3525cd]/10 text-[#3525cd] border-l-[3px] border-[#3525cd] border-t-transparent border-r-transparent border-b-transparent font-bold'
-    : 'text-[#464555] border-transparent hover:bg-[#f0f3ff] hover:text-[#151c27] hover:border-[#c7c4d8]'
+    ? 'bg-white text-[#3525cd] border-transparent shadow-sm font-bold'
+    : 'text-white/85 border-transparent hover:bg-white/10 hover:text-white'
 );
 
 // ── Payroll collapsible dropdown (root admin) ─────────────────────────────────
@@ -126,8 +126,8 @@ function RootPayrollGroup({ onClose }) {
         className={cn(
           'w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold border transition-all duration-150',
           isChildActive
-            ? 'bg-[#3525cd]/10 text-[#3525cd] border-l-[3px] border-[#3525cd] border-t-transparent border-r-transparent border-b-transparent font-bold'
-            : 'text-[#464555] border-transparent hover:bg-[#f0f3ff] hover:text-[#151c27] hover:border-[#c7c4d8]'
+            ? 'bg-white text-[#3525cd] border-transparent shadow-sm font-bold'
+            : 'text-white/85 border-transparent hover:bg-white/10 hover:text-white'
         )}>
         <DollarSign size={17} className={cn('flex-shrink-0', isChildActive ? 'opacity-100' : 'opacity-60')} />
         <span className="flex-1 text-left">Payroll</span>
@@ -139,7 +139,7 @@ function RootPayrollGroup({ onClose }) {
 
       {/* Sub-items */}
       {open && (
-        <div className="ml-4 mt-0.5 pl-3 border-l-2 border-[#e7eefe] flex flex-col gap-0.5">
+        <div className="ml-4 mt-0.5 pl-3 border-l-2 border-white/20 flex flex-col gap-0.5">
           {ROOT_PAYROLL_SUB_ITEMS.map(({ to, label, Icon }) => (
             <NavLink
               key={to}
@@ -148,8 +148,8 @@ function RootPayrollGroup({ onClose }) {
               className={({ isActive }) => cn(
                 'flex items-center gap-2.5 px-3 py-2 rounded-lg text-[0.82rem] font-semibold border transition-all duration-150',
                 isActive
-                  ? 'bg-[#3525cd]/10 text-[#3525cd] border-[#3525cd]/20 font-bold'
-                  : 'text-[#464555] border-transparent hover:bg-[#f0f3ff] hover:text-[#151c27]'
+                  ? 'bg-white text-[#3525cd] border-transparent font-bold'
+                  : 'text-white/85 border-transparent hover:bg-white/10 hover:text-white'
               )}>
               {({ isActive }) => (
                 <>
@@ -181,7 +181,7 @@ function RootFinanceSection({ onClose, unread }) {
 
   return (
     <div id="tour-nav-finance" className="mb-2">
-      <p className="text-[0.6rem] font-black uppercase tracking-[0.14em] text-[#777587] px-2.5 py-2">Finance</p>
+      <p className="text-[0.6rem] font-black uppercase tracking-[0.14em] text-white/60 px-2.5 py-2">Finance</p>
       <div className="flex flex-col gap-0.5">
         {payrollEnabled && <RootPayrollGroup onClose={onClose} />}
         {otherItems.map(({ to, label, Icon }) => (
@@ -236,22 +236,22 @@ function RootSidebar({ onClose, onMenuClick, onSearchOpen }) {
   function handleLogout() { logout(); navigate('/login'); }
 
   return (
-    <aside className="w-64 h-full bg-white flex flex-col flex-shrink-0 relative border-r border-[#c7c4d8] shadow-sm">
+    <aside className="w-64 h-full bg-[#3525cd] flex flex-col flex-shrink-0 relative border-r border-white/10 shadow-sm">
       {/* Brand */}
-      <div className="px-4 py-4 border-b border-[#e7eefe]">
+      <div className="px-4 py-4 border-b border-white/15">
         <div className="flex items-center gap-3">
           <button
             onClick={onMenuClick}
             aria-label="Close menu"
-            className="md:hidden w-8 h-8 flex items-center justify-center rounded-lg border border-[#c7c4d8] bg-white hover:bg-[#f0f3ff] transition-colors flex-shrink-0">
-            <X size={16} className="text-[#464555]" />
+            className="md:hidden w-8 h-8 flex items-center justify-center rounded-lg border border-white/30 bg-white/10 hover:bg-white/20 transition-colors flex-shrink-0">
+            <X size={16} className="text-white" />
           </button>
-          <img src="/LogoWithoutName.svg" alt="HRMS" className="w-9 h-9 flex-shrink-0 hidden md:block" />
+          <span className="w-10 h-10 rounded-xl bg-white hidden md:flex items-center justify-center p-1 flex-shrink-0 shadow-sm"><img src="/Logo.png" alt="HRMS" className="w-full h-full object-contain" /></span>
           <div>
-            <h2 className="text-sm font-black text-[#151c27] leading-tight tracking-tight truncate">
+            <h2 className="text-sm font-black text-white leading-tight tracking-tight truncate">
               {organization?.name || 'Lumos Logic'}
             </h2>
-            <p className="text-[0.65rem] text-[#777587] mt-0.5 tracking-wide">Root Admin Console</p>
+            <p className="text-[0.65rem] text-white/70 mt-0.5 tracking-wide">Root Admin Console</p>
           </div>
         </div>
       </div>
@@ -260,8 +260,8 @@ function RootSidebar({ onClose, onMenuClick, onSearchOpen }) {
       <div className="px-3 py-2">
         <button
           onClick={onSearchOpen}
-          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-[#777587] bg-[#f9f9ff] border border-[#c7c4d8] hover:border-[#3525cd]/40 hover:text-[#151c27] transition-colors">
-          <Search size={13} className="text-[#3525cd]" />
+          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-white/80 bg-white/10 border border-white/20 hover:bg-white/15 hover:text-white transition-colors">
+          <Search size={13} className="text-white" />
           <span>Search...</span>
         </button>
       </div>
@@ -285,7 +285,7 @@ function RootSidebar({ onClose, onMenuClick, onSearchOpen }) {
           if (!visibleItems.length) return null;
           return (
             <div key={sec.id} id={sec.id} className="mb-2">
-              <p className="text-[0.6rem] font-black uppercase tracking-[0.14em] text-[#777587] px-2.5 py-2">
+              <p className="text-[0.6rem] font-black uppercase tracking-[0.14em] text-white/60 px-2.5 py-2">
                 {sec.title}
               </p>
               <div className="flex flex-col gap-0.5">
@@ -298,7 +298,7 @@ function RootSidebar({ onClose, onMenuClick, onSearchOpen }) {
                           <Icon size={17} className={cn('flex-shrink-0', isActive ? 'opacity-100' : 'opacity-60')} />
                           {label}
                           {badge && (
-                            <span className="ml-auto bg-[#3525cd] text-white text-[0.6rem] font-black px-1.5 py-0.5 rounded-full min-w-[1.2rem] text-center">
+                            <span className="ml-auto bg-rose-500 text-white text-[0.6rem] font-black px-1.5 py-0.5 rounded-full min-w-[1.2rem] text-center">
                               {badge > 99 ? '99+' : badge}
                             </span>
                           )}
@@ -314,21 +314,21 @@ function RootSidebar({ onClose, onMenuClick, onSearchOpen }) {
       </nav>
 
       {/* User */}
-      <div id="tour-user-card" className="p-3 border-t border-[#e7eefe]">
-        <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-[#f0f3ff] transition-colors cursor-default border border-transparent hover:border-[#c7c4d8]">
+      <div id="tour-user-card" className="p-3 border-t border-white/15">
+        <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition-colors cursor-default border border-transparent">
           <div
             className="w-9 h-9 rounded-full flex items-center justify-center text-[0.78rem] font-black text-white flex-shrink-0 border-2 border-white shadow-md"
             style={{ background: user?.avatar_color || '#3525cd' }}>
             {initials(user?.name || '')}
           </div>
           <div className="flex-1 min-w-0">
-            <p className="text-[0.84rem] font-black text-[#151c27] leading-tight truncate">{user?.name}</p>
-            <p className="text-[0.68rem] text-[#777587] mt-0.5">Root Administrator</p>
+            <p className="text-[0.84rem] font-black text-white leading-tight truncate">{user?.name}</p>
+            <p className="text-[0.68rem] text-white/70 mt-0.5">Root Administrator</p>
           </div>
         </div>
         <button
           onClick={handleLogout}
-          className="flex items-center gap-2 w-full px-2.5 py-2 mt-1 rounded-lg text-[0.82rem] font-semibold text-rose-400/80 hover:bg-rose-50 hover:text-rose-500 transition-all duration-150">
+          className="flex items-center gap-2 w-full px-2.5 py-2 mt-1 rounded-lg text-[0.82rem] font-semibold text-white/80 hover:bg-white/10 hover:text-white transition-all duration-150">
           <LogOut size={16} /> Sign Out
         </button>
       </div>

@@ -1,0 +1,1 @@
+import{b2 as s,V as t,aa as n}from"./index-BfHnJC0n.js";function a(){const{data:e}=s({queryKey:["my-check-in-status"],queryFn:()=>n("/attendance/check-in-status"),staleTime:t.frequent,retry:!1});return{blocked:(e==null?void 0:e.allowed)===!1,reason:(e==null?void 0:e.reason)||""}}export{a as u};

@@ -91,21 +91,21 @@ function EmployeeSidebar({ onClose, onMenuClick, onSearchOpen }) {
   function handleLogout() { logout(); navigate('/login'); }
 
   return (
-    <aside className="w-64 h-full bg-white flex flex-col flex-shrink-0 relative border-r border-[#c7c4d8] shadow-sm">
+    <aside className="w-64 h-full bg-[#3525cd] flex flex-col flex-shrink-0 relative border-r border-white/10 shadow-sm">
       {/* Brand + mobile menu toggle */}
-      <div className="px-4 py-4 border-b border-[#e7eefe]">
+      <div className="px-4 py-4 border-b border-white/15">
         <div className="flex items-center gap-3">
           <button
             onClick={onMenuClick}
             aria-label="Close menu"
-            className="md:hidden w-8 h-8 flex items-center justify-center rounded-lg border border-[#c7c4d8] bg-white hover:bg-[#f0f3ff] transition-colors flex-shrink-0"
+            className="md:hidden w-8 h-8 flex items-center justify-center rounded-lg border border-white/30 bg-white/10 hover:bg-white/20 transition-colors flex-shrink-0"
           >
-            <X size={16} className="text-[#464555]" />
+            <X size={16} className="text-white" />
           </button>
-          <img src="/LogoWithoutName.svg" alt="Lumos Logic" className="w-9 h-9 flex-shrink-0 hidden md:block" />
+          <span className="w-10 h-10 rounded-xl bg-white hidden md:flex items-center justify-center p-1 flex-shrink-0 shadow-sm"><img src="/Logo.png" alt="Lumos Logic" className="w-full h-full object-contain" /></span>
           <div>
-            <h2 className="text-sm font-black text-[#151c27] leading-tight tracking-tight">Lumos Logic</h2>
-            <p className="text-[0.65rem] text-[#777587] mt-0.5 tracking-wide">Employee Portal</p>
+            <h2 className="text-sm font-black text-white leading-tight tracking-tight">Lumos Logic</h2>
+            <p className="text-[0.65rem] text-white/70 mt-0.5 tracking-wide">Employee Portal</p>
           </div>
         </div>
       </div>
@@ -114,9 +114,9 @@ function EmployeeSidebar({ onClose, onMenuClick, onSearchOpen }) {
       <div className="px-3 py-2">
         <button
           onClick={onSearchOpen}
-          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-[#777587] bg-[#f9f9ff] border border-[#c7c4d8] hover:border-[#3525cd]/40 hover:text-[#151c27] transition-colors"
+          className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-xs text-white/80 bg-white/10 border border-white/20 hover:bg-white/15 hover:text-white transition-colors"
         >
-          <Search size={13} className="text-[#3525cd]" />
+          <Search size={13} className="text-white" />
           <span>Search...</span>
         </button>
       </div>
@@ -124,21 +124,21 @@ function EmployeeSidebar({ onClose, onMenuClick, onSearchOpen }) {
       <nav ref={navRef} className="flex-1 px-3 pb-3 pt-1 overflow-y-auto space-y-1">
         {sections.map((sec, idx) => (
           <div key={sec.title} id={`tour-emp-${['workspace','selfservice','growth','company'][idx] || idx}`} className="mb-2">
-            <p className="text-[0.6rem] font-black uppercase tracking-[0.14em] text-[#777587] px-2.5 py-2">{sec.title}</p>
+            <p className="text-[0.6rem] font-black uppercase tracking-[0.14em] text-white/60 px-2.5 py-2">{sec.title}</p>
             <div className="flex flex-col gap-0.5">
               {sec.items.map(({ to, label, Icon, badge }) => (
                 <NavLink key={to} to={to} onClick={onClose} {...prefetchProps(to)}
                   className={({ isActive }) => cn(
                     'flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold border transition-all duration-150',
                     isActive
-                      ? 'bg-[#3525cd]/10 text-[#3525cd] border-l-[3px] border-[#3525cd] border-t-transparent border-r-transparent border-b-transparent font-bold'
-                      : 'text-[#464555] border-transparent hover:bg-[#f0f3ff] hover:text-[#151c27] hover:border-[#c7c4d8]'
+                      ? 'bg-white text-[#3525cd] border-transparent shadow-sm font-bold'
+                      : 'text-white/85 border-transparent hover:bg-white/10 hover:text-white'
                   )}>
                   {({ isActive }) => (
                     <>
                       <Icon size={17} className={cn('flex-shrink-0', isActive ? 'opacity-100' : 'opacity-60')} />
                       {label}
-                      {badge && unread > 0 && <span className="ml-auto bg-[#3525cd] text-white text-[0.6rem] font-black px-1.5 py-0.5 rounded-full">{unread > 99 ? '99+' : unread}</span>}
+                      {badge && unread > 0 && <span className="ml-auto bg-rose-500 text-white text-[0.6rem] font-black px-1.5 py-0.5 rounded-full">{unread > 99 ? '99+' : unread}</span>}
                     </>
                   )}
                 </NavLink>
@@ -150,21 +150,21 @@ function EmployeeSidebar({ onClose, onMenuClick, onSearchOpen }) {
         {/* Team Approvals — only visible to Department Heads */}
         {isDeptHead && (
           <div className="mb-2">
-            <p className="text-[0.6rem] font-black uppercase tracking-[0.14em] text-[#777587] px-2.5 py-2">My Team</p>
+            <p className="text-[0.6rem] font-black uppercase tracking-[0.14em] text-white/60 px-2.5 py-2">My Team</p>
             <div className="flex flex-col gap-0.5">
               <NavLink to="/portal/dept-approvals" onClick={onClose}
                 className={({ isActive }) => cn(
                   'flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-semibold border transition-all duration-150',
                   isActive
-                    ? 'bg-[#3525cd]/10 text-[#3525cd] border-l-[3px] border-[#3525cd] border-t-transparent border-r-transparent border-b-transparent font-bold'
-                    : 'text-[#464555] border-transparent hover:bg-[#f0f3ff] hover:text-[#151c27] hover:border-[#c7c4d8]'
+                    ? 'bg-white text-[#3525cd] border-transparent shadow-sm font-bold'
+                    : 'text-white/85 border-transparent hover:bg-white/10 hover:text-white'
                 )}>
                 {({ isActive }) => (
                   <>
                     <ClipboardCheck size={17} className={cn('flex-shrink-0', isActive ? 'opacity-100' : 'opacity-60')} />
                     Team Approvals
                     {pendingDeptCount > 0 && (
-                      <span className="ml-auto bg-[#3525cd] text-white text-[0.6rem] font-black px-1.5 py-0.5 rounded-full">
+                      <span className="ml-auto bg-rose-500 text-white text-[0.6rem] font-black px-1.5 py-0.5 rounded-full">
                         {pendingDeptCount > 99 ? '99+' : pendingDeptCount}
                       </span>
                     )}
@@ -176,13 +176,13 @@ function EmployeeSidebar({ onClose, onMenuClick, onSearchOpen }) {
         )}
       </nav>
 
-      <div id="tour-emp-user-card" className="p-3 border-t border-[#e7eefe]">
+      <div id="tour-emp-user-card" className="p-3 border-t border-white/15">
         <NavLink to="/portal/profile" onClick={onClose}
           className={({ isActive }) => cn(
             'flex items-center gap-2.5 px-2.5 py-2 rounded-lg border transition-all duration-150',
             isActive
-              ? 'bg-[#3525cd]/10 text-[#3525cd] border-l-[3px] border-[#3525cd] border-t-transparent border-r-transparent border-b-transparent'
-              : 'border-transparent hover:bg-[#f0f3ff] hover:border-[#c7c4d8] cursor-pointer'
+              ? 'bg-white text-[#3525cd] border-transparent shadow-sm'
+              : 'border-transparent hover:bg-white/10 cursor-pointer'
           )}>
           {() => (
             <>
@@ -194,14 +194,14 @@ function EmployeeSidebar({ onClose, onMenuClick, onSearchOpen }) {
                   : initials(user?.name || '')}
               </div>
               <div className="flex-1 min-w-0">
-                <p className="text-[0.84rem] font-black text-[#151c27] leading-tight truncate">{user?.name}</p>
-                <p className="text-[0.68rem] text-[#777587] mt-0.5 truncate">{user?.position || 'Employee'} · My Profile</p>
+                <p className="text-[0.84rem] font-black text-white leading-tight truncate">{user?.name}</p>
+                <p className="text-[0.68rem] text-white/70 mt-0.5 truncate">{user?.position || 'Employee'} · My Profile</p>
               </div>
             </>
           )}
         </NavLink>
         <button onClick={handleLogout}
-          className="flex items-center gap-2 w-full px-2.5 py-2 mt-1 rounded-lg text-[0.82rem] font-semibold text-rose-400/80 hover:bg-rose-50 hover:text-rose-500 transition-all duration-150">
+          className="flex items-center gap-2 w-full px-2.5 py-2 mt-1 rounded-lg text-[0.82rem] font-semibold text-white/80 hover:bg-white/10 hover:text-white transition-all duration-150">
           <LogOut size={16} /> Sign Out
         </button>
       </div>
