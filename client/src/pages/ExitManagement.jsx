@@ -93,10 +93,22 @@ function RecordExitModal({ open, onClose }) {
   const eligible = employees.filter(e => !['inactive', 'resigned', 'terminated'].includes(e.employee_status));
   const isTerm = form.exit_type === 'termination';
 
+  // Every missing field is reported at once (inline under the field), not one toast per attempt.
+  const [errors, setErrors] = useState({});
+  const validate = () => {
+    const e = {};
+    if (!form.user_id) e.user_id = 'Select an employee';
+    if (!isTerm && !form.resignation_date) e.resignation_date = 'Resignation received date is required';
+    if (!form.last_working_day) e.last_working_day = isTerm ? 'Effective date is required' : 'Last working day is required';
+    else if (!isTerm && form.resignation_date && form.last_working_day < form.resignation_date) e.last_working_day = 'Last working day cannot be before the resignation date';
+    setErrors(e);
+    return Object.keys(e).length === 0;
+  };
+  const errCls = (k) => errors[k] ? ' border-rose-400' : '';
+  const FieldError = ({ k }) => errors[k] ? <p className="text-xs text-rose-600 mt-1">{errors[k]}</p> : null;
+
   const mut = useMutation({
     mutationFn: async () => {
-      if (!form.user_id) throw new Error('Select an employee');
-      if (!form.last_working_day) throw new Error(isTerm ? 'Effective date is required' : 'Last working day is required');
       const created = await apiPost('/exit', {
         user_id: form.user_id,
         exit_type: form.exit_type,
@@ -120,7 +132,7 @@ function RecordExitModal({ open, onClose }) {
       footer={
         <div className="flex justify-end gap-3">
           <button className="btn btn-outline" onClick={onClose}>Cancel</button>
-          <button className="btn btn-danger" onClick={() => mut.mutate()} disabled={mut.isPending}>
+          <button className="btn btn-danger" onClick={() => { if (validate()) mut.mutate(); }} disabled={mut.isPending}>
             {mut.isPending ? <><span className="spinner w-4 h-4" />Saving…</> : <><LogOut size={14} />{isTerm ? 'Mark as Terminated' : 'Mark as Resigned'}</>}
           </button>
         </div>
@@ -128,10 +140,11 @@ function RecordExitModal({ open, onClose }) {
       <div className="space-y-4">
         <div>
           <label className="form-label">Employee *</label>
-          <select className="form-control" value={form.user_id} onChange={e => set('user_id', e.target.value)}>
+          <select className={`form-control${errCls('user_id')}`} value={form.user_id} onChange={e => set('user_id', e.target.value)}>
             <option value="">Select employee…</option>
             {eligible.map(e => <option key={e.id} value={e.id}>{e.name}{e.employee_id ? ` (${e.employee_id})` : ''}</option>)}
           </select>
+          <FieldError k="user_id" />
         </div>
         <div>
           <label className="form-label">Exit Type *</label>
@@ -141,11 +154,12 @@ function RecordExitModal({ open, onClose }) {
           </select>
         </div>
         {!isTerm && (
-          <div><label className="form-label">Resignation Received On *</label><input type="date" className="form-control" value={form.resignation_date} onChange={e => set('resignation_date', e.target.value)} /></div>
+          <div><label className="form-label">Resignation Received On *</label><input type="date" className={`form-control${errCls('resignation_date')}`} value={form.resignation_date} onChange={e => set('resignation_date', e.target.value)} /><FieldError k="resignation_date" /></div>
         )}
         <div>
           <label className="form-label">{isTerm ? 'Termination Effective Date *' : 'Last Working Day *'}</label>
-          <input type="date" className="form-control" value={form.last_working_day} onChange={e => set('last_working_day', e.target.value)} />
+          <input type="date" className={`form-control${errCls('last_working_day')}`} value={form.last_working_day} onChange={e => set('last_working_day', e.target.value)} />
+          <FieldError k="last_working_day" />
           <p className="form-hint">{isTerm ? 'Access is revoked immediately and the offboarding checklist is created.' : 'The employee moves to Resigned after this date.'}</p>
         </div>
         <div><label className="form-label">Reason / Notes <span className="font-normal text-[#777587] normal-case tracking-normal">(optional)</span></label><textarea className="form-control" rows={3} placeholder="e.g. Resigned via email dated…" value={form.reason} onChange={e => set('reason', e.target.value)} /></div>

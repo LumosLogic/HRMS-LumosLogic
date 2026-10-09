@@ -293,12 +293,19 @@ router.put('/:id', auth, hasPermission('exit', 'manage'), withBranchContext, asy
         // BUG_218: await this update so the status change is guaranteed before responding.
         // exit_type decides the resulting status; everything else (legacy status, session, checklist) is shared.
         const nextStatus = current.exit_type === 'termination' ? 'terminated' : 'resigned';
-        const { rows: pr } = await pool.query('SELECT employee_status FROM users WHERE id = $1 AND organization_id = $2', [current.user_id, oId]);
-        await db.from('users')
-          .update({ employee_status: nextStatus, status: lifecycle.legacyStatusFor(nextStatus) })
-          .eq('id', current.user_id)
-          .eq('organization_id', oId);
-        await lifecycle.afterStatusChange({ orgId: oId, userId: current.user_id, prev: pr[0]?.employee_status || 'active', next: nextStatus, actorId: req.user.id });
+        // A resignation with a FUTURE last working day leaves the employee active (still working, still counted
+        // everywhere) until that day; the daily resignation-expiry job moves them out afterwards.
+        const todayStr = new Date().toISOString().split('T')[0];
+        const lwdStr = data.last_working_day ? String(data.last_working_day).slice(0, 10) : null;
+        const stillServing = nextStatus === 'resigned' && lwdStr && lwdStr > todayStr;
+        if (!stillServing) {
+          const { rows: pr } = await pool.query('SELECT employee_status FROM users WHERE id = $1 AND organization_id = $2', [current.user_id, oId]);
+          await db.from('users')
+            .update({ employee_status: nextStatus, status: lifecycle.legacyStatusFor(nextStatus) })
+            .eq('id', current.user_id)
+            .eq('organization_id', oId);
+          await lifecycle.afterStatusChange({ orgId: oId, userId: current.user_id, prev: pr[0]?.employee_status || 'active', next: nextStatus, actorId: req.user.id });
+        }
 
         // Notify branch-scoped admins of the approved exit — rewritten to avoid messy chaining
         ;(async () => {

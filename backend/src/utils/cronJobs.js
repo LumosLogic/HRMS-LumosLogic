@@ -352,7 +352,7 @@ async function runResignationExpiry() {
 
   // Find approved exit requests whose last_working_day is today or earlier
   const { data: expiredExits } = await db.from('exit_requests')
-    .select('user_id, organization_id, last_working_day')
+    .select('user_id, organization_id, last_working_day, status, exit_type')
     .in('status', ['approved', 'completed'])   // 'completed' offboarding must not stop the deactivation
     .lte('last_working_day', today);
 
@@ -360,11 +360,16 @@ async function runResignationExpiry() {
 
   const userIds = [...new Set(expiredExits.map(e => e.user_id))];
 
-  // Only affect employees still in 'resigned' state (not already deactivated)
-  const { data: resignedUsers } = await db.from('users')
-    .select('id, organization_id, name')
+  // 'resigned' = legacy approvals that flipped the status immediately. Active/probation staff with an APPROVED
+  // resignation are the ones who kept working through their notice period. (A reactivation closes approved exits,
+  // so a rehired employee is never matched by an old exit.)
+  const approvedResignationIds = new Set(expiredExits
+    .filter(e => e.status === 'approved' && e.exit_type !== 'termination').map(e => String(e.user_id)));
+  const { data: candidates } = await db.from('users')
+    .select('id, organization_id, name, employee_status')
     .in('id', userIds)
-    .eq('employee_status', 'resigned');
+    .in('employee_status', ['resigned', 'active', 'probation']);
+  const resignedUsers = (candidates || []).filter(u => u.employee_status === 'resigned' || approvedResignationIds.has(String(u.id)));
 
   if (!resignedUsers?.length) return;
 
