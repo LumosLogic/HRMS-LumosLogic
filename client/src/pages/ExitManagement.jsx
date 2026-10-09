@@ -433,7 +433,8 @@ function ExitCard({ req, isAdmin }) {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap mb-1">
               <span className="font-black text-[#151c27]">{isAdmin ? req.user_name : 'My Resignation'}</span>
-              <span className={`badge ${cfg.cls}`}>{cfg.label}</span>
+              {/* A termination is accepted by definition, so only the Termination badge is shown for it */}
+              {!(req.exit_type === 'termination' && req.status === 'approved') && <span className={`badge ${cfg.cls}`}>{cfg.label}</span>}
               {req.exit_type === 'termination' && <span className="badge badge-rejected">Termination</span>}
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-6 gap-y-0.5 text-xs">

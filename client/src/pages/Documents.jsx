@@ -22,6 +22,7 @@ import { useEmployees } from '@/hooks/useEmployees';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
 import { Avatar } from '@/components/ui/Avatar';
 import { fmtDate } from '@/lib/utils';
+import { employeeDocStats } from '@/lib/employeeDocStats';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 const EMPLOYEE_CATEGORIES = [
@@ -2760,28 +2761,16 @@ function EmployeeDocumentsDashboard() {
   // Shared documents from HR/Root Admin (visibility='all', 'self', or 'specific' with me included)
   const { data: sharedDocs = [] } = useDocumentsList();
 
-  // Compute stats
-  const requiredReqs   = requirements.filter(r => r.is_required);
-  const totalRequired  = requiredReqs.length;
-  const approved       = requirements.filter(r => r._submission?.status === 'approved').length;
-  const underReview    = requirements.filter(r => r._submission?.status === 'under_review').length;
-  const reuploadReq    = requirements.filter(r => r._submission?.status === 're_upload_requested').length;
-  const notUploaded    = requiredReqs.filter(r => !r._submission).length;
-  const approvedReq    = requiredReqs.filter(r => r._submission?.status === 'approved').length;
-  const progressPct    = totalRequired > 0 ? Math.round((approvedReq / totalRequired) * 100) : 0;
-
-  // Action required: required docs not yet uploaded + any doc rejected/re-upload requested
-  const actionRequired = requirements.filter(r =>
-    (r.is_required && !r._submission) ||
-    r._submission?.status === 'rejected' ||
-    r._submission?.status === 're_upload_requested'
-  );
-
-  // Optional requirements that haven't been uploaded yet (Bug #10)
-  const optionalPending = requirements.filter(r => !r.is_required && !r._submission);
-
-  // Uploaded documents (all submissions)
-  const uploadedDocs = requirements.filter(r => r._submission);
+  // Cards / lists come from one tested helper (lib/employeeDocStats.js): the cards describe REQUIRED documents only,
+  // already-uploaded optional documents stay in "My Submitted Documents", and the Optional list offers only what is
+  // still not uploaded.
+  const {
+    totalRequired, approved, underReview, reuploadReq, notUploaded, progressPct,
+    approvedReq, actionRequired, optionalPending, optionalTotal, uploadedDocs,
+  } = (() => {
+    const st = employeeDocStats(requirements);
+    return { ...st, reuploadReq: st.reuploadRequested, approvedReq: st.approved, uploadedDocs: st.uploaded };
+  })();
 
   function getActionLabel(req) {
     const sub = req._submission;
@@ -2987,44 +2976,40 @@ function EmployeeDocumentsDashboard() {
         </div>
       )}
 
-      {/* Optional Documents — always visible, never hidden */}
-      {requirements.filter(r => !r.is_required).length > 0 && (
+      {/* Optional Documents still to upload. Uploaded optional documents are in "My Submitted Documents" above; a rejected or
+          re-upload-requested one is in "Action Required" — so nothing is listed twice. */}
+      {optionalPending.length > 0 && (
         <div className="bg-white rounded-xl border border-[#c7c4d8] mb-5">
           <div className="flex items-center gap-2 px-5 py-4 border-b border-[#f0f3ff]">
             <Info size={16} className="text-[#3525cd]" />
             <p className="text-sm font-black text-[#151c27]">
-              Optional Documents ({requirements.filter(r => !r.is_required).length})
+              Optional Documents ({optionalPending.length})
             </p>
-            <span className="text-xs text-[#777587] ml-1">— Upload if available</span>
+            <span className="text-xs text-[#777587] ml-1">
+              — {optionalPending.length} of {optionalTotal} not uploaded yet{optionalTotal > optionalPending.length ? ` · the other ${optionalTotal - optionalPending.length} are in My Submitted Documents` : ''}
+            </span>
           </div>
           <div className="divide-y divide-[#f0f3ff]">
-            {requirements.filter(r => !r.is_required).map(req => {
-              const sub = req._submission;
-              return (
-                <div key={req.id} className="flex items-center gap-4 px-5 py-4">
-                  <div className="w-10 h-10 rounded-xl bg-[#f0f3ff] flex items-center justify-center flex-shrink-0">
-                    {fileIcon(sub?.file_type || '', 18)}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <p className="font-bold text-[#151c27] text-sm">{req.name}</p>
-                      <span className="px-2 py-0.5 rounded-full text-[0.65rem] font-bold border bg-[#f0f3ff] text-[#464555] border-[#c7c4d8]">Optional</span>
-                      {sub && <StatusBadge status={sub.status} />}
-                    </div>
-                    {req.description && <p className="text-xs text-[#777587] mt-0.5">{req.description}</p>}
-                    {!sub && <p className="text-xs text-[#9ca3af] mt-0.5">Not uploaded yet</p>}
-                    {sub?.status === 'rejected' && sub.rejection_reason && (
-                      <p className="text-xs text-rose-600 mt-1"><span className="font-bold">Reason:</span> {sub.rejection_reason}</p>
-                    )}
-                  </div>
-                  <button
-                    onClick={() => setUploadFor(req)}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold border bg-white text-[#3525cd] border-[#3525cd]/40 hover:bg-[#f0f3ff] transition-all flex-shrink-0">
-                    <Upload size={12} /> {sub ? 'Re-upload' : 'Upload'}
-                  </button>
+            {optionalPending.map(req => (
+              <div key={req.id} className="flex items-center gap-4 px-5 py-4">
+                <div className="w-10 h-10 rounded-xl bg-[#f0f3ff] flex items-center justify-center flex-shrink-0">
+                  {fileIcon('', 18)}
                 </div>
-              );
-            })}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="font-bold text-[#151c27] text-sm">{req.name}</p>
+                    <span className="px-2 py-0.5 rounded-full text-[0.65rem] font-bold border bg-[#f0f3ff] text-[#464555] border-[#c7c4d8]">Optional</span>
+                  </div>
+                  {req.description && <p className="text-xs text-[#777587] mt-0.5">{req.description}</p>}
+                  <p className="text-xs text-[#9ca3af] mt-0.5">Not uploaded yet</p>
+                </div>
+                <button
+                  onClick={() => setUploadFor(req)}
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold border bg-white text-[#3525cd] border-[#3525cd]/40 hover:bg-[#f0f3ff] transition-all flex-shrink-0">
+                  <Upload size={12} /> Upload
+                </button>
+              </div>
+            ))}
           </div>
         </div>
       )}
