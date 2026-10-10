@@ -165,7 +165,17 @@ async function prepareEmployeeBgv(pool, { orgId, employeeId, overrides, docDetai
   selectDocuments(documents);
   for (const d of documents) d.detail = details[String(d.submission_id)] || {};
 
+  // Signed consent uploaded by HR / root admin (URL stays server-side; toReviewView exposes name + date only).
+  const { rows: cons } = await pool.query(
+    `SELECT file_url, file_name, file_type, uploaded_at FROM bgv_consents WHERE organization_id = $1 AND employee_id = $2`,
+    [orgId, employeeId]);
+  const consent = cons[0] || null;
+  const consentRequired = (process.env.SPRINGVERIFY_CONSENT_MODE || '').trim().toLowerCase() === 'letter';
+
   const missing = [];
+  if (consentRequired && !consent)
+    missing.push({ field: 'consent', label: 'Signed consent document', editable: false,
+      reason: 'Upload the employee\'s signed BGV consent below before submitting.' });
   if (cleanName(employee.name).length < 2)
     missing.push({ field: 'name', label: 'Name', reason: 'Employee name is missing or invalid — fix it in the employee profile.', editable: false });
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(employee.email.trim()))
@@ -176,7 +186,7 @@ async function prepareEmployeeBgv(pool, { orgId, employeeId, overrides, docDetai
     missing.push({ field: 'documents', label: 'Documents to verify', editable: false,
       reason: 'No approved document that BGV verifies (PAN / Driving License / Passport / Voter ID, address proof, employment record or education record).' });
 
-  return { employee, documents, missing, ready: missing.length === 0 };
+  return { employee, documents, consent, consentRequired, missing, ready: missing.length === 0 };
 }
 
 /** Browser-safe view: no file URLs (documents are opened through the existing Documents flow). */
@@ -194,6 +204,8 @@ function toReviewView(prepared) {
       city: detail.city || '', state: detail.state || '', pin_code: detail.pin_code || '',
     })),
     course_types: COURSE_TYPES,
+    consent: prepared.consent ? { file_name: prepared.consent.file_name, file_type: prepared.consent.file_type, uploaded_at: prepared.consent.uploaded_at } : null,
+    consent_required: !!prepared.consentRequired,
     missing: prepared.missing,
     ready: prepared.ready,
     editable_fields: Object.entries(EDITABLE_FIELDS).map(([key, s]) => ({ key, label: s.label, required: s.required })),

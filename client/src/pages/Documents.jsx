@@ -16,7 +16,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useToast } from '@/context/ToastContext';
 import { useBranch } from '@/context/BranchContext';
 import { useFeature } from '@/context/FeatureFlagContext';
-import { apiGet, apiPost, apiPatch, apiDelete } from '@/lib/api';
+import { apiGet, apiPost, apiPatch, apiDelete, apiUpload } from '@/lib/api';
 import { useBranchesList, useDocumentsList } from '@/hooks/useReferenceData';
 import { useEmployees } from '@/hooks/useEmployees';
 import { ConfirmModal } from '@/components/ui/ConfirmModal';
@@ -1762,6 +1762,13 @@ function BgvReviewModal({ employeeId, onClose }) {
     onError: (e) => { setBlockedMsg(e?.message || 'Could not submit BGV'); qc.invalidateQueries({ queryKey: ['bgv-review', employeeId] }); },
   });
 
+  // HR / root admin uploads the employee's signed consent; the server stores it and sends its URL to SpringVerify.
+  const uploadConsent = useMutation({
+    mutationFn: (file) => { const fd = new FormData(); fd.append('file', file); return apiUpload(`/bgv/employees/${employeeId}/consent`, fd); },
+    onSuccess: () => { toast('Consent uploaded', 'success'); qc.invalidateQueries({ queryKey: ['bgv-review', employeeId] }); },
+    onError: (e) => toast(e?.message || 'Could not upload consent', 'error'),
+  });
+
   const emp = data?.employee;
   const val = (k) => fields[k] ?? emp?.[k] ?? '';
   // An editable missing field counts as filled once HR types a value; the server re-validates on submit.
@@ -1804,6 +1811,24 @@ function BgvReviewModal({ employeeId, onClose }) {
                       onChange={e => setFields(p => ({ ...p, [f.key]: e.target.value }))} />
                   </div>
                 ))}
+              </div>
+            </div>
+
+            <div>
+              <p className="text-xs font-black text-[#151c27] mb-1">
+                Consent document{data.consent_required && <span className="text-rose-500"> *</span>}
+              </p>
+              <p className="text-[0.65rem] text-[#777587] mb-2">The employee's signed BGV consent (PDF, JPG or PNG). It is sent to SpringVerify with the request.</p>
+              <div className="flex items-center justify-between gap-3 border border-[#f0f3ff] rounded-xl px-3 py-2">
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-[#151c27] truncate">{data.consent ? data.consent.file_name : 'No consent uploaded'}</p>
+                  {data.consent && <p className="text-[0.65rem] text-[#9ca3af]">Uploaded {new Date(data.consent.uploaded_at).toLocaleDateString()}</p>}
+                </div>
+                <label className={`btn btn-outline text-xs cursor-pointer ${uploadConsent.isPending ? 'opacity-60 pointer-events-none' : ''}`}>
+                  {uploadConsent.isPending ? 'Uploading…' : data.consent ? 'Replace' : 'Upload'}
+                  <input type="file" accept=".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png" className="hidden"
+                    onChange={e => { const f = e.target.files?.[0]; e.target.value = ''; if (f) uploadConsent.mutate(f); }} />
+                </label>
               </div>
             </div>
 

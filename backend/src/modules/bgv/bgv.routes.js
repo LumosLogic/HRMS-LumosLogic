@@ -22,6 +22,10 @@ const { withBranchContext } = require('../../middleware/branchContext');
 const { resolveEmployeeIds, canAdminAccessUser } = require('../../utils/branchFilter');
 const { getProvider, BgvProviderError } = require('./bgv.provider');
 const { prepareEmployeeBgv, toReviewView, classifyDoc } = require('./bgv.prepare');
+const upload = require('../../middleware/upload');
+const cloudinary = require('../../config/cloudinary');
+
+const CONSENT_MIMES = ['application/pdf', 'image/jpeg', 'image/png'];
 
 const ACTIVE = ['pending', 'in_progress'];
 const TERMINAL = ['completed', 'failed', 'cancelled'];
@@ -287,6 +291,45 @@ router.get('/employees/:employeeId/review', auth, requireAdmin, withBranchContex
   }
 });
 
+// POST /employees/:employeeId/consent — HR / root admin uploads the employee's signed BGV consent (multipart, field "file").
+// One per employee; a new upload replaces the old one. Sent to SpringVerify as candidate.consent / consent.doc_url.
+router.post('/employees/:employeeId/consent', auth, requireAdmin, withBranchContext, upload.single('file'), async (req, res) => {
+  try {
+    const g = await loadEmployeeGuard(req, res); if (!g) return;
+    const { oId, employeeId } = g;
+    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+    if (!CONSENT_MIMES.includes(req.file.mimetype))
+      return res.status(400).json({ error: 'Consent must be a PDF, JPG or PNG file.' });
+
+    const result = await new Promise((resolve, reject) => {
+      cloudinary.uploader.upload_stream(
+        { folder: `hrms/${oId}/bgv-consent`, resource_type: 'auto' },
+        (err, r) => err ? reject(err) : resolve(r)).end(req.file.buffer);
+    });
+    if (!/^https:\/\//i.test(result.secure_url || '')) return res.status(502).json({ error: 'Upload failed. Please try again.' });
+
+    const { rows: prev } = await pool.query(
+      `SELECT public_id FROM bgv_consents WHERE organization_id = $1 AND employee_id = $2`, [oId, employeeId]);
+    const { rows } = await pool.query(
+      `INSERT INTO bgv_consents (organization_id, employee_id, file_url, public_id, file_name, file_type, file_size, uploaded_by, uploaded_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,NOW())
+       ON CONFLICT (organization_id, employee_id) DO UPDATE
+         SET file_url = EXCLUDED.file_url, public_id = EXCLUDED.public_id, file_name = EXCLUDED.file_name,
+             file_type = EXCLUDED.file_type, file_size = EXCLUDED.file_size, uploaded_by = EXCLUDED.uploaded_by, uploaded_at = NOW()
+       RETURNING file_name, file_type, uploaded_at`,
+      [oId, employeeId, result.secure_url, result.public_id, String(req.file.originalname).slice(0, 200), req.file.mimetype, req.file.size, req.user.id]);
+    if (prev[0]?.public_id && prev[0].public_id !== result.public_id) {
+      try { await cloudinary.uploader.destroy(prev[0].public_id, { resource_type: 'image' }); } catch { /* already gone */ }
+    }
+    await audit(pool, { orgId: oId, requestId: null, provider: 'springverify', type: 'consent_uploaded', actorId: req.user.id,
+                        payload: { employee_id: employeeId } }).catch(() => {});
+    res.json({ consent: rows[0] });
+  } catch (err) {
+    console.error('[bgv] consent upload failed:', err.message);
+    res.status(500).json({ error: 'Failed to upload consent' });
+  }
+});
+
 const SUBMIT_FRIENDLY = {
   INVALID_INPUT: 'The employee needs a valid name, email address and 10-digit mobile number before BGV can be requested.',
   DUPLICATE_CANDIDATE: 'This person already exists in SpringVerify (same email, phone or employee id).',
@@ -366,7 +409,7 @@ router.post('/employees/:employeeId/submit', auth, requireAdmin, withBranchConte
     let candidateId = reuseCandidateId;
     if (!candidateId) {
       try {
-        const out = await provider.addCandidate({ employee: prepared.employee, reference });
+        const out = await provider.addCandidate({ employee: prepared.employee, reference, consentUrl: prepared.consent?.file_url });
         candidateId = out.candidateId;
         await pool.query(`UPDATE bgv_requests SET provider_candidate_id = $2, provider_status = $3, updated_at = NOW() WHERE id = $1`,
           [requestId, candidateId, out.providerStatus || null]);
@@ -379,7 +422,7 @@ router.post('/employees/:employeeId/submit', auth, requireAdmin, withBranchConte
     }
 
     try {
-      const out = await provider.submitBgv({ candidateId, employee: prepared.employee, documents: prepared.documents });
+      const out = await provider.submitBgv({ candidateId, employee: prepared.employee, documents: prepared.documents, consentUrl: prepared.consent?.file_url });
       const { rows } = await pool.query(
         `UPDATE bgv_requests SET status = 'in_progress', provider_status = $2, raw_response = $3, error_message = NULL, updated_at = NOW()
           WHERE id = $1 RETURNING ${PUBLIC_COLS}`,

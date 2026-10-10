@@ -30,6 +30,23 @@ function cfg() {
   return { base, token, subtypeId };
 }
 
+/**
+ * Consent (guide §2 "Consent"): GET /packages -> consent_type decides the model.
+ *   SPRINGVERIFY_CONSENT_MODE=undertaking -> candidate.is_consent_undertaking_letter: true   (UNDERTAKING_LETTER companies)
+ *   SPRINGVERIFY_CONSENT_MODE=letter      -> candidate.consent / consent.doc_url = SPRINGVERIFY_CONSENT_DOC_URL (CONSENT_LETTER companies, https URL only)
+ * Unset = nothing sent; SpringVerify then holds the candidate in "Consent missing" (status 11).
+ */
+function consentCfg(employeeConsentUrl) {
+  const mode = (process.env.SPRINGVERIFY_CONSENT_MODE || '').trim().toLowerCase();
+  if (mode === 'undertaking') return { undertaking: true };
+  const httpsUrl = (raw) => { let u; try { u = new URL(String(raw || '').trim()); } catch { u = null; } return u && u.protocol === 'https:' ? u.toString() : null; };
+  // Per-employee signed consent (uploaded by HR / root admin) wins; the shared env URL is only a fallback.
+  const docUrl = httpsUrl(employeeConsentUrl) || (mode === 'letter' ? httpsUrl(process.env.SPRINGVERIFY_CONSENT_DOC_URL) : null);
+  if (mode === 'letter' && !docUrl)
+    throw new BgvProviderError('INVALID_INPUT', 'a signed consent document is required before BGV can be submitted');
+  return docUrl ? { docUrl } : {};
+}
+
 // Field-level validation problems. /add uses errors[{path,msg}], /v2/submit-bgv uses errors[{field,error}].
 function fieldErrorsOf(json) {
   const arr = json && Array.isArray(json.errors) ? json.errors : [];
@@ -157,7 +174,7 @@ module.exports = {
    * HRMS-submitted flow, step 1: POST /external/v1/candidate/add with invite:false — SpringVerify sends the
    * employee NO email/form; HRMS submits everything by API in step 2 (submitBgv). Creates the candidate only.
    */
-  async addCandidate({ employee, reference }) {
+  async addCandidate({ employee, reference, consentUrl }) {
     const c = cfg();
     const name = cleanName(employee && employee.name);
     const email = String((employee && employee.email) || '').trim();
@@ -166,12 +183,15 @@ module.exports = {
     const phone = cleanPhone(employee.phone);
     if (!phone) throw new BgvProviderError('INVALID_INPUT', 'employee needs a valid 10-digit Indian mobile number');
 
+    const consent = consentCfg(consentUrl);
     const json = await request('POST', '/external/v1/candidate/add', {
       body: {
         candidate: {
           name, email, phone, invite: false,
           employee_id: String(reference),
           meta_data: { hrms_reference: String(reference), hrms_employee_id: String(employee.id) },
+          ...(consent.undertaking ? { is_consent_undertaking_letter: true } : {}),
+          ...(consent.docUrl ? { consent: consent.docUrl } : {}),
         },
         package: { subtype_id: c.subtypeId },
       },
@@ -187,7 +207,7 @@ module.exports = {
    * (sent as hosted https URLs; SpringVerify downloads and stores its own copy). One call covers ALL documents.
    * A 400 leaves the candidate unchanged, so the same candidate can be resubmitted after fixing the payload.
    */
-  async submitBgv({ candidateId, employee, documents }) {
+  async submitBgv({ candidateId, employee, documents, consentUrl }) {
     const docUrl = (d) => {
       let u; try { u = new URL(d.file_url); } catch { u = null; }
       if (!u || u.protocol !== 'https:') throw new BgvProviderError('INVALID_INPUT', `document "${d.requirement_name}" has no https file link`);
@@ -235,6 +255,9 @@ module.exports = {
       if (m.pin_code) cur.pin_code = m.pin_code;
       body.address = { current: cur };
     }
+
+    const consent = consentCfg(consentUrl);
+    if (consent.docUrl) body.consent = { doc_url: consent.docUrl };
 
     const json = await request('POST', '/external/v2/candidate/submit-bgv', { body });
     if (!json || json.success !== true) throw new BgvProviderError('PROVIDER_BAD_RESPONSE', 'submit not confirmed', { outcomeUnknown: true });
