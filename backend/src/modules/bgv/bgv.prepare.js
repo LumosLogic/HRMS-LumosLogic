@@ -17,6 +17,7 @@ const EDITABLE_FIELDS = {
   phone:         { label: 'Mobile number (10-digit Indian)', required: true,  max: 20 },
   date_of_birth: { label: 'Date of birth',                   required: false, max: 30 },
   address:       { label: 'Address',                         required: false, max: 500 },
+  uan_number:    { label: 'UAN number (12 digits)',          required: false, max: 20 },
 };
 
 const cleanName = (n) => String(n || '').replace(/[^\p{L}\s.\-]/gu, ' ').replace(/\s+/g, ' ').trim();
@@ -27,6 +28,8 @@ function cleanPhone(p) {
   else if (d.length === 11 && d.startsWith('0')) d = d.slice(1);
   return /^[6-9]\d{9}$/.test(d) ? d : null;
 }
+
+const cleanUan = (v) => { const d = String(v || '').replace(/\D/g, ''); return d.length === 12 ? d : ''; };
 
 /** Whitelist + trim HR-supplied values. Unknown keys are dropped; values are strings only. */
 function sanitizeOverrides(raw) {
@@ -134,7 +137,7 @@ function selectDocuments(documents) {
  */
 async function prepareEmployeeBgv(pool, { orgId, employeeId, overrides, docDetails }) {
   const { rows: emp } = await pool.query(
-    `SELECT id, name, email, phone, date_of_birth, address, gender
+    `SELECT id, name, email, phone, date_of_birth, address, gender, uan_no
        FROM users WHERE id = $1 AND organization_id = $2`, [employeeId, orgId]);
   if (!emp.length) return null;
   const ov = sanitizeOverrides(overrides);
@@ -147,6 +150,7 @@ async function prepareEmployeeBgv(pool, { orgId, employeeId, overrides, docDetai
     date_of_birth: ov.date_of_birth ?? u.date_of_birth ?? '',
     address: ov.address ?? u.address ?? '',
     gender: u.gender || '',
+    uan_number: cleanUan(ov.uan_number ?? u.uan_no),
   };
 
   // Only FINAL-approved submissions (status 'approved'); under_review / hr_approved / rejected are excluded.

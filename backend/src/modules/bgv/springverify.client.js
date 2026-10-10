@@ -198,6 +198,7 @@ module.exports = {
     const dob = toIsoDate(employee.date_of_birth); if (dob) body.basic_details.dob = dob;
     const gender = { male: '1', female: '2', 'non-binary': '3', other: '3' }[String(employee.gender || '').trim().toLowerCase()];
     if (gender) body.basic_details.gender = gender;
+    if (/^\d{12}$/.test(String(employee.uan_number || ''))) body.basic_details.uan_number = employee.uan_number;
 
     const sent = documents.filter(d => d.sv);
     const merged = (list) => Object.assign({}, ...list.map(d => d.detail || {})); // HR-entered details, per section
