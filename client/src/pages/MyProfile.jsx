@@ -352,7 +352,7 @@ export default function MyProfile() {
   const totpEnabled = meData?.totp_enabled;
 
   return (
-    <div className="max-w-3xl mx-auto space-y-5">
+    <div className="space-y-5">
       <div className="page-header mb-2">
         <div>
           <div className="page-title">Account Settings</div>
@@ -499,7 +499,7 @@ export default function MyProfile() {
           TAB 2: SECURITY
          ══════════════════════════════════════════════════════════════════════ */}
       {activeTab === 'security' && (
-        <div className="space-y-5">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
 
           {/* Section A: Change Password */}
           <div className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm p-6">
@@ -687,7 +687,7 @@ export default function MyProfile() {
           </div>
 
           {/* Section C: Login History */}
-          <div className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm p-6">
+          <div className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm p-6 xl:col-span-2">
             <div className="flex items-center justify-between mb-5">
               <h2 className="text-xs font-black text-[#777587] uppercase tracking-wider flex items-center gap-2">
                 <History size={13} className="text-[#3525cd]" /> Login History
@@ -766,7 +766,7 @@ export default function MyProfile() {
           TAB 3: PRIVACY & GDPR
          ══════════════════════════════════════════════════════════════════════ */}
       {activeTab === 'privacy' && (
-        <div className="space-y-5">
+        <div className="grid grid-cols-1 xl:grid-cols-2 gap-5 items-start">
 
           {/* Section A: Download My Data */}
           <div className="bg-white rounded-xl border border-[#c7c4d8] shadow-sm p-6">
@@ -802,7 +802,7 @@ export default function MyProfile() {
           </div>
 
           {/* Section C: Right to be Forgotten */}
-          <div className="bg-white rounded-xl border border-rose-200 shadow-sm p-6">
+          <div className="bg-white rounded-xl border border-rose-200 shadow-sm p-6 xl:col-span-2">
             <h2 className="text-xs font-black text-rose-700 uppercase tracking-wider flex items-center gap-2 mb-2">
               <Trash2 size={13} className="text-rose-600" /> Right to be Forgotten (GDPR)
             </h2>
