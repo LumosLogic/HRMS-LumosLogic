@@ -286,7 +286,7 @@ $$;
 -- ────────────────────────────────────────────────────────────
 -- REVIEW QUERIES
 -- ────────────────────────────────────────────────────────────
-SELECT id, name, code, location, is_active FROM branches WHERE org_id = 1 ORDER BY id;   -- expect 5 rows
+SELECT id, name, code, location, is_active FROM branches WHERE org_id = 1 ORDER BY id;   -- expect 6 rows: HO, Dalal, Third-Floor (inactive), 2x Bhuj, Mumbai (5 active)
 
 SELECT u.employee_id, u.name, u.weekly_off_day, q.specialization AS qualification, e.designation AS prev_desig, e.company_name AS prev_company
 FROM   users u
