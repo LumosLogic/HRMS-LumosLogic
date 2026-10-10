@@ -4,7 +4,7 @@ import { useBranch } from '@/context/BranchContext';
 import { BRANCH_KEYED } from '@/lib/queryScopes';
 import {
   LayoutDashboard, Calendar, FileText, Users, Settings, LogOut, ShieldCheck,
-  UserCircle, Bell, Building2, ClipboardList, CalendarDays, Shield, Clock,
+  Bell, Building2, ClipboardList, CalendarDays, Shield, Clock,
   DollarSign, Receipt, Monitor, BarChart3, Target, FolderOpen, UserCheck, Megaphone,
   Radio, Fingerprint, Link2, ScrollText, Menu, X, Search, KeyRound, Terminal,
   PieChart, Play, FileBarChart, IndianRupee, ShieldAlert, History,
@@ -16,7 +16,8 @@ import { Header } from './Header';
 import { BranchSwitchGuard } from './BranchSwitchGuard';
 import { PageOutlet } from './PageOutlet';
 import { prefetchProps, warmRoutes } from '@/lib/routePrefetch';
-import { initials, cn } from '@/lib/utils';
+import { cn } from '@/lib/utils';
+import { SidebarUserCard } from '@/components/layout/SidebarUserCard';
 import { useTour } from '@/hooks/useTour';
 import { rootAdminTourSteps } from '@/lib/tours';
 import { useQuery } from '@tanstack/react-query';
@@ -315,22 +316,8 @@ function RootSidebar({ onClose, onMenuClick, onSearchOpen }) {
 
       {/* User */}
       <div id="tour-user-card" className="p-3 border-t border-white/15">
-        <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition-colors cursor-default border border-transparent">
-          <div
-            className="w-9 h-9 rounded-full flex items-center justify-center text-[0.78rem] font-black text-white flex-shrink-0 border-2 border-white shadow-md"
-            style={{ background: user?.avatar_color || '#3525cd' }}>
-            {initials(user?.name || '')}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-[0.84rem] font-black text-white leading-tight truncate">{user?.name}</p>
-            <p className="text-[0.68rem] text-white/70 mt-0.5">Root Administrator</p>
-          </div>
-        </div>
-        <button
-          onClick={handleLogout}
-          className="flex items-center gap-2 w-full px-2.5 py-2 mt-1 rounded-lg text-[0.82rem] font-semibold text-white/80 hover:bg-white/10 hover:text-white transition-all duration-150">
-          <LogOut size={16} /> Sign Out
-        </button>
+        <SidebarUserCard user={user} to="/root/profile" subtitle="Root Administrator · My Profile"
+          onNavigate={onClose} onLogout={handleLogout} />
       </div>
     </aside>
   );

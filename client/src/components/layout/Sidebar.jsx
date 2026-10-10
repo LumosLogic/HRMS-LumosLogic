@@ -3,7 +3,7 @@ import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useBranch } from '@/context/BranchContext';
 import { BRANCH_KEYED } from '@/lib/queryScopes';
 import {
-  LayoutDashboard, Calendar, FileText, Users, Settings, LogOut, UserCircle,
+  LayoutDashboard, Calendar, FileText, Users, Settings,
   Building2, CalendarDays, Shield, ClipboardList, BarChart3, FolderOpen,
   DollarSign, Monitor, Receipt, Megaphone, Clock, Target, UserCheck, LogOut as Exit,
   Bell, Fingerprint, Link2, ScrollText, X, Search, Play, IndianRupee, Radio,
@@ -15,7 +15,8 @@ import { BranchSelector } from '@/components/layout/BranchSelector';
 import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '@/lib/api';
 import { STALE } from '@/lib/queryTiers';
-import { initials, cn } from '@/lib/utils';
+import { cn } from '@/lib/utils';
+import { SidebarUserCard } from '@/components/layout/SidebarUserCard';
 import { GlobalSearchModal } from '@/components/ui/GlobalSearchModal';
 import { canAccessAdminPath } from '@/lib/adminAccess';
 import { prefetchProps } from '@/lib/routePrefetch';
@@ -99,7 +100,6 @@ const ADMIN_ITEMS = [
   { to: '/pending-approvals', label: 'Pending Approvals', Icon: ClipboardList, adminOnly: true },
   { to: '/roles',             label: 'Role Management',   Icon: KeyRound,      rootAdminOnly: true },
   { to: '/settings', label: 'Settings', Icon: Settings, perm: 'settings' },
-  { to: '/profile',  label: 'Profile',  Icon: UserCircle },
 ];
 
 // ── Standard nav item ────────────────────────────────────────────────────────
@@ -386,22 +386,8 @@ export function Sidebar({ onClose, prefix = '', onMenuClick, onSearchOpen }) {
 
       {/* User */}
       <div id="tour-user-card" className="p-3 border-t border-white/15">
-        <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-white/10 transition-colors cursor-default border border-transparent">
-          <div className="w-9 h-9 rounded-full flex items-center justify-center text-[0.78rem] font-black text-white flex-shrink-0 border-2 border-white shadow-md"
-            style={{ background: user?.avatar_color || '#3525cd' }}>
-            {initials(user?.name || '')}
-          </div>
-          <div className="flex-1 min-w-0">
-            <p className="text-[0.84rem] font-black text-white leading-tight truncate">{user?.name}</p>
-            <p className="text-[0.68rem] text-white/70 mt-0.5 truncate">
-              {isRootAdmin ? 'Root Administrator' : customAccess ? (user?.position || 'Employee') : isAdmin ? 'HR Admin' : user?.position || 'Employee'}
-            </p>
-          </div>
-        </div>
-        <button onClick={handleLogout}
-          className="flex items-center gap-2 w-full px-2.5 py-2 mt-1 rounded-lg text-[0.82rem] font-semibold text-white/80 hover:bg-white/10 hover:text-white transition-all">
-          <LogOut size={16} /> Sign Out
-        </button>
+        <SidebarUserCard user={user} to={prefix + '/profile'} onNavigate={onClose} onLogout={handleLogout}
+          subtitle={`${isRootAdmin ? 'Root Administrator' : customAccess ? (user?.position || 'Employee') : isAdmin ? 'HR Admin' : user?.position || 'Employee'} · My Profile`} />
       </div>
     </aside>
   );

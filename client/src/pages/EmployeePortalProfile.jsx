@@ -2459,7 +2459,8 @@ function PrivacySection() {
 
   function handlePwSubmit() {
     if (newPw !== confPw) { toast('Passwords do not match.', 'error'); return; }
-    if (newPw.length < 8) { toast('Password must be at least 8 characters.', 'error'); return; }
+    const failedRule = pwRules.find(r => !r.ok);
+    if (failedRule) { toast(`Password requirement not met: ${failedRule.label}.`, 'error'); return; }
     changePw.mutate();
   }
 

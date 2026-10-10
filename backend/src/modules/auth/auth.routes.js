@@ -2,6 +2,7 @@ const express   = require('express');
 const router    = express.Router();
 const { sameId } = require('../../utils/ids');
 const bcrypt    = require('bcryptjs');
+const { passwordPolicyError } = require('../../utils/passwordPolicy');
 const jwt       = require('jsonwebtoken');
 const crypto    = require('crypto');
 const multer    = require('multer');
@@ -198,7 +199,8 @@ router.put('/change-password', auth, async (req, res) => {
   try {
     const { currentPassword, newPassword } = req.body;
     if (!currentPassword || !newPassword) return res.status(400).json({ error: 'Current and new password required' });
-    if (newPassword.length < 8) return res.status(400).json({ error: 'Password must be at least 8 characters' });
+    const policyError = passwordPolicyError(newPassword);
+    if (policyError) return res.status(400).json({ error: policyError });
 
     const { data: user } = await db.from('users')
       .select('password, password_history').eq('id', req.user.id).single();

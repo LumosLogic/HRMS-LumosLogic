@@ -6,7 +6,7 @@ import { useTour } from '@/hooks/useTour';
 import { employeeTourSteps } from '@/lib/tours';
 import { Header } from '@/components/layout/Header';
 import {
-  Home, FileText, Clock, UserCircle, LogOut, Menu, X, CalendarDays,
+  Home, FileText, Clock, Menu, X, CalendarDays,
   FolderOpen, Receipt, DollarSign, Target, ClipboardList, UserCheck,
   LogOut as Exit, Bell, Megaphone, Search, ClipboardCheck, Users,
 } from 'lucide-react';
@@ -14,7 +14,8 @@ import { useAuth } from '@/context/AuthContext';
 import { useQuery } from '@tanstack/react-query';
 import { apiGet } from '@/lib/api';
 import { STALE } from '@/lib/queryTiers';
-import { initials, cn } from '@/lib/utils';
+import { cn } from '@/lib/utils';
+import { SidebarUserCard } from '@/components/layout/SidebarUserCard';
 import { GlobalSearchModal } from '@/components/ui/GlobalSearchModal';
 import { useTeamMe } from '@/hooks/useTeam';
 
@@ -177,33 +178,8 @@ function EmployeeSidebar({ onClose, onMenuClick, onSearchOpen }) {
       </nav>
 
       <div id="tour-emp-user-card" className="p-3 border-t border-white/15">
-        <NavLink to="/portal/profile" onClick={onClose}
-          className={({ isActive }) => cn(
-            'flex items-center gap-2.5 px-2.5 py-2 rounded-lg border transition-all duration-150',
-            isActive
-              ? 'bg-white text-[#3525cd] border-transparent shadow-sm'
-              : 'border-transparent hover:bg-white/10 cursor-pointer'
-          )}>
-          {() => (
-            <>
-              <div className="w-9 h-9 rounded-full flex items-center justify-center text-[0.78rem] font-black text-white flex-shrink-0 border-2 border-white shadow-sm overflow-hidden"
-                style={{ background: user?.avatar_color || '#3525cd' }}>
-                {/* EMP-068: show the uploaded photo (kept in the auth user by the profile page); initials remain the fallback */}
-                {user?.avatar_url
-                  ? <img src={user.avatar_url} alt="" className="w-full h-full object-cover" />
-                  : initials(user?.name || '')}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-[0.84rem] font-black text-white leading-tight truncate">{user?.name}</p>
-                <p className="text-[0.68rem] text-white/70 mt-0.5 truncate">{user?.position || 'Employee'} · My Profile</p>
-              </div>
-            </>
-          )}
-        </NavLink>
-        <button onClick={handleLogout}
-          className="flex items-center gap-2 w-full px-2.5 py-2 mt-1 rounded-lg text-[0.82rem] font-semibold text-white/80 hover:bg-white/10 hover:text-white transition-all duration-150">
-          <LogOut size={16} /> Sign Out
-        </button>
+        <SidebarUserCard user={user} to="/portal/profile" subtitle={`${user?.position || 'Employee'} · My Profile`}
+          onNavigate={onClose} onLogout={handleLogout} />
       </div>
     </aside>
   );
